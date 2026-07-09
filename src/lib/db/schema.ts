@@ -2,10 +2,12 @@ import {
   boolean,
   date,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -37,6 +39,8 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   focusState: text("focus_state").default("Florida"),
   focusCity: text("focus_city"),
   focusCounty: text("focus_county"),
+  focusCities: jsonb("focus_cities").$type<string[]>().default([]),
+  focusCounties: jsonb("focus_counties").$type<string[]>().default([]),
   notificationEmail: text("notification_email")
     .default("hello@proventheory.co")
     .notNull(),
@@ -45,17 +49,21 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const searchProfiles = pgTable("search_profiles", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  name: text("name").notNull(),
-  searchTerm: text("search_term").notNull(),
-  isActive: boolean("is_active").default(true).notNull(),
-  isRemote: boolean("is_remote"),
-  resultsWanted: integer("results_wanted").default(50),
-  hoursOld: integer("hours_old").default(24),
-  sortOrder: integer("sort_order").default(0),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+export const searchProfiles = pgTable(
+  "search_profiles",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    name: text("name").notNull(),
+    searchTerm: text("search_term").notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    isRemote: boolean("is_remote"),
+    resultsWanted: integer("results_wanted").default(50),
+    hoursOld: integer("hours_old").default(24),
+    sortOrder: integer("sort_order").default(0),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("search_profiles_term_unique").on(table.searchTerm)],
+);
 
 export const dailyRuns = pgTable("daily_runs", {
   id: uuid("id").defaultRandom().primaryKey(),

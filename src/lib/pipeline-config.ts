@@ -1,10 +1,6 @@
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import {
-  pipelineSettings,
-  searchProfiles,
-  GeographicScope,
-} from "@/lib/db/schema";
+import { pipelineSettings, searchProfiles } from "@/lib/db/schema";
 
 const DEFAULT_SEARCHES = [
   { name: "HR Director", searchTerm: "HR Director", sortOrder: 0 },
@@ -12,89 +8,183 @@ const DEFAULT_SEARCHES = [
   { name: "Head of Talent", searchTerm: "Head of Talent", sortOrder: 2 },
 ];
 
+export type GeoZone = {
+  label: string;
+  location: string;
+  googleSuffix: string;
+};
+
+function normalizeList(values: string[] | null | undefined): string[] {
+  if (!values?.length) return [];
+  return [...new Set(values.map((v) => v.trim()).filter(Boolean))];
+}
+
+/** Remove duplicate search profiles (keep lowest sort_order / oldest id). */
+export async function dedupeSearchProfiles(): Promise<number> {
+  const rows = await db
+    .select()
+    .from(searchProfiles)
+    .orderBy(searchProfiles.sortOrder, searchProfiles.createdAt);
+
+  const seen = new Set<string>();
+  const toDelete: string[] = [];
+
+  for (const row of rows) {
+    const key = row.searchTerm.trim().toLowerCase();
+    if (seen.has(key)) {
+      toDelete.push(row.id);
+    } else {
+      seen.add(key);
+    }
+  }
+
+  if (toDelete.length) {
+    await db.delete(searchProfiles).where(inArray(searchProfiles.id, toDelete));
+  }
+
+  return toDelete.length;
+}
+
 export async function getOrCreateSettings() {
-  const rows = await db.select().from(pipelineSettings).limit(1);
-  if (rows.length > 0) return rows[0];
+  let [settings] = await db.select().from(pipelineSettings).limit(1);
 
-  const [created] = await db
-    .insert(pipelineSettings)
-    .values({
-      geographicScope: "state",
-      focusState: "Florida",
-      notificationEmail: "hello@proventheory.co",
-    })
-    .returning();
-
-  for (const s of DEFAULT_SEARCHES) {
-    await db.insert(searchProfiles).values(s);
+  if (!settings) {
+    [settings] = await db
+      .insert(pipelineSettings)
+      .values({
+        geographicScope: "city",
+        focusState: "Florida",
+        focusCity: "West Palm Beach",
+        focusCities: ["West Palm Beach"],
+        notificationEmail: "hello@proventheory.co",
+      })
+      .returning();
   }
 
-  return created;
-}
-
-export function buildJobSpyLocation(settings: {
-  geographicScope: GeographicScope;
-  focusState: string | null;
-  focusCity: string | null;
-  focusCounty: string | null;
-}): { location: string; googleSuffix: string; label: string } {
-  const state = settings.focusState?.trim() || "Florida";
-
-  switch (settings.geographicScope) {
-    case "national":
-      return {
-        location: "United States",
-        googleSuffix: "United States",
-        label: "United States (national)",
-      };
-    case "city": {
-      const city = settings.focusCity?.trim();
-      if (!city) {
-        return { location: state, googleSuffix: state, label: state };
-      }
-      const loc = city.includes(",") ? city : `${city}, ${state}`;
-      return { location: loc, googleSuffix: loc, label: loc };
-    }
-    case "county": {
-      const county = settings.focusCounty?.trim();
-      if (!county) {
-        return { location: state, googleSuffix: state, label: state };
-      }
-      const countyLoc = county.toLowerCase().includes("county")
-        ? `${county}, ${state}`
-        : `${county} County, ${state}`;
-      return { location: countyLoc, googleSuffix: countyLoc, label: countyLoc };
-    }
-    case "state":
-    default:
-      return {
-        location: state,
-        googleSuffix: state,
-        label: state,
-      };
+  const existingProfiles = await db.select().from(searchProfiles).limit(1);
+  if (!existingProfiles.length) {
+    await db.insert(searchProfiles).values(
+      DEFAULT_SEARCHES.map((s) => ({
+        name: s.name,
+        searchTerm: s.searchTerm,
+        isActive: true,
+        sortOrder: s.sortOrder,
+      })),
+    );
   }
+
+  await dedupeSearchProfiles();
+
+  return settings;
 }
 
-export async function buildPipelineConfig() {
-  const settings = await getOrCreateSettings();
-  const profiles = await db
+export async function getActiveSearchProfiles() {
+  await dedupeSearchProfiles();
+  return db
     .select()
     .from(searchProfiles)
     .where(eq(searchProfiles.isActive, true))
     .orderBy(searchProfiles.sortOrder);
+}
 
-  const geo = buildJobSpyLocation(settings);
+export async function getAllSearchProfiles() {
+  await dedupeSearchProfiles();
+  return db.select().from(searchProfiles).orderBy(searchProfiles.sortOrder);
+}
 
-  const searches = profiles.map((p) => ({
-    name: `${p.searchTerm} — ${geo.label}`,
-    search_term: p.searchTerm,
-    location: geo.location,
-    google_search_term: `${p.searchTerm} jobs ${geo.googleSuffix} since yesterday`,
-    country_indeed: "USA",
-    is_remote: p.isRemote ?? undefined,
-    results_wanted: p.resultsWanted ?? 50,
-    hours_old: p.hoursOld ?? 24,
-  }));
+/** Build geographic zones from settings (multi-select geofence). */
+export function buildGeoZones(settings: typeof pipelineSettings.$inferSelect): GeoZone[] {
+  const state = settings.focusState || "Florida";
+  const zones: GeoZone[] = [];
+
+  if (settings.geographicScope === "state") {
+    zones.push({
+      label: state,
+      location: state,
+      googleSuffix: state,
+    });
+    return zones;
+  }
+
+  if (settings.geographicScope === "county") {
+    const counties = normalizeList(settings.focusCounties);
+    const legacy = settings.focusCounty?.trim();
+    const list = counties.length ? counties : legacy ? [legacy] : [];
+
+    for (const county of list) {
+      zones.push({
+        label: `${county} County, ${state}`,
+        location: `${county} County, ${state}`,
+        googleSuffix: `${county} County ${state}`,
+      });
+    }
+    return zones.length
+      ? zones
+      : [
+          {
+            label: `${state} (all counties)`,
+            location: state,
+            googleSuffix: state,
+          },
+        ];
+  }
+
+  // city scope (default)
+  const cities = normalizeList(settings.focusCities);
+  const legacyCity = settings.focusCity?.trim();
+  const list = cities.length ? cities : legacyCity ? [legacyCity] : ["West Palm Beach"];
+
+  for (const city of list) {
+    zones.push({
+      label: `${city}, ${state}`,
+      location: `${city}, ${state}`,
+      googleSuffix: `${city} ${state}`,
+    });
+  }
+
+  return zones;
+}
+
+export async function buildPipelineConfig() {
+  const settings = await getOrCreateSettings();
+  const profiles = await getActiveSearchProfiles();
+  const zones = buildGeoZones(settings);
+
+  const targetTitles = [
+    "CEO",
+    "Chief Executive Officer",
+    "President",
+    "Founder",
+    "Co-Founder",
+    "COO",
+    "Chief Operating Officer",
+    "CFO",
+    "Chief Financial Officer",
+    "CTO",
+    "Chief Technology Officer",
+    "CHRO",
+    "Chief People Officer",
+    "VP People",
+    "VP Human Resources",
+    "Head of HR",
+    "HR Director",
+    "Director of Human Resources",
+  ];
+
+  const targetSeniorities = ["c_suite", "vp", "head", "director"];
+
+  const searches = profiles.flatMap((p) =>
+    zones.map((zone) => ({
+      name: `${p.name} — ${zone.label}`,
+      search_term: p.searchTerm,
+      location: zone.location,
+      google_search_term: `${p.searchTerm} jobs ${zone.googleSuffix} since yesterday`,
+      country_indeed: "USA",
+      is_remote: p.isRemote ?? false,
+      results_wanted: p.resultsWanted ?? 50,
+      hours_old: p.hoursOld ?? 24,
+    })),
+  );
 
   return {
     settings: {
@@ -102,30 +192,26 @@ export async function buildPipelineConfig() {
       focus_state: settings.focusState,
       focus_city: settings.focusCity,
       focus_county: settings.focusCounty,
+      focus_cities: normalizeList(settings.focusCities),
+      focus_counties: normalizeList(settings.focusCounties),
       notification_email: settings.notificationEmail,
-      run_requested_at: settings.runRequestedAt?.toISOString() ?? null,
-      geo_label: geo.label,
+      geo_label: zones.map((z) => z.label).join("; "),
     },
     searches,
     boards: ["indeed", "google", "zip_recruiter"],
-    target_titles: [
-      "CEO",
-      "Founder",
-      "Owner",
-      "President",
-      "HR Manager",
-      "Head of Talent",
-      "VP People",
-      "Chief People Officer",
-      "Director of HR",
-      "Human Resources Manager",
-    ],
-    target_seniorities: ["c_suite", "vp", "head", "director", "manager"],
+    target_titles: targetTitles,
+    target_seniorities: targetSeniorities,
     enrichment: {
-      contacts_per_company: 2,
+      contacts_per_company: 3,
+      target_titles: targetTitles,
+      target_seniorities: targetSeniorities,
       enrich_phone: true,
       daily_credit_cap: 200,
       provider: "apollo",
+    },
+    dedupe: {
+      company_domain: true,
+      job_url: true,
     },
   };
 }

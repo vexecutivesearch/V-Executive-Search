@@ -1,15 +1,74 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { PipelineSettings, SearchProfile } from "@/lib/db/schema";
+import type { GeographicScope, PipelineSettings, SearchProfile } from "@/lib/db/schema";
+import {
+  getCitiesForState,
+  getCountiesForState,
+  US_STATES,
+} from "@/lib/locations";
 
-const SCOPES = [
+const SCOPES: { value: GeographicScope; label: string }[] = [
   { value: "national", label: "National (United States)" },
   { value: "state", label: "State" },
   { value: "city", label: "City" },
   { value: "county", label: "County" },
 ];
+
+function MultiSelect({
+  label,
+  options,
+  selected,
+  onChange,
+  emptyHint,
+}: {
+  label: string;
+  options: string[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+  emptyHint?: string;
+}) {
+  function toggle(value: string) {
+    onChange(
+      selected.includes(value)
+        ? selected.filter((v) => v !== value)
+        : [...selected, value],
+    );
+  }
+
+  return (
+    <div className="block text-sm">
+      <span className="font-medium">{label}</span>
+      {selected.length > 0 && (
+        <p className="mt-1 text-xs text-gray-500">
+          Selected: {selected.join(", ")}
+        </p>
+      )}
+      {options.length === 0 ? (
+        <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+          {emptyHint ?? "No predefined locations for this state yet."}
+        </p>
+      ) : (
+        <div className="mt-2 max-h-48 overflow-y-auto border rounded-lg p-2 space-y-1 dark:border-gray-700">
+          {options.map((option) => (
+            <label
+              key={option}
+              className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 dark:hover:bg-gray-900 cursor-pointer"
+            >
+              <input
+                type="checkbox"
+                checked={selected.includes(option)}
+                onChange={() => toggle(option)}
+              />
+              <span>{option}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function AdminDashboard({
   settings,
@@ -19,16 +78,38 @@ export function AdminDashboard({
   profiles: SearchProfile[];
 }) {
   const router = useRouter();
+  const initialCities =
+    settings.focusCities?.length
+      ? settings.focusCities
+      : settings.focusCity
+        ? [settings.focusCity]
+        : [];
+  const initialCounties =
+    settings.focusCounties?.length
+      ? settings.focusCounties
+      : settings.focusCounty
+        ? [settings.focusCounty]
+        : [];
+
   const [form, setForm] = useState({
     geographic_scope: settings.geographicScope,
     focus_state: settings.focusState ?? "Florida",
-    focus_city: settings.focusCity ?? "",
-    focus_county: settings.focusCounty ?? "",
+    focus_cities: initialCities,
+    focus_counties: initialCounties,
     notification_email: settings.notificationEmail,
   });
   const [profiles, setProfiles] = useState(initialProfiles);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+
+  const cityOptions = useMemo(
+    () => getCitiesForState(form.focus_state),
+    [form.focus_state],
+  );
+  const countyOptions = useMemo(
+    () => getCountiesForState(form.focus_state),
+    [form.focus_state],
+  );
 
   async function saveSettings() {
     setSaving(true);
@@ -81,12 +162,18 @@ export function AdminDashboard({
 
       <section className="border rounded-xl p-5 space-y-4 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Geographic focus</h2>
+        <p className="text-sm text-gray-500">
+          Select one or more cities or counties to geofence your daily searches.
+        </p>
         <label className="block text-sm">
           Scope
           <select
             value={form.geographic_scope}
             onChange={(e) =>
-              setForm({ ...form, geographic_scope: e.target.value as typeof form.geographic_scope })
+              setForm({
+                ...form,
+                geographic_scope: e.target.value as GeographicScope,
+              })
             }
             className="mt-1 w-full border rounded-lg px-3 py-2 dark:bg-gray-900 dark:border-gray-700"
           >
@@ -101,37 +188,45 @@ export function AdminDashboard({
         {form.geographic_scope !== "national" && (
           <label className="block text-sm">
             State
-            <input
+            <select
               value={form.focus_state}
-              onChange={(e) => setForm({ ...form, focus_state: e.target.value })}
-              placeholder="Florida"
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  focus_state: e.target.value,
+                  focus_cities: [],
+                  focus_counties: [],
+                })
+              }
               className="mt-1 w-full border rounded-lg px-3 py-2 dark:bg-gray-900 dark:border-gray-700"
-            />
+            >
+              {US_STATES.map((state) => (
+                <option key={state} value={state}>
+                  {state}
+                </option>
+              ))}
+            </select>
           </label>
         )}
 
         {form.geographic_scope === "city" && (
-          <label className="block text-sm">
-            City
-            <input
-              value={form.focus_city}
-              onChange={(e) => setForm({ ...form, focus_city: e.target.value })}
-              placeholder="Miami"
-              className="mt-1 w-full border rounded-lg px-3 py-2 dark:bg-gray-900 dark:border-gray-700"
-            />
-          </label>
+          <MultiSelect
+            label="Cities (select all that apply)"
+            options={cityOptions}
+            selected={form.focus_cities}
+            onChange={(focus_cities) => setForm({ ...form, focus_cities })}
+            emptyHint="City dropdowns are available for Florida. Add more states in locations.ts as you expand."
+          />
         )}
 
         {form.geographic_scope === "county" && (
-          <label className="block text-sm">
-            County
-            <input
-              value={form.focus_county}
-              onChange={(e) => setForm({ ...form, focus_county: e.target.value })}
-              placeholder="Miami-Dade"
-              className="mt-1 w-full border rounded-lg px-3 py-2 dark:bg-gray-900 dark:border-gray-700"
-            />
-          </label>
+          <MultiSelect
+            label="Counties (select all that apply)"
+            options={countyOptions}
+            selected={form.focus_counties}
+            onChange={(focus_counties) => setForm({ ...form, focus_counties })}
+            emptyHint="County dropdowns are available for Florida."
+          />
         )}
 
         <label className="block text-sm">
@@ -164,9 +259,7 @@ export function AdminDashboard({
               key={p.id}
               className="flex items-center justify-between text-sm border rounded-lg px-3 py-2 dark:border-gray-800"
             >
-              <span>
-                {p.name} — <code className="text-xs">{p.searchTerm}</code>
-              </span>
+              <span className="font-medium">{p.name}</span>
               <label className="flex items-center gap-2">
                 <input
                   type="checkbox"

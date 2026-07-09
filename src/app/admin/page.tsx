@@ -1,10 +1,7 @@
 import { redirect } from "next/navigation";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { AdminDashboard } from "@/components/admin/AdminDashboard";
-import { getOrCreateSettings } from "@/lib/pipeline-config";
-import { db } from "@/lib/db";
-import { searchProfiles } from "@/lib/db/schema";
-import { asc } from "drizzle-orm";
+import { getAllSearchProfiles, getOrCreateSettings } from "@/lib/pipeline-config";
 
 export const dynamic = "force-dynamic";
 
@@ -14,10 +11,7 @@ export default async function AdminPage() {
   }
 
   const settings = await getOrCreateSettings();
-  const profiles = await db
-    .select()
-    .from(searchProfiles)
-    .orderBy(asc(searchProfiles.sortOrder));
+  const profiles = await getAllSearchProfiles();
 
   return <AdminDashboard settings={settings} profiles={profiles} />;
 }

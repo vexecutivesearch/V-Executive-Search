@@ -145,9 +145,11 @@ def run_pipeline(
     config = load_config(config_path)
     enrichment_cfg = config.get("enrichment", {})
 
-    target_titles = config.get("target_titles", [])
-    target_seniorities = config.get("target_seniorities", [])
-    contacts_per_company = enrichment_cfg.get("contacts_per_company", 2)
+    target_titles = enrichment_cfg.get("target_titles") or config.get("target_titles", [])
+    target_seniorities = enrichment_cfg.get("target_seniorities") or config.get(
+        "target_seniorities", []
+    )
+    contacts_per_company = enrichment_cfg.get("contacts_per_company", 3)
     enrich_phone = enrichment_cfg.get("enrich_phone", False)
     daily_credit_cap = enrichment_cfg.get("daily_credit_cap", 100)
     provider_name = enrichment_cfg.get("provider", "apollo")

@@ -16,6 +16,57 @@ APOLLO_BASE = "https://api.apollo.io/api/v1"
 EMAIL_CREDIT_COST = 1
 PHONE_CREDIT_COST = 8
 
+# Lower rank = higher priority when picking executives to enrich.
+_TITLE_RANK_KEYWORDS: list[tuple[str, int]] = [
+    ("chief executive", 0),
+    ("ceo", 0),
+    ("president", 1),
+    ("founder", 2),
+    ("co-founder", 2),
+    ("owner", 3),
+    ("chief operating", 4),
+    ("coo", 4),
+    ("chief financial", 5),
+    ("cfo", 5),
+    ("chief technology", 6),
+    ("cto", 6),
+    ("chief people", 7),
+    ("chro", 7),
+    ("chief human", 7),
+    ("vp people", 8),
+    ("vp human", 8),
+    ("vp hr", 8),
+    ("head of people", 9),
+    ("head of hr", 9),
+    ("head of talent", 10),
+    ("hr director", 11),
+    ("director of human", 12),
+    ("director of hr", 12),
+]
+
+_SENIORITY_RANK = {
+    "c_suite": 0,
+    "owner": 1,
+    "founder": 1,
+    "vp": 2,
+    "head": 3,
+    "director": 4,
+    "manager": 5,
+}
+
+
+def _executive_rank(person: dict[str, Any]) -> tuple[int, int, str]:
+    title = (person.get("title") or "").lower()
+    title_rank = 50
+    for keyword, rank in _TITLE_RANK_KEYWORDS:
+        if keyword in title:
+            title_rank = min(title_rank, rank)
+            break
+
+    seniority = (person.get("seniority") or "").lower()
+    seniority_rank = _SENIORITY_RANK.get(seniority, 20)
+    return (title_rank, seniority_rank, title)
+
 
 class ApolloProvider:
     def __init__(self) -> None:
@@ -38,7 +89,7 @@ class ApolloProvider:
 
     def _webhook_url(self) -> str | None:
         base = (os.environ.get("CRM_API_URL") or "").rstrip("/")
-        if not base:
+        if not base or not base.startswith("https://"):
             return None
         return f"{base}/api/apollo/webhook"
 
@@ -139,10 +190,12 @@ class ApolloProvider:
             domain,
             target_titles,
             target_seniorities,
-            per_page=max(contacts_per_company * 3, 5),
+            per_page=max(contacts_per_company * 5, 10),
         )
+        people.sort(key=_executive_rank)
 
         enriched_count = 0
+        seen_ids: set[str] = set()
         for person in people:
             if enriched_count >= contacts_per_company:
                 break
@@ -151,8 +204,9 @@ class ApolloProvider:
                 continue
 
             person_id = person.get("id")
-            if not person_id:
+            if not person_id or person_id in seen_ids:
                 continue
+            seen_ids.add(person_id)
 
             enriched = self._enrich_person(person_id, enrich_phone)
             time.sleep(0.3)
