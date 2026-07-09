@@ -8,6 +8,12 @@ from urllib.parse import urlencode
 
 import requests
 
+from src.location import (
+    apollo_location_queries,
+    collect_job_locations,
+    format_person_location,
+    person_matches_location,
+)
 from src.models import CompanyRecord, ContactRecord, EnrichedCompany
 
 logger = logging.getLogger(__name__)
@@ -68,6 +74,15 @@ def _executive_rank(person: dict[str, Any]) -> tuple[int, int, str]:
     return (title_rank, seniority_rank, title)
 
 
+def _person_sort_key(
+    person: dict[str, Any],
+    job_locations: list,
+) -> tuple[int, int, int, str]:
+    location_rank = 0 if person_matches_location(person, job_locations) else 1
+    exec_rank = _executive_rank(person)
+    return (location_rank, exec_rank[0], exec_rank[1], exec_rank[2])
+
+
 class ApolloProvider:
     def __init__(self) -> None:
         self._credits_used = 0
@@ -99,6 +114,7 @@ class ApolloProvider:
         target_titles: list[str],
         target_seniorities: list[str],
         per_page: int,
+        person_locations: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         if not self._api_key:
             logger.warning("APOLLO_API_KEY not set — skipping people search")
@@ -113,6 +129,8 @@ class ApolloProvider:
         }
         if target_seniorities:
             payload["person_seniorities"] = target_seniorities
+        if person_locations:
+            payload["person_locations"] = person_locations
 
         try:
             resp = requests.post(
@@ -123,10 +141,33 @@ class ApolloProvider:
             )
             resp.raise_for_status()
             data = resp.json()
-            return data.get("people") or []
+            people = data.get("people") or []
+            if person_locations:
+                logger.info(
+                    "Apollo location search (%s): %d candidates for %s",
+                    ", ".join(person_locations[:3]),
+                    len(people),
+                    domain,
+                )
+            return people
         except requests.RequestException as exc:
             logger.error("Apollo people search failed for %s: %s", domain, exc)
             return []
+
+    def _merge_people(
+        self,
+        local_people: list[dict[str, Any]],
+        broad_people: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for person in local_people + broad_people:
+            person_id = person.get("id")
+            if not person_id or person_id in seen:
+                continue
+            seen.add(person_id)
+            merged.append(person)
+        return merged
 
     def _enrich_person(self, person_id: str, enrich_phone: bool) -> dict[str, Any] | None:
         params: dict[str, str] = {"id": person_id}
@@ -186,13 +227,32 @@ class ApolloProvider:
             logger.warning("No domain for '%s' — skipping enrichment", company.name)
             return result
 
-        people = self._search_people(
+        job_locations = collect_job_locations(company.listings)
+        job_location_label = job_locations[0].label if job_locations else None
+        apollo_locations: list[str] = []
+        for parsed in job_locations:
+            apollo_locations.extend(apollo_location_queries(parsed))
+        apollo_locations = list(dict.fromkeys(apollo_locations))
+
+        per_page = max(contacts_per_company * 5, 10)
+        local_people: list[dict[str, Any]] = []
+        if apollo_locations:
+            local_people = self._search_people(
+                domain,
+                target_titles,
+                target_seniorities,
+                per_page=per_page,
+                person_locations=apollo_locations,
+            )
+
+        broad_people = self._search_people(
             domain,
             target_titles,
             target_seniorities,
-            per_page=max(contacts_per_company * 5, 10),
+            per_page=per_page,
         )
-        people.sort(key=_executive_rank)
+        people = self._merge_people(local_people, broad_people)
+        people.sort(key=lambda p: _person_sort_key(p, job_locations))
 
         enriched_count = 0
         seen_ids: set[str] = set()
@@ -221,6 +281,10 @@ class ApolloProvider:
                 last = person["last_name_obfuscated"]
             name = enriched.get("name") or f"{first} {last}".strip()
 
+            location_matched = person_matches_location(enriched, job_locations) or (
+                person_matches_location(person, job_locations)
+            )
+
             contact = ContactRecord(
                 name=name,
                 first_name=first,
@@ -232,9 +296,23 @@ class ApolloProvider:
                 source_provider="apollo",
                 apollo_id=person_id,
                 enriched=bool(email),
+                location_matched=location_matched,
+                contact_location=format_person_location(enriched)
+                or format_person_location(person),
+                job_location=job_location_label,
             )
             result.contacts.append(contact)
             enriched_count += 1
+
+        if job_location_label and result.contacts:
+            matched = sum(1 for c in result.contacts if c.location_matched)
+            logger.info(
+                "Location match for %s (%s): %d/%d contacts",
+                company.name,
+                job_location_label,
+                matched,
+                len(result.contacts),
+            )
 
         result.credits_used = self._credits_used
         return result

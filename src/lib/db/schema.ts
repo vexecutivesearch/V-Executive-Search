@@ -104,6 +104,9 @@ export const contacts = pgTable("contacts", {
   linkedinUrl: text("linkedin_url"),
   apolloId: text("apollo_id"),
   sourceProvider: text("source_provider").default("apollo"),
+  locationMatched: boolean("location_matched").default(false).notNull(),
+  contactLocation: text("contact_location"),
+  jobLocation: text("job_location"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

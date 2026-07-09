@@ -20,6 +20,9 @@ interface IngestContact {
   linkedin_url?: string;
   apollo_id?: string;
   source_provider?: string;
+  location_matched?: boolean;
+  contact_location?: string;
+  job_location?: string;
 }
 
 interface IngestJobListing {
@@ -147,6 +150,9 @@ export async function POST(request: NextRequest) {
         linkedinUrl: c.linkedin_url ?? null,
         apolloId: c.apollo_id ?? null,
         sourceProvider: c.source_provider ?? "apollo",
+        locationMatched: c.location_matched ?? false,
+        contactLocation: c.contact_location ?? null,
+        jobLocation: c.job_location ?? null,
       });
     }
 

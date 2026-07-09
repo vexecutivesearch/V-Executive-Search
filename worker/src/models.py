@@ -43,6 +43,9 @@ class ContactRecord:
     source_provider: str = "apollo"
     apollo_id: str | None = None
     enriched: bool = False
+    location_matched: bool = False
+    contact_location: str | None = None
+    job_location: str | None = None
 
 
 @dataclass

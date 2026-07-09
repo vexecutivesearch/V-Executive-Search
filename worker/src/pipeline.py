@@ -102,6 +102,9 @@ def _build_ingest_payload(
                     "linkedin_url": c.linkedin_url,
                     "apollo_id": c.apollo_id,
                     "source_provider": c.source_provider,
+                    "location_matched": c.location_matched,
+                    "contact_location": c.contact_location,
+                    "job_location": c.job_location,
                 }
                 for c in item.contacts
             ],
