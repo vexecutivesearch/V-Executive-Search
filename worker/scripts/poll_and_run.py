@@ -23,6 +23,21 @@ logging.basicConfig(
 
 
 def main() -> int:
+    if sys.platform == "darwin":
+        try:
+            import importlib.util
+
+            script = WORKER_ROOT / "scripts" / "check_imessage.py"
+            spec = importlib.util.spec_from_file_location("check_imessage", script)
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                n = mod.run_imessage_checks(limit=20, delay=1.5)
+                if n:
+                    logging.info("iMessage poll tagged %d contact(s)", n)
+        except Exception as exc:
+            logging.warning("iMessage poll pass failed (non-fatal): %s", exc)
+
     status = get_pipeline_status()
     if not status.get("run_requested_at"):
         logging.info("No run requested — exiting")

@@ -92,12 +92,17 @@ export function ContactRow({
               {personalEmail}
             </a>
             {contact.imessageCapable === true && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200">
-                iMessage
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200 font-medium">
+                iMessage ✓
               </span>
             )}
             {contact.imessageCapable === false && (
               <span className="text-[10px] text-gray-400">SMS only</span>
+            )}
+            {contact.imessageCapable == null && personalEmail && (
+              <span className="text-[10px] text-gray-400 italic">
+                iMessage check pending
+              </span>
             )}
           </div>
         )}
