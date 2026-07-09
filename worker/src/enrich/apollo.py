@@ -13,7 +13,7 @@ from src.contact_phones import (
     merge_sourced_phones,
     pick_primary_from_phones,
 )
-from src.phone_utils import apply_company_phone_dedupe
+from src.phone_utils import apply_company_phone_dedupe, is_personal_email
 from src.location import (
     apollo_location_queries,
     collect_job_locations,
@@ -300,6 +300,7 @@ class ApolloProvider:
                 last_name=last,
                 title=enriched.get("title") or person.get("title") or "",
                 email=email,
+                work_email=email if email and not is_personal_email(str(email)) else None,
                 phone=primary.get("phone"),
                 personal_phone=primary.get("personal_phone"),
                 company_phone=primary.get("company_phone"),

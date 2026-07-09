@@ -170,7 +170,7 @@ class ContactOutApiClient:
                     "ContactOut API placeholder response for %s — check plan/credits",
                     url,
                 )
-                return None
+                return ContactOutResult(phone_api_locked=True)
 
             phone_resp = requests.get(
                 CONTACTOUT_LINKEDIN_URL,

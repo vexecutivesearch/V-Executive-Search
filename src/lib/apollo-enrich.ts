@@ -12,6 +12,7 @@ import {
   personMatchesLocation,
 } from "@/lib/location-match";
 import { enrichFromContactOut, dedupeCompanyPhones } from "@/lib/contactout-enrich";
+import { isContactOutCreditsAvailable, markContactOutCreditsExhausted } from "@/lib/contactout-credits";
 import {
   extractApolloPhones,
   mergeSourcedPhones,
@@ -194,6 +195,7 @@ export async function enrichCompanyContacts(options: {
   contactsPerCompany?: number;
   existingApolloIds?: Set<string>;
   contactOutApiKey?: string;
+  contactOutAvailable?: boolean;
 }): Promise<EnrichedContact[]> {
   const {
     apiKey,
@@ -202,9 +204,10 @@ export async function enrichCompanyContacts(options: {
     contactsPerCompany = CONTACTS_PER_COMPANY,
     existingApolloIds = new Set(),
     contactOutApiKey,
+    contactOutAvailable = true,
   } = options;
 
-  const useContactOut = Boolean(contactOutApiKey);
+  const useContactOut = Boolean(contactOutApiKey) && contactOutAvailable;
   const apolloPhone = ENRICH_PHONE;
 
   const parsedLocations = collectJobLocations(jobLocations);
@@ -244,22 +247,27 @@ export async function enrichCompanyContacts(options: {
       personMatchesLocation(enriched, parsedLocations) ||
       personMatchesLocation(person, parsedLocations);
 
-    const workEmail = String(enriched.email);
+    const workEmailRaw = String(enriched.email);
+    const apolloWorkEmail = isPersonalEmail(workEmailRaw) ? null : workEmailRaw;
     const linkedinUrl = enriched.linkedin_url
       ? String(enriched.linkedin_url)
       : person.linkedin_url
         ? String(person.linkedin_url)
         : null;
 
-    let personalEmail: string | null = null;
-    let email = workEmail;
+    let personalEmail: string | null = isPersonalEmail(workEmailRaw)
+      ? workEmailRaw
+      : null;
+    let email = personalEmail ?? apolloWorkEmail;
     let sourceProvider = "apollo";
 
     let phones = extractApolloPhones(enriched);
 
     if (useContactOut && linkedinUrl && contactOutApiKey) {
       const co = await enrichFromContactOut(linkedinUrl, contactOutApiKey);
-      if (co) {
+      if (co?.phoneApiLocked) {
+        markContactOutCreditsExhausted();
+      } else if (co && !co.phoneApiLocked) {
         phones = mergeSourcedPhones(phones, co.phones);
         if (co.personalEmail) {
           personalEmail = co.personalEmail;
@@ -272,17 +280,13 @@ export async function enrichCompanyContacts(options: {
       await new Promise((r) => setTimeout(r, 400));
     }
 
-    if (email && isPersonalEmail(email)) {
-      personalEmail = email;
-    }
-
     const primary = pickPrimaryFromPhones(phones);
 
     results.push({
       name,
       title: String(enriched.title ?? person.title ?? ""),
       email,
-      workEmail: personalEmail && workEmail !== personalEmail ? workEmail : null,
+      workEmail: apolloWorkEmail,
       personalEmail,
       phone: primary.phone,
       personalPhone: primary.personalPhone,
@@ -303,25 +307,37 @@ export async function enrichCompanyContacts(options: {
   return dedupeCompanyPhones(results);
 }
 
-function contactNeedsApolloRefresh(contact: {
-  phone: string | null;
-  personalPhone: string | null;
-  phones: SourcedPhone[] | null;
-  personalEmail: string | null;
-  linkedinUrl: string | null;
-}): boolean {
+function contactNeedsApolloRefresh(
+  contact: {
+    phone: string | null;
+    personalPhone: string | null;
+    phones: SourcedPhone[] | null;
+    personalEmail: string | null;
+    workEmail: string | null;
+    email: string | null;
+    linkedinUrl: string | null;
+  },
+  contactOutAvailable: boolean,
+): boolean {
   const hasPhone =
     Boolean(contact.personalPhone || contact.phone) ||
     (contact.phones?.length ?? 0) > 0;
-  const needsPersonal = !contact.personalEmail;
   const needsLinkedIn = !contact.linkedinUrl;
-  return !hasPhone || needsPersonal || needsLinkedIn;
+  const needsWorkEmail = !contact.workEmail && !contact.email;
+
+  if (!contactOutAvailable) {
+    return !hasPhone || needsLinkedIn || needsWorkEmail;
+  }
+
+  const needsPersonal = !contact.personalEmail;
+  return !hasPhone || needsPersonal || needsLinkedIn || needsWorkEmail;
 }
 
 /** Re-run Apollo match on saved contacts (phones arrive async via webhook too). */
 export async function refreshCompanyContactsFromApollo(
   companyId: string,
   apiKey: string,
+  contactOutAvailable = true,
 ): Promise<{
   updated: number;
   phonesRequested: number;
@@ -339,7 +355,9 @@ export async function refreshCompanyContactsFromApollo(
   let phonesAdded = 0;
 
   for (const contact of withApollo) {
-    if (!contact.apolloId || !contactNeedsApolloRefresh(contact)) continue;
+    if (!contact.apolloId || !contactNeedsApolloRefresh(contact, contactOutAvailable)) {
+      continue;
+    }
 
     const beforePhones = contactPhonesForDisplay(contact).length;
     phonesRequested += 1;
@@ -391,7 +409,7 @@ export async function refreshCompanyContactsFromApollo(
       .set({
         linkedinUrl,
         email,
-        workEmail: nextWorkEmail,
+        workEmail: nextWorkEmail ?? contact.workEmail,
         personalEmail,
         phones: synced.phones,
         phone: primary.phone,

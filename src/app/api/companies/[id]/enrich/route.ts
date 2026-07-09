@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { NextRequest, NextResponse } from "next/server";
 import { enrichCompanyContacts, refreshCompanyContactsFromApollo, apolloWebhookConfigured } from "@/lib/apollo-enrich";
+import { isContactOutCreditsAvailable } from "@/lib/contactout-credits";
 import { resolveCompanyDomain } from "@/lib/domain-resolver";
 import { syncContactPhoneFields, contactPhonesForDisplay } from "@/lib/contact-phones";
 import { refreshCompanyContactsFromContactOut } from "@/lib/refresh-company-contacts";
@@ -73,18 +74,25 @@ export async function POST(
     .from(jobListings)
     .where(eq(jobListings.companyId, id));
 
-  const existingContacts = await db
-    .select({ apolloId: contacts.apolloId })
+  const existingContactRows = await db
+    .select({ apolloId: contacts.apolloId, linkedinUrl: contacts.linkedinUrl })
     .from(contacts)
     .where(eq(contacts.companyId, id));
 
   const existingApolloIds = new Set(
-    existingContacts.map((c) => c.apolloId).filter(Boolean) as string[],
+    existingContactRows.map((c) => c.apolloId).filter(Boolean) as string[],
   );
 
   const jobLocations = listings
     .map((l) => l.location)
     .filter((l): l is string => Boolean(l));
+
+  const sampleLinkedIn =
+    existingContactRows.find((c) => c.linkedinUrl)?.linkedinUrl ?? null;
+
+  const contactOutAvailable = contactOutKey
+    ? await isContactOutCreditsAvailable(contactOutKey, sampleLinkedIn)
+    : false;
 
   let contactsAdded = 0;
   try {
@@ -94,6 +102,7 @@ export async function POST(
       jobLocations,
       existingApolloIds,
       contactOutApiKey: contactOutKey,
+      contactOutAvailable,
     });
 
     for (const c of enriched) {
@@ -129,13 +138,19 @@ export async function POST(
   let apolloPhonesRequested = 0;
   let apolloPhonesAdded = 0;
 
-  const apolloRefresh = await refreshCompanyContactsFromApollo(id, apiKey);
+  const apolloRefresh = await refreshCompanyContactsFromApollo(
+    id,
+    apiKey,
+    contactOutAvailable,
+  );
   apolloRefreshed = apolloRefresh.updated;
   apolloPhonesRequested = apolloRefresh.phonesRequested;
   apolloPhonesAdded = apolloRefresh.phonesAdded;
 
-  if (contactOutKey) {
-    const refresh = await refreshCompanyContactsFromContactOut(id, contactOutKey);
+  if (contactOutKey && contactOutAvailable) {
+    const refresh = await refreshCompanyContactsFromContactOut(id, contactOutKey, {
+      contactOutAvailable,
+    });
     personalUpdated = refresh.updated;
     contactoutChecked = refresh.checked;
     contactoutPhoneLocked = refresh.phoneApiLocked;
@@ -186,7 +201,7 @@ export async function POST(
     }
   }
 
-  const totalContacts = existingContacts.length + contactsAdded;
+  const totalContacts = existingContactRows.length + contactsAdded;
 
   revalidatePath("/today");
   revalidatePath("/companies");
@@ -218,6 +233,8 @@ export async function POST(
       } else {
         parts.push(`ContactOut checked ${contactoutChecked} — no new personal data`);
       }
+    } else if (!contactOutAvailable && contactOutKey) {
+      parts.push("ContactOut out of credits — using Apollo emails and phones");
     } else if (!contactOutKey) {
       parts.push("ContactOut not configured on Vercel");
     }
@@ -238,7 +255,8 @@ export async function POST(
     existing_contacts: existingCount,
     personal_updated: personalUpdated,
     contactout_checked: contactoutChecked,
-    contactout_phone_locked: contactoutPhoneLocked,
+    contactout_phone_locked: contactoutPhoneLocked || !contactOutAvailable,
+    contactout_available: contactOutAvailable,
     phones_backfilled: phonesBackfilled,
     total_contacts: totalContacts,
     domain,

@@ -13,7 +13,12 @@ import { contacts } from "@/lib/db/schema";
 export async function refreshCompanyContactsFromContactOut(
   companyId: string,
   contactOutKey: string,
+  options?: { contactOutAvailable?: boolean },
 ): Promise<{ updated: number; checked: number; phoneApiLocked: boolean }> {
+  if (options?.contactOutAvailable === false) {
+    return { updated: 0, checked: 0, phoneApiLocked: true };
+  }
+
   const rows = await db
     .select()
     .from(contacts)
@@ -28,7 +33,7 @@ export async function refreshCompanyContactsFromContactOut(
     if (!co) continue;
     if (co.phoneApiLocked) {
       phoneApiLocked = true;
-      continue;
+      break;
     }
 
     const workEmail =
