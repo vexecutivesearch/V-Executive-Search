@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
 
-from jobspy import scrape_jobs  # noqa: E402
+from src.scrape import DEFAULT_BOARDS, normalize_boards  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -75,76 +75,92 @@ def scrape_location_listings(
     distance: int,
     boards: list[str],
 ) -> list[dict]:
+    boards = normalize_boards(boards)
     hours_old = days * 24
     cutoff = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
         days=days
     )
-    seen_urls: set[str] = set()
-    rows: list[dict] = []
+    raw_listings: list[dict] = []
 
     for term in BROAD_SEARCH_TERMS:
-        for offset in (0, results_wanted, results_wanted * 2):
-            try:
-                kwargs: dict = {
-                    "site_name": boards,
-                    "search_term": term,
-                    "location": location,
-                    "results_wanted": results_wanted,
-                    "hours_old": hours_old,
-                    "country_indeed": "USA",
-                    "distance": distance,
-                    "offset": offset,
-                }
-                if "google" in boards:
-                    kwargs["google_search_term"] = f"jobs {location} posted last {days} days"
-
-                df = scrape_jobs(**kwargs)
-            except Exception as exc:
-                logger.warning("Search failed term=%r offset=%s: %s", term, offset, exc)
-                continue
-
-            if df is None or df.empty:
-                continue
-
-            site_col = "site" if "site" in df.columns else None
-            for _, row in df.iterrows():
-                job_url = _clean_str(row.get("job_url") or row.get("link"))
-                if job_url and job_url in seen_urls:
-                    continue
-
-                listing_location = _clean_str(row.get("location"))
-                if not location_matches_west_palm_beach(listing_location):
-                    continue
-
-                posted_raw = row.get("date_posted")
-                date_posted = ""
-                posted_dt: datetime | None = None
-                if posted_raw is not None and str(posted_raw).lower() != "nan":
-                    date_posted = str(posted_raw)[:10]
-                    posted_dt = _parse_posted(date_posted)
-
-                if posted_dt and posted_dt < cutoff:
-                    continue
-
-                if job_url:
-                    seen_urls.add(job_url)
-
-                board = (
-                    _clean_str(row[site_col])
-                    if site_col and row.get(site_col) is not None
-                    else "unknown"
-                )
-
-                rows.append(
-                    {
-                        "title": _clean_str(row.get("title")),
-                        "company": _clean_str(row.get("company")),
-                        "location": listing_location,
-                        "date_posted": date_posted,
-                        "board": board,
-                        "job_url": job_url,
+        for board in boards:
+            for offset in (0, results_wanted, results_wanted * 2):
+                try:
+                    kwargs: dict = {
+                        "site_name": [board],
+                        "search_term": term,
+                        "location": location,
+                        "results_wanted": results_wanted,
+                        "hours_old": hours_old,
+                        "country_indeed": "USA",
+                        "distance": distance,
+                        "offset": offset,
+                        "linkedin_fetch_description": False,
                     }
-                )
+                    if board == "google":
+                        kwargs["google_search_term"] = (
+                            f"jobs {location} posted last {days} days"
+                        )
+
+                    from jobspy import scrape_jobs
+
+                    df = scrape_jobs(**kwargs)
+                except Exception as exc:
+                    logger.warning(
+                        "Search failed board=%s term=%r offset=%s: %s",
+                        board,
+                        term,
+                        offset,
+                        exc,
+                    )
+                    continue
+
+                if df is None or df.empty:
+                    continue
+
+                site_col = "site" if "site" in df.columns else None
+                for _, row in df.iterrows():
+                    listing_location = _clean_str(row.get("location"))
+                    if not location_matches_west_palm_beach(listing_location):
+                        continue
+
+                    posted_raw = row.get("date_posted")
+                    date_posted = ""
+                    posted_dt: datetime | None = None
+                    if posted_raw is not None and str(posted_raw).lower() != "nan":
+                        date_posted = str(posted_raw)[:10]
+                        posted_dt = _parse_posted(date_posted)
+
+                    if posted_dt and posted_dt < cutoff:
+                        continue
+
+                    board_name = (
+                        _clean_str(row[site_col]).lower()
+                        if site_col and row.get(site_col) is not None
+                        else board
+                    )
+
+                    raw_listings.append(
+                        {
+                            "title": _clean_str(row.get("title")),
+                            "company": _clean_str(row.get("company")),
+                            "location": listing_location,
+                            "date_posted": date_posted,
+                            "board": board_name or board,
+                            "job_url": _clean_str(row.get("job_url") or row.get("link")),
+                        }
+                    )
+
+    # Dedupe by URL across boards
+    seen_urls: set[str] = set()
+    rows: list[dict] = []
+    for row in raw_listings:
+        url = row.get("job_url") or ""
+        if url:
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+        rows.append(row)
 
     rows.sort(key=lambda r: (r["date_posted"], r["company"], r["title"]), reverse=True)
     return rows
@@ -167,8 +183,8 @@ def main() -> int:
     parser.add_argument("--distance", type=int, default=5)
     parser.add_argument(
         "--boards",
-        default="indeed",
-        help="Comma-separated boards (indeed,google,zip_recruiter)",
+        default=",".join(DEFAULT_BOARDS),
+        help="Comma-separated boards (indeed,google,linkedin,zip_recruiter)",
     )
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()

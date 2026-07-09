@@ -1,4 +1,4 @@
-import { and, count, desc, eq, ilike, inArray, isNotNull, not, or } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, not, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   companies,
@@ -8,47 +8,59 @@ import {
   CompanyStatus,
 } from "@/lib/db/schema";
 import { CompanyCardData } from "@/components/CompanyCard";
-import { businessDayFirstSeenDates } from "@/lib/timezone";
+import { firstSeenDatesForListQuery } from "@/lib/timezone";
 import { applySharedLineFilter } from "@/lib/contact-phones";
 import { focusGeoLabel, getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
+import type { Contact } from "@/lib/db/schema";
 
-export async function getTodayCompanies(): Promise<CompanyCardData[]> {
-  const listDates = businessDayFirstSeenDates();
+function hasCallableContact(contact: Contact): boolean {
+  return Boolean(
+    contact.personalPhone ||
+      contact.phone ||
+      contact.personalEmail ||
+      contact.email ||
+      contact.workEmail,
+  );
+}
+
+/** Daily list: all in-focus companies for the business day (enriched or not). */
+export async function getDailyListCompanies(
+  listDateParam?: string,
+): Promise<CompanyCardData[]> {
+  const listDates = firstSeenDatesForListQuery(listDateParam);
   const geoSettings = await getGeoFocusSettings();
 
-  // Callable leads: new status, current business day (6 AM–6 AM ET), in-focus job,
-  // with at least one phone or email (matches daily email report).
-  const rows = await db
-    .selectDistinct({ id: companies.id })
+  const companiesRows = await db
+    .select()
     .from(companies)
-    .innerJoin(contacts, eq(contacts.companyId, companies.id))
-    .innerJoin(jobListings, eq(jobListings.companyId, companies.id))
     .where(
       and(
         eq(companies.status, "new"),
         inArray(companies.firstSeen, listDates),
         not(ilike(companies.name, "(Listing)%")),
-        or(
-          isNotNull(contacts.personalPhone),
-          isNotNull(contacts.phone),
-          isNotNull(contacts.personalEmail),
-          isNotNull(contacts.email),
-          isNotNull(contacts.workEmail),
-        ),
       ),
-    );
-
-  const ids = rows.map((r) => r.id);
-  if (!ids.length) return [];
-
-  const companiesRows = await db
-    .select()
-    .from(companies)
-    .where(inArray(companies.id, ids))
+    )
     .orderBy(desc(companies.createdAt));
 
   const filtered = await enrichCompanies(companiesRows, geoSettings);
-  return filtered.filter((c) => c.jobListings.length > 0);
+  return filtered
+    .filter((c) => c.jobListings.length > 0)
+    .sort((a, b) => {
+      const aCallable = a.contacts.some(hasCallableContact);
+      const bCallable = b.contacts.some(hasCallableContact);
+      if (aCallable !== bCallable) return aCallable ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+}
+
+/** @deprecated Use getDailyListCompanies — kept for callers expecting callable-only. */
+export async function getTodayCompanies(): Promise<CompanyCardData[]> {
+  const all = await getDailyListCompanies();
+  return all.filter((c) => c.contacts.some(hasCallableContact));
+}
+
+export function countCallableCompanies(companies: CompanyCardData[]): number {
+  return companies.filter((c) => c.contacts.some(hasCallableContact)).length;
 }
 
 export async function getTodayGeoLabel(): Promise<string> {

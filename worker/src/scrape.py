@@ -61,13 +61,36 @@ def _normalize_listing(row: pd.Series, search_name: str, board: str) -> JobListi
     )
 
 
-def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
+def _dedupe_listings(listings: list[JobListing]) -> list[JobListing]:
+    seen_urls: set[str] = set()
+    seen_keys: set[str] = set()
+    out: list[JobListing] = []
+
+    for listing in listings:
+        url = listing.job_url.strip().lower()
+        if url:
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+        else:
+            key = (
+                f"{listing.company_name.lower()}|"
+                f"{listing.job_title.lower()}|"
+                f"{listing.board.lower()}"
+            )
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+        out.append(listing)
+
+    return out
+
+
+def _scrape_search_board(search: dict[str, Any], board: str) -> list[JobListing]:
     name = search.get("name", "unnamed")
-    boards = normalize_boards(boards)
-    logger.info("Scraping search: %s (boards=%s)", name, ",".join(boards))
 
     kwargs: dict[str, Any] = {
-        "site_name": boards,
+        "site_name": [board],
         "search_term": search["search_term"],
         "location": search.get("location", ""),
         "results_wanted": search.get("results_wanted", 50),
@@ -76,7 +99,7 @@ def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
         "linkedin_fetch_description": False,
     }
 
-    if search.get("google_search_term"):
+    if board == "google" and search.get("google_search_term"):
         kwargs["google_search_term"] = search["google_search_term"]
     if search.get("is_remote") is not None:
         kwargs["is_remote"] = search["is_remote"]
@@ -86,22 +109,51 @@ def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
     try:
         df = scrape_jobs(**kwargs)
     except Exception as exc:
-        logger.error("Search '%s' failed: %s", name, exc)
+        logger.error("Search '%s' board=%s failed: %s", name, board, exc)
         return listings
 
     if df is None or df.empty:
-        logger.warning("Search '%s' returned no results", name)
+        logger.info("Search '%s' board=%s returned no results", name, board)
         return listings
 
     site_col = "site" if "site" in df.columns else None
     for _, row in df.iterrows():
-        board = str(row[site_col]) if site_col and not pd.isna(row.get(site_col)) else "unknown"
-        listing = _normalize_listing(row, name, board)
+        row_board = (
+            str(row[site_col]).strip().lower()
+            if site_col and not pd.isna(row.get(site_col))
+            else board
+        )
+        listing = _normalize_listing(row, name, row_board or board)
         if listing:
             listings.append(listing)
 
-    logger.info("Search '%s' yielded %d listings", name, len(listings))
     return listings
+
+
+def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
+    name = search.get("name", "unnamed")
+    boards = normalize_boards(boards)
+    logger.info("Scraping search: %s (boards=%s)", name, ",".join(boards))
+
+    merged: list[JobListing] = []
+    for board in boards:
+        board_listings = _scrape_search_board(search, board)
+        logger.info(
+            "Search '%s' board=%s yielded %d listings",
+            name,
+            board,
+            len(board_listings),
+        )
+        merged.extend(board_listings)
+
+    deduped = _dedupe_listings(merged)
+    logger.info(
+        "Search '%s' total %d listings after dedupe across %d board(s)",
+        name,
+        len(deduped),
+        len(boards),
+    )
+    return deduped
 
 
 def scrape_all(config: dict[str, Any]) -> list[JobListing]:

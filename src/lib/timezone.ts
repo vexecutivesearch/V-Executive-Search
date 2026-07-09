@@ -45,9 +45,8 @@ export function businessDayFirstSeenDates(): string[] {
   return [listDate];
 }
 
-export function businessListWindowLabel(): string {
-  const listDate = businessListDate();
-  const d = new Date(`${listDate}T12:00:00`);
+export function businessListWindowLabel(listDate?: string): string {
+  const d = new Date(`${resolveListDate(listDate)}T12:00:00`);
   const dayLabel = d.toLocaleDateString("en-US", {
     timeZone: BUSINESS_TIMEZONE,
     weekday: "long",
@@ -56,4 +55,25 @@ export function businessListWindowLabel(): string {
     year: "numeric",
   });
   return `${dayLabel} · 6 AM – 6 AM ET`;
+}
+
+/** Validate YYYY-MM-DD from URL ?date= param. */
+export function parseListDateParam(param: string | undefined): string | undefined {
+  if (!param?.match(/^\d{4}-\d{2}-\d{2}$/)) return undefined;
+  return param;
+}
+
+/** Active list date: explicit calendar pick, else current business day. */
+export function resolveListDate(listDateParam?: string): string {
+  return parseListDateParam(listDateParam) ?? businessListDate();
+}
+
+/**
+ * first_seen dates for the daily list query.
+ * Explicit date → that day only; default → current business day (+ straddle before 6 AM).
+ */
+export function firstSeenDatesForListQuery(listDateParam?: string): string[] {
+  const parsed = parseListDateParam(listDateParam);
+  if (parsed) return [parsed];
+  return businessDayFirstSeenDates();
 }

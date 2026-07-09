@@ -45,7 +45,7 @@ def group_csv_rows(rows: list[dict[str, str]], search_name: str) -> list[dict]:
         by_company[company].append(
             {
                 "title": (row.get("title") or "").strip(),
-                "board": (row.get("board") or "indeed").strip(),
+                "board": (row.get("board") or "").strip() or "unknown",
                 "url": (row.get("job_url") or "").strip(),
                 "location": (row.get("location") or "").strip(),
                 "search_name": search_name,
