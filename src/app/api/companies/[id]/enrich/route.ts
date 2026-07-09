@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { enrichCompanyContacts } from "@/lib/apollo-enrich";
 import { resolveCompanyDomain } from "@/lib/domain-resolver";
+import { refreshCompanyContactsFromContactOut } from "@/lib/refresh-company-contacts";
 import { db } from "@/lib/db";
 import { companies, contacts, jobListings } from "@/lib/db/schema";
 
@@ -9,6 +10,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
+/** Full enrich: Apollo discovery + ContactOut personal data on all contacts. */
 export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -24,6 +26,7 @@ export async function POST(
     );
   }
 
+  const contactOutKey = process.env.CONTACTOUT_API_KEY;
   const { id } = await params;
 
   const [company] = await db
@@ -80,58 +83,58 @@ export async function POST(
     .map((l) => l.location)
     .filter((l): l is string => Boolean(l));
 
-  let enriched: Awaited<ReturnType<typeof enrichCompanyContacts>>;
+  let contactsAdded = 0;
   try {
-    enriched = await enrichCompanyContacts({
+    const enriched = await enrichCompanyContacts({
       apiKey,
       domain,
       jobLocations,
       existingApolloIds,
-      contactOutApiKey: process.env.CONTACTOUT_API_KEY,
+      contactOutApiKey: contactOutKey,
     });
+
+    for (const c of enriched) {
+      await db.insert(contacts).values({
+        companyId: id,
+        name: c.name,
+        title: c.title,
+        email: c.email,
+        workEmail: c.workEmail,
+        personalEmail: c.personalEmail,
+        phone: c.phone,
+        personalPhone: c.personalPhone,
+        companyPhone: c.companyPhone,
+        linkedinUrl: c.linkedinUrl,
+        apolloId: c.apolloId,
+        sourceProvider: c.sourceProvider,
+        locationMatched: c.locationMatched,
+        contactLocation: c.contactLocation,
+        jobLocation: c.jobLocation,
+      });
+      contactsAdded += 1;
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Enrichment failed";
     return NextResponse.json({ error: message }, { status: 502 });
   }
 
-  if (!enriched.length) {
-    return NextResponse.json({
-      ok: true,
-      contacts_added: 0,
-      message: "No new contacts found at this company",
-      domain,
-    });
+  let personalUpdated = 0;
+  if (contactOutKey) {
+    const refresh = await refreshCompanyContactsFromContactOut(id, contactOutKey);
+    personalUpdated = refresh.updated;
   }
 
-  for (const c of enriched) {
-    await db.insert(contacts).values({
-      companyId: id,
-      name: c.name,
-      title: c.title,
-      email: c.email,
-      workEmail: c.workEmail,
-      personalEmail: c.personalEmail,
-      phone: c.phone,
-      personalPhone: c.personalPhone,
-      companyPhone: c.companyPhone,
-      linkedinUrl: c.linkedinUrl,
-      apolloId: c.apolloId,
-      sourceProvider: c.sourceProvider,
-      locationMatched: c.locationMatched,
-      contactLocation: c.contactLocation,
-      jobLocation: c.jobLocation,
-    });
-  }
+  const totalContacts = existingContacts.length + contactsAdded;
 
   return NextResponse.json({
     ok: true,
-    contacts_added: enriched.length,
+    contacts_added: contactsAdded,
+    personal_updated: personalUpdated,
+    total_contacts: totalContacts,
     domain,
-    contacts: enriched.map((c) => ({
-      name: c.name,
-      title: c.title,
-      email: c.email,
-      location_matched: c.locationMatched,
-    })),
+    message:
+      contactsAdded === 0 && personalUpdated === 0
+        ? "No new contacts or personal data found"
+        : undefined,
   });
 }

@@ -97,6 +97,23 @@ def main() -> int:
             send_failure_alert("\n".join(result.errors))
             return 1
 
+    if not args.dry_run and not args.skip_crm:
+        try:
+            imessage_script = WORKER_ROOT / "scripts" / "check_imessage.py"
+            if imessage_script.exists():
+                import importlib.util
+
+                spec = importlib.util.spec_from_file_location(
+                    "check_imessage", imessage_script
+                )
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    n = mod.run_imessage_checks(limit=50, delay=2.0)
+                    logger.info("iMessage checks completed: %d contact(s)", n)
+        except Exception as exc:
+            logger.warning("iMessage check pass failed (non-fatal): %s", exc)
+
     logger.info("Log written to %s", log_path)
     return 0
 

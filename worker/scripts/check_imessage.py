@@ -9,7 +9,6 @@ Uses the Messages app via AppleScript. Run on the Mac mini after enrichment:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import subprocess
@@ -85,6 +84,65 @@ def patch_imessage(base_url: str, api_key: str, contact_id: str, capable: bool) 
     resp.raise_for_status()
 
 
+def run_imessage_checks(*, limit: int = 50, delay: float = 2.0) -> int:
+    """Check pending contacts and patch CRM. Returns count checked. Mac only."""
+    if sys.platform != "darwin":
+        logger.info("Skipping iMessage checks (not macOS)")
+        return 0
+
+    load_dotenv(WORKER_ROOT / ".env")
+    base_url = os.environ.get("CRM_API_URL", "")
+    api_key = os.environ.get("CRM_API_KEY", "")
+    if not base_url or not api_key:
+        logger.warning("Skipping iMessage checks — CRM_API_URL/CRM_API_KEY not set")
+        return 0
+
+    try:
+        pending = fetch_contacts(base_url, api_key, limit * 2)
+    except requests.RequestException as exc:
+        logger.warning("iMessage check skipped — could not fetch contacts: %s", exc)
+        return 0
+
+    checked = 0
+    for contact in pending:
+        if checked >= limit:
+            break
+        if contact.get("imessageCapable") is not None or contact.get("imessage_capable") is not None:
+            continue
+
+        addresses: list[str] = []
+        for key in ("personalEmail", "personal_email"):
+            val = contact.get(key)
+            if val and isinstance(val, str) and "@" in val:
+                addresses.append(val.strip())
+
+        if not addresses:
+            for key in ("email",):
+                val = contact.get(key)
+                if val and isinstance(val, str) and "@" in val:
+                    from src.phone_utils import is_personal_email
+                    if is_personal_email(val):
+                        addresses.append(val.strip())
+
+        for address in addresses:
+            capable = check_imessage(address)
+            if capable is None:
+                continue
+            patch_imessage(base_url, api_key, contact["id"], capable)
+            label = "iMessage" if capable else "SMS only"
+            logger.info(
+                "iMessage: %s — %s (%s)",
+                contact.get("name"),
+                label,
+                address,
+            )
+            checked += 1
+            time.sleep(delay)
+            break
+
+    return checked
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check iMessage for CRM contacts (Mac only)")
     parser.add_argument("--limit", type=int, default=50, help="Max contacts to check")
@@ -114,13 +172,13 @@ def main() -> int:
     for contact in contacts:
         if checked >= args.limit:
             break
-        if contact.get("imessage_capable") is not None:
+        if contact.get("imessageCapable") is not None or contact.get("imessage_capable") is not None:
             continue
 
         addresses: list[str] = []
-        for key in ("personalEmail", "personal_email", "email", "personalPhone", "personal_phone", "phone"):
+        for key in ("personalEmail", "personal_email"):
             val = contact.get(key)
-            if val and isinstance(val, str):
+            if val and isinstance(val, str) and "@" in val:
                 addresses.append(val.strip())
 
         seen: set[str] = set()

@@ -47,7 +47,7 @@ This installs two launchd agents:
 
 | Agent | Schedule | Purpose |
 |-------|----------|---------|
-| `com.vexecsearch.daily` | 6:00 AM & 6:00 PM daily | Full scrape → enrich → CRM ingest → email |
+| `com.vexecsearch.daily` | 6:00 AM & 6:00 PM daily | Scrape → Apollo + ContactOut enrich → CRM → iMessage tags |
 | `com.vexecsearch.poll` | Every 5 minutes | Picks up **Run now** from admin on your phone |
 
 Verify:
@@ -74,13 +74,11 @@ Fallback: `config/searches.yaml` if CRM is unreachable.
 
 ### iMessage check (Mac mini only)
 
-After enrichment, optionally verify which emails/phones support iMessage:
+Runs **automatically at the end of each 6 AM / 6 PM pipeline** on macOS (Messages must be signed in). Manual run:
 
 ```bash
 python scripts/check_imessage.py --limit 20
 ```
-
-Requires Messages app signed in on the Mac. Throttle with `--delay 2` to avoid rate limits.
 
 ## Required env vars
 

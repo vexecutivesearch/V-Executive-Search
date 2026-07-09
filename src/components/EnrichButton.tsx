@@ -16,31 +16,6 @@ export function EnrichButton({
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  async function handleRefreshPersonal() {
-    setLoading(true);
-    setMessage(null);
-    try {
-      const res = await fetch(`/api/companies/${companyId}/refresh-contacts`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setMessage(data.error || "ContactOut refresh failed");
-        return;
-      }
-      if (data.updated === 0) {
-        setMessage(data.message || "No personal data found");
-      } else {
-        setMessage(`Updated ${data.updated} personal`);
-      }
-      router.refresh();
-    } catch {
-      setMessage("Network error");
-    } finally {
-      setLoading(false);
-    }
-  }
-
   async function handleEnrich() {
     setLoading(true);
     setMessage(null);
@@ -53,11 +28,17 @@ export function EnrichButton({
         setMessage(data.error || "Enrichment failed");
         return;
       }
-      if (data.contacts_added === 0) {
-        setMessage(data.message || "No new contacts");
-      } else {
-        setMessage(`+${data.contacts_added} contact${data.contacts_added === 1 ? "" : "s"}`);
+
+      const parts: string[] = [];
+      if (data.contacts_added > 0) {
+        parts.push(
+          `+${data.contacts_added} contact${data.contacts_added === 1 ? "" : "s"}`,
+        );
       }
+      if (data.personal_updated > 0) {
+        parts.push(`${data.personal_updated} personal updated`);
+      }
+      setMessage(parts.length ? parts.join(", ") : data.message || "Up to date");
       router.refresh();
     } catch {
       setMessage("Network error");
@@ -67,44 +48,38 @@ export function EnrichButton({
   }
 
   const label =
-    contactCount > 0 ? (compact ? "More" : "Enrich more") : compact ? "Enrich" : "Enrich contacts";
+    contactCount > 0
+      ? compact
+        ? "Enrich"
+        : "Enrich contacts"
+      : compact
+        ? "Enrich"
+        : "Enrich contacts";
 
   return (
     <div className="inline-flex flex-col items-start gap-0.5">
-      <div className="flex gap-1">
-        <button
-          type="button"
-          onClick={handleEnrich}
-          disabled={loading}
-          className={`rounded-md font-medium transition-colors disabled:opacity-50 ${
-            compact
-              ? "px-2 py-1 text-xs bg-green-700 text-white hover:bg-green-800"
-              : "px-3 py-1.5 text-sm bg-green-700 text-white hover:bg-green-800"
-          }`}
-        >
-          {loading ? "…" : label}
-        </button>
-        {contactCount > 0 && (
-          <button
-            type="button"
-            onClick={handleRefreshPersonal}
-            disabled={loading}
-            title="ContactOut: personal email & mobile via LinkedIn"
-            className={`rounded-md font-medium transition-colors disabled:opacity-50 border border-green-700 text-green-800 dark:text-green-300 hover:bg-green-50 dark:hover:bg-green-950 ${
-              compact ? "px-2 py-1 text-xs" : "px-2 py-1.5 text-xs"
-            }`}
-          >
-            Personal
-          </button>
-        )}
-      </div>
+      <button
+        type="button"
+        onClick={handleEnrich}
+        disabled={loading}
+        title="Apollo + ContactOut: find contacts and personal email/mobile"
+        className={`rounded-md font-medium transition-colors disabled:opacity-50 ${
+          compact
+            ? "px-2 py-1 text-xs bg-green-700 text-white hover:bg-green-800"
+            : "px-3 py-1.5 text-sm bg-green-700 text-white hover:bg-green-800"
+        }`}
+      >
+        {loading ? "Enriching…" : label}
+      </button>
       {contactCount > 0 && !message && (
         <span className="text-[10px] text-gray-400">{contactCount} saved</span>
       )}
       {message && (
         <span
-          className={`text-[10px] max-w-[120px] leading-tight ${
-            message.startsWith("+") ? "text-green-700 dark:text-green-400" : "text-amber-700 dark:text-amber-400"
+          className={`text-[10px] max-w-[140px] leading-tight ${
+            message.includes("+") || message.includes("updated")
+              ? "text-green-700 dark:text-green-400"
+              : "text-amber-700 dark:text-amber-400"
           }`}
         >
           {message}
