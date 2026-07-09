@@ -78,11 +78,22 @@ function apolloHeaders(apiKey: string): HeadersInit {
 }
 
 function webhookUrl(): string | null {
-  const base =
-    process.env.NEXT_PUBLIC_APP_URL ||
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
-  if (!base?.startsWith("https://")) return null;
-  return `${base.replace(/\/$/, "")}/api/apollo/webhook`;
+  const candidates = [
+    process.env.NEXT_PUBLIC_APP_URL,
+    process.env.CRM_API_URL,
+    process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null,
+  ];
+  for (const raw of candidates) {
+    const base = raw?.trim().replace(/\/$/, "");
+    if (base?.startsWith("https://")) {
+      return `${base}/api/apollo/webhook`;
+    }
+  }
+  return null;
+}
+
+export function apolloWebhookConfigured(): boolean {
+  return webhookUrl() !== null;
 }
 
 function executiveRank(person: Record<string, unknown>): [number, number, string] {
@@ -311,7 +322,12 @@ function contactNeedsApolloRefresh(contact: {
 export async function refreshCompanyContactsFromApollo(
   companyId: string,
   apiKey: string,
-): Promise<{ updated: number; phonesRequested: number; checked: number }> {
+): Promise<{
+  updated: number;
+  phonesRequested: number;
+  phonesAdded: number;
+  checked: number;
+}> {
   const rows = await db
     .select()
     .from(contacts)
@@ -320,10 +336,12 @@ export async function refreshCompanyContactsFromApollo(
   const withApollo = rows.filter((c) => c.apolloId);
   let updated = 0;
   let phonesRequested = 0;
+  let phonesAdded = 0;
 
   for (const contact of withApollo) {
     if (!contact.apolloId || !contactNeedsApolloRefresh(contact)) continue;
 
+    const beforePhones = contactPhonesForDisplay(contact).length;
     phonesRequested += 1;
     const enriched = await matchPerson(apiKey, contact.apolloId, ENRICH_PHONE);
     if (!enriched) continue;
@@ -332,6 +350,7 @@ export async function refreshCompanyContactsFromApollo(
     const phones = mergeSourcedPhones(contactPhonesForDisplay(contact), apolloPhones);
     const synced = syncContactPhoneFields({ ...contact, phones });
     const primary = pickPrimaryFromPhones(synced.phones);
+    const afterPhones = synced.phones.length;
 
     const workEmail =
       contact.workEmail ??
@@ -350,6 +369,11 @@ export async function refreshCompanyContactsFromApollo(
     const linkedinUrl =
       contact.linkedinUrl ??
       (enriched.linkedin_url ? String(enriched.linkedin_url) : null);
+
+    const gainedPhone = afterPhones > beforePhones;
+    const gainedEmail =
+      Boolean(nextWorkEmail && !contact.workEmail && !contact.email) ||
+      Boolean(personalEmail && !contact.personalEmail);
 
     const changed =
       linkedinUrl !== contact.linkedinUrl ||
@@ -378,8 +402,12 @@ export async function refreshCompanyContactsFromApollo(
       .where(eq(contacts.id, contact.id));
 
     updated += 1;
+    if (gainedPhone) phonesAdded += 1;
+    if (gainedEmail && !gainedPhone) {
+      // still counts as meaningful contact enrichment
+    }
     await new Promise((r) => setTimeout(r, 300));
   }
 
-  return { updated, phonesRequested, checked: withApollo.length };
+  return { updated, phonesRequested, phonesAdded, checked: withApollo.length };
 }

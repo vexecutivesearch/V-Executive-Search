@@ -48,6 +48,19 @@ export function extractApolloPhones(
     });
   }
 
+  // Some match responses expose a single mobile on the person root.
+  for (const [field, kind] of [
+    ["mobile_phone", "mobile"],
+    ["phone", "mobile"],
+    ["corporate_phone", "work"],
+    ["direct_phone", "work"],
+  ] as const) {
+    const number = parsePhoneValue(String(person[field] ?? ""));
+    if (number) {
+      out.push({ number, source: "apollo", kind });
+    }
+  }
+
   return dedupeSourcedPhones(out);
 }
 

@@ -1,9 +1,9 @@
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { NextRequest, NextResponse } from "next/server";
-import { enrichCompanyContacts, refreshCompanyContactsFromApollo } from "@/lib/apollo-enrich";
+import { enrichCompanyContacts, refreshCompanyContactsFromApollo, apolloWebhookConfigured } from "@/lib/apollo-enrich";
 import { resolveCompanyDomain } from "@/lib/domain-resolver";
-import { syncContactPhoneFields } from "@/lib/contact-phones";
+import { syncContactPhoneFields, contactPhonesForDisplay } from "@/lib/contact-phones";
 import { refreshCompanyContactsFromContactOut } from "@/lib/refresh-company-contacts";
 import { db } from "@/lib/db";
 import { companies, contacts, jobListings } from "@/lib/db/schema";
@@ -127,10 +127,12 @@ export async function POST(
   let contactoutPhoneLocked = false;
   let apolloRefreshed = 0;
   let apolloPhonesRequested = 0;
+  let apolloPhonesAdded = 0;
 
   const apolloRefresh = await refreshCompanyContactsFromApollo(id, apiKey);
   apolloRefreshed = apolloRefresh.updated;
   apolloPhonesRequested = apolloRefresh.phonesRequested;
+  apolloPhonesAdded = apolloRefresh.phonesAdded;
 
   if (contactOutKey) {
     const refresh = await refreshCompanyContactsFromContactOut(id, contactOutKey);
@@ -164,6 +166,26 @@ export async function POST(
     }
   }
 
+  // Apollo phone reveal is async — wait for webhook, then re-read contacts.
+  if (apolloPhonesRequested > 0 && apolloWebhookConfigured()) {
+    const phonesBefore = allContacts.reduce(
+      (n, c) => n + contactPhonesForDisplay(c).length,
+      0,
+    );
+    await new Promise((r) => setTimeout(r, 5000));
+    const afterContacts = await db
+      .select()
+      .from(contacts)
+      .where(eq(contacts.companyId, id));
+    const phonesAfter = afterContacts.reduce(
+      (n, c) => n + contactPhonesForDisplay(c).length,
+      0,
+    );
+    if (phonesAfter > phonesBefore) {
+      apolloPhonesAdded += phonesAfter - phonesBefore;
+    }
+  }
+
   const totalContacts = existingContacts.length + contactsAdded;
 
   revalidatePath("/today");
@@ -177,17 +199,22 @@ export async function POST(
   if (
     contactsAdded === 0 &&
     personalUpdated === 0 &&
+    apolloPhonesAdded === 0 &&
     apolloRefreshed === 0
   ) {
     const parts = [`${existingCount} Apollo contact${existingCount === 1 ? "" : "s"} on file`];
     if (apolloPhonesRequested > 0) {
-      parts.push(
-        `Apollo phone reveal requested for ${apolloPhonesRequested} (may arrive via webhook)`,
-      );
+      if (apolloWebhookConfigured()) {
+        parts.push("waiting for Apollo phone webhook");
+      } else {
+        parts.push(
+          "Apollo phone webhook not configured — set NEXT_PUBLIC_APP_URL on Vercel",
+        );
+      }
     }
     if (contactoutChecked > 0) {
       if (contactoutPhoneLocked) {
-        parts.push("ContactOut phone API locked — work emails from Apollo only");
+        parts.push("ContactOut phone API locked — personal email/mobile unavailable");
       } else {
         parts.push(`ContactOut checked ${contactoutChecked} — no new personal data`);
       }
@@ -195,6 +222,10 @@ export async function POST(
       parts.push("ContactOut not configured on Vercel");
     }
     message = parts.join(" · ");
+  } else if (apolloPhonesRequested > 0 && apolloPhonesAdded === 0 && contactsAdded === 0) {
+    message = apolloWebhookConfigured()
+      ? `${apolloRefreshed} contact(s) refreshed — phones may still be loading from Apollo`
+      : `${apolloRefreshed} refreshed — configure NEXT_PUBLIC_APP_URL for Apollo phones`;
   }
 
   return NextResponse.json({
@@ -202,6 +233,8 @@ export async function POST(
     contacts_added: contactsAdded,
     apollo_refreshed: apolloRefreshed,
     apollo_phones_requested: apolloPhonesRequested,
+    apollo_phones_added: apolloPhonesAdded,
+    apollo_webhook_configured: apolloWebhookConfigured(),
     existing_contacts: existingCount,
     personal_updated: personalUpdated,
     contactout_checked: contactoutChecked,
