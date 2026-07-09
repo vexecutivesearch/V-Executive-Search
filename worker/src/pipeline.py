@@ -160,6 +160,48 @@ def _write_csv(rows: list[dict[str, Any]], run_date: date) -> Path:
     return path
 
 
+def _primary_poster(listing: JobListing):
+    if not listing.posters:
+        return None
+    for poster in listing.posters:
+        if poster.is_job_poster:
+            return poster
+    return listing.posters[0]
+
+
+def _job_listing_payload(jl: JobListing) -> dict[str, Any]:
+    poster = _primary_poster(jl)
+    payload = {
+        "title": jl.job_title,
+        "board": jl.board,
+        "url": jl.job_url,
+        "location": jl.location,
+        "search_name": jl.search_name,
+        "posted_at": jl.date_posted.isoformat() if jl.date_posted else None,
+    }
+    if poster:
+        payload["poster_name"] = poster.name
+        payload["poster_title"] = poster.title or None
+        payload["poster_linkedin_url"] = poster.linkedin_url
+    return payload
+
+
+def _seed_contacts_payload(company: CompanyRecord) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": c.name,
+            "title": c.title,
+            "linkedin_url": c.linkedin_url,
+            "source_provider": c.source_provider,
+            "location_matched": c.location_matched,
+            "contact_location": c.contact_location,
+            "job_location": c.job_location,
+        }
+        for c in company.seed_contacts
+        if c.linkedin_url
+    ]
+
+
 def _build_jobs_only_payload(
     companies: list[CompanyRecord],
     result: PipelineResult,
@@ -172,17 +214,8 @@ def _build_jobs_only_payload(
             "domain_confidence": company.domain_confidence.value,
             "estimated_employees": company.estimated_employees,
             "industry": company.industry,
-            "job_listings": [
-                {
-                    "title": jl.job_title,
-                    "board": jl.board,
-                    "url": jl.job_url,
-                    "location": jl.location,
-                    "search_name": jl.search_name,
-                    "posted_at": jl.date_posted.isoformat() if jl.date_posted else None,
-                }
-                for jl in company.listings
-            ],
+            "job_listings": [_job_listing_payload(jl) for jl in company.listings],
+            "contacts": _seed_contacts_payload(company),
         }
         if company.crm_id:
             payload["id"] = company.crm_id
@@ -234,17 +267,7 @@ def _build_enrich_payload(
                 }
                 for c in item.contacts
             ],
-            "job_listings": [
-                {
-                    "title": jl.job_title,
-                    "board": jl.board,
-                    "url": jl.job_url,
-                    "location": jl.location,
-                    "search_name": jl.search_name,
-                    "posted_at": jl.date_posted.isoformat() if jl.date_posted else None,
-                }
-                for jl in company.listings
-            ],
+            "job_listings": [_job_listing_payload(jl) for jl in company.listings],
         }
         if company.crm_id:
             payload["id"] = company.crm_id

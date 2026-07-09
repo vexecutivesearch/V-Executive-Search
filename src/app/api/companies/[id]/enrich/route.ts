@@ -79,9 +79,13 @@ export async function POST(
     .where(eq(jobListings.companyId, id));
 
   const existingContactRows = await db
-    .select({ apolloId: contacts.apolloId, linkedinUrl: contacts.linkedinUrl })
+    .select()
     .from(contacts)
     .where(eq(contacts.companyId, id));
+
+  const posterContacts = existingContactRows.filter(
+    (c) => c.sourceProvider === "linkedin_poster" && c.linkedinUrl,
+  );
 
   const existingApolloIds = new Set(
     existingContactRows.map((c) => c.apolloId).filter(Boolean) as string[],
@@ -97,6 +101,59 @@ export async function POST(
   const contactOutAvailable = contactOutKey
     ? await isContactOutCreditsAvailable(contactOutKey, sampleLinkedIn)
     : false;
+
+  if (!domain) {
+    if (posterContacts.length === 0 || !contactOutKey) {
+      return NextResponse.json(
+        {
+          error: posterContacts.length
+            ? "CONTACTOUT_API_KEY is not configured — needed to enrich LinkedIn job posters without a company domain."
+            : `Could not resolve a domain for "${company.name}"`,
+        },
+        { status: posterContacts.length ? 503 : 422 },
+      );
+    }
+
+    const refresh = await refreshCompanyContactsFromContactOut(id, contactOutKey, {
+      contactOutAvailable,
+    });
+
+    const finalContacts = await db
+      .select()
+      .from(contacts)
+      .where(eq(contacts.companyId, id));
+
+    if (finalContacts.some(contactIsCallable)) {
+      await db
+        .update(companies)
+        .set({
+          enrichRunDate: businessListDate(),
+          enrichedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(companies.id, id));
+      await recomputeCompanyScores([id]);
+    }
+
+    revalidatePath("/today");
+    revalidatePath("/companies");
+    revalidatePath(`/companies/${id}`);
+
+    const updatedCompany = await getCompanyById(id);
+    return NextResponse.json({
+      ok: true,
+      contacts_added: 0,
+      personal_updated: refresh.updated,
+      contactout_checked: refresh.checked,
+      contactout_phone_locked: refresh.phoneApiLocked || !contactOutAvailable,
+      contactout_available: contactOutAvailable,
+      company: updatedCompany,
+      message:
+        refresh.updated > 0
+          ? `Enriched ${refresh.updated} LinkedIn job poster contact(s) via ContactOut`
+          : `ContactOut checked ${refresh.checked} job poster(s) — no new personal data`,
+    });
+  }
 
   let contactsAdded = 0;
   try {

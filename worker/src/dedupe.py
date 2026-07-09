@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from src.models import CompanyRecord, DomainConfidence, JobListing
+from src.models import CompanyRecord, DomainConfidence, JobListing, ContactRecord
 
 _SUFFIXES = re.compile(
     r"\b(inc|incorporated|llc|l\.l\.c|corp|corporation|co|company|ltd|limited|plc|group|holdings)\b\.?",
@@ -15,6 +15,34 @@ def normalize_company_name(name: str) -> str:
     cleaned = _PUNCTUATION.sub(" ", name.lower()).strip()
     cleaned = _SUFFIXES.sub("", cleaned)
     return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _poster_to_contact(poster, job_location: str) -> ContactRecord:
+    parts = poster.name.strip().split()
+    first = parts[0] if parts else ""
+    last = " ".join(parts[1:]) if len(parts) > 1 else ""
+    return ContactRecord(
+        name=poster.name,
+        first_name=first,
+        last_name=last,
+        title=poster.title or ("Job poster" if poster.is_job_poster else "LinkedIn contact"),
+        linkedin_url=poster.linkedin_url,
+        source_provider="linkedin_poster",
+        job_location=job_location or None,
+    )
+
+
+def _merge_seed_contact(company: CompanyRecord, contact: ContactRecord) -> None:
+    key = (contact.linkedin_url or contact.name).lower().strip()
+    if not key:
+        return
+    for existing in company.seed_contacts:
+        existing_key = (existing.linkedin_url or existing.name).lower().strip()
+        if existing_key == key:
+            if contact.title and contact.title != "LinkedIn contact":
+                existing.title = contact.title
+            return
+    company.seed_contacts.append(contact)
 
 
 def collapse_to_companies(listings: list[JobListing]) -> list[CompanyRecord]:
@@ -34,6 +62,12 @@ def collapse_to_companies(listings: list[JobListing]) -> list[CompanyRecord]:
 
         company = by_normalized[normalized]
         company.listings.append(listing)
+        for poster in listing.posters:
+            if poster.linkedin_url:
+                _merge_seed_contact(
+                    company,
+                    _poster_to_contact(poster, listing.location),
+                )
         # Prefer the longest/most complete company name spelling
         if len(listing.company_name) > len(company.name):
             company.name = listing.company_name

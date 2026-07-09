@@ -155,6 +155,19 @@ write_calendar_plist "com.vexecsearch.email" \
   "$WORKER_ROOT/logs/email_stdout.log" \
   "$WORKER_ROOT/logs/email_stderr.log"
 
+# Evening refresh — catch jobs posted during the day (free: scrape + rescore only)
+write_calendar_plist "com.vexecsearch.scrape-pm" \
+  "scripts/run_daily.py --scrape-only" \
+  18 0 \
+  "$WORKER_ROOT/logs/scrape_pm_stdout.log" \
+  "$WORKER_ROOT/logs/scrape_pm_stderr.log"
+
+write_calendar_plist "com.vexecsearch.rescore-pm" \
+  "scripts/run_daily.py --rescore-only" \
+  18 30 \
+  "$WORKER_ROOT/logs/rescore_pm_stdout.log" \
+  "$WORKER_ROOT/logs/rescore_pm_stderr.log"
+
 write_interval_plist "com.vexecsearch.poll" \
   "$WORKER_ROOT/scripts/poll_and_run.py" \
   300 \
@@ -163,8 +176,9 @@ write_interval_plist "com.vexecsearch.poll" \
 
 launchctl bootout "gui/$(id -u)/com.vexecsearch.contactout-keepalive" 2>/dev/null || true
 launchctl bootout "gui/$(id -u)/com.vexecsearch.daily" 2>/dev/null || true
+rm -f "$LAUNCH_AGENTS/com.vexecsearch.daily.plist"
 
-for label in com.vexecsearch.hygiene com.vexecsearch.scrape com.vexecsearch.rescore com.vexecsearch.enrich com.vexecsearch.presence com.vexecsearch.email com.vexecsearch.poll; do
+for label in com.vexecsearch.hygiene com.vexecsearch.scrape com.vexecsearch.rescore com.vexecsearch.enrich com.vexecsearch.presence com.vexecsearch.email com.vexecsearch.scrape-pm com.vexecsearch.rescore-pm com.vexecsearch.poll; do
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENTS/${label}.plist"
   launchctl enable "gui/$(id -u)/$label"
@@ -179,6 +193,10 @@ echo "  • 02:30 ICP filter + rescore backlog (free)"
 echo "  • 03:00 Enrich top-N call sheet (paid)"
 echo "  • 03:30 Presence checks — iMessage + email MX (free)"
 echo "  • 06:00 Call sheet email (free)"
+echo "  • 18:00 Evening scrape + jobs_only ingest (free)"
+echo "  • 18:30 Evening rescore backlog (free)"
 echo "  • Every 5 min Admin 'Run now' poll (com.vexecsearch.poll)"
+echo ""
+echo "Note: Mac must be awake at scheduled times — launchd does not run missed jobs after sleep."
 echo ""
 echo "Verify: launchctl list | grep vexecsearch"

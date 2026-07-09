@@ -54,6 +54,9 @@ interface IngestJobListing {
   location?: string;
   search_name?: string;
   posted_at?: string;
+  poster_name?: string;
+  poster_title?: string;
+  poster_linkedin_url?: string;
 }
 
 interface IngestCompany {
@@ -280,50 +283,71 @@ export async function POST(request: NextRequest) {
 
     touchedCompanyIds.push(companyId);
 
-    if (!jobsOnly) {
-      for (const c of item.contacts ?? []) {
-        if (!c.email && !c.name) continue;
+    const contactsToIngest = jobsOnly
+      ? (item.contacts ?? []).filter(
+          (c) =>
+            c.source_provider === "linkedin_poster" &&
+            (c.linkedin_url || c.name),
+        )
+      : (item.contacts ?? []).filter((c) => c.email || c.name || c.linkedin_url);
 
-        const existingForCompany = await db
-          .select({ apolloId: contacts.apolloId, email: contacts.email })
-          .from(contacts)
-          .where(eq(contacts.companyId, companyId));
+    for (const c of contactsToIngest) {
+      if (!c.name && !c.email && !c.linkedin_url) continue;
 
-        if (
-          c.apollo_id &&
-          existingForCompany.some((row) => row.apolloId === c.apollo_id)
-        ) {
-          continue;
-        }
-        const emailNorm = c.email?.trim().toLowerCase();
-        if (
-          emailNorm &&
-          existingForCompany.some(
-            (row) => row.email?.trim().toLowerCase() === emailNorm,
-          )
-        ) {
-          continue;
-        }
+      const existingForCompany = await db
+        .select({
+          apolloId: contacts.apolloId,
+          email: contacts.email,
+          linkedinUrl: contacts.linkedinUrl,
+        })
+        .from(contacts)
+        .where(eq(contacts.companyId, companyId));
 
-        await db.insert(contacts).values({
-          companyId,
-          name: c.name,
-          title: c.title ?? null,
-          email: c.email ?? null,
-          workEmail: c.work_email ?? null,
-          personalEmail: c.personal_email ?? null,
-          phone: c.phone ?? null,
-          personalPhone: c.personal_phone ?? null,
-          companyPhone: c.company_phone ?? null,
-          phones: c.phones ?? [],
-          linkedinUrl: c.linkedin_url ?? null,
-          apolloId: c.apollo_id ?? null,
-          sourceProvider: c.source_provider ?? "apollo",
-          locationMatched: c.location_matched ?? false,
-          contactLocation: c.contact_location ?? null,
-          jobLocation: c.job_location ?? null,
-        });
+      if (
+        c.apollo_id &&
+        existingForCompany.some((row) => row.apolloId === c.apollo_id)
+      ) {
+        continue;
       }
+      const emailNorm = c.email?.trim().toLowerCase();
+      if (
+        emailNorm &&
+        existingForCompany.some(
+          (row) => row.email?.trim().toLowerCase() === emailNorm,
+        )
+      ) {
+        continue;
+      }
+      const linkedinNorm = c.linkedin_url?.trim().toLowerCase().replace(/\/+$/, "");
+      if (
+        linkedinNorm &&
+        existingForCompany.some(
+          (row) =>
+            row.linkedinUrl?.trim().toLowerCase().replace(/\/+$/, "") ===
+            linkedinNorm,
+        )
+      ) {
+        continue;
+      }
+
+      await db.insert(contacts).values({
+        companyId,
+        name: c.name,
+        title: c.title ?? null,
+        email: c.email ?? null,
+        workEmail: c.work_email ?? null,
+        personalEmail: c.personal_email ?? null,
+        phone: c.phone ?? null,
+        personalPhone: c.personal_phone ?? null,
+        companyPhone: c.company_phone ?? null,
+        phones: c.phones ?? [],
+        linkedinUrl: c.linkedin_url ?? null,
+        apolloId: c.apollo_id ?? null,
+        sourceProvider: c.source_provider ?? "apollo",
+        locationMatched: c.location_matched ?? false,
+        contactLocation: c.contact_location ?? null,
+        jobLocation: c.job_location ?? null,
+      });
     }
 
     for (const jl of item.job_listings ?? []) {
@@ -341,6 +365,10 @@ export async function POST(request: NextRequest) {
               lastSeenRunDate: payload.run_date,
               location: jl.location ?? existingJob.location,
               title: jl.title || existingJob.title,
+              posterName: jl.poster_name ?? existingJob.posterName,
+              posterTitle: jl.poster_title ?? existingJob.posterTitle,
+              posterLinkedinUrl:
+                jl.poster_linkedin_url ?? existingJob.posterLinkedinUrl,
             })
             .where(eq(jobListings.id, existingJob.id));
           jobsResighted += 1;
@@ -356,6 +384,9 @@ export async function POST(request: NextRequest) {
         location: jl.location ?? null,
         searchName: jl.search_name ?? null,
         postedAt: jl.posted_at ? new Date(jl.posted_at) : null,
+        posterName: jl.poster_name ?? null,
+        posterTitle: jl.poster_title ?? null,
+        posterLinkedinUrl: jl.poster_linkedin_url ?? null,
         urlFingerprint: jobUrlFingerprint(url),
         sightingsCount: 1,
         firstSeenAt: now,

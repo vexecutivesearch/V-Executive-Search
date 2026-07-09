@@ -169,6 +169,9 @@ export function TodayListRow({
                 <p className="text-xs text-gray-500 truncate">
                   {primaryJob.board}
                   {primaryJob.location ? ` · ${primaryJob.location}` : ""}
+                  {primaryJob.posterName
+                    ? ` · Poster: ${primaryJob.posterName}`
+                    : ""}
                 </p>
               </>
             ) : (

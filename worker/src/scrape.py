@@ -8,6 +8,7 @@ import pandas as pd
 from jobspy import scrape_jobs
 
 from src.models import JobListing
+from src.linkedin_posters import attach_linkedin_hiring_teams
 
 logger = logging.getLogger(__name__)
 
@@ -165,4 +166,9 @@ def scrape_all(config: dict[str, Any]) -> list[JobListing]:
         all_listings.extend(run_search(search, boards))
 
     logger.info("Total listings scraped: %d", len(all_listings))
+
+    linkedin_count = sum(1 for listing in all_listings if listing.board == "linkedin")
+    if linkedin_count:
+        attach_linkedin_hiring_teams(all_listings)
+
     return all_listings

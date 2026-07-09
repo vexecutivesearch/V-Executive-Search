@@ -12,6 +12,14 @@ class DomainConfidence(str, Enum):
 
 
 @dataclass
+class JobPoster:
+    name: str
+    title: str = ""
+    linkedin_url: str = ""
+    is_job_poster: bool = True
+
+
+@dataclass
 class JobListing:
     company_name: str
     job_title: str
@@ -20,6 +28,7 @@ class JobListing:
     job_url: str
     date_posted: datetime | None = None
     search_name: str = ""
+    posters: list[JobPoster] = field(default_factory=list)
 
 
 @dataclass
@@ -29,6 +38,7 @@ class CompanyRecord:
     domain: str | None = None
     domain_confidence: DomainConfidence = DomainConfidence.LOW
     listings: list[JobListing] = field(default_factory=list)
+    seed_contacts: list[ContactRecord] = field(default_factory=list)
     crm_id: str | None = None
     estimated_employees: int | None = None
     industry: str | None = None
