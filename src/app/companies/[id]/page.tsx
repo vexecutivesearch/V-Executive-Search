@@ -1,4 +1,4 @@
-import { CompanyCard } from "@/components/CompanyCard";
+import { RefreshableCompanyCard } from "@/components/RefreshableCompanyCard";
 import { getCompanyById } from "@/lib/queries";
 import { notFound } from "next/navigation";
 import Link from "next/link";
@@ -22,7 +22,7 @@ export default async function CompanyDetailPage({
       >
         ← Back to companies
       </Link>
-      <CompanyCard company={company} />
+      <RefreshableCompanyCard company={company} />
 
       {company.jobListings.length > 1 && (
         <section className="mt-6">

@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
 import { NextRequest, NextResponse } from "next/server";
 import { enrichCompanyContacts } from "@/lib/apollo-enrich";
 import { resolveCompanyDomain } from "@/lib/domain-resolver";
@@ -6,6 +7,7 @@ import { syncContactPhoneFields } from "@/lib/contact-phones";
 import { refreshCompanyContactsFromContactOut } from "@/lib/refresh-company-contacts";
 import { db } from "@/lib/db";
 import { companies, contacts, jobListings } from "@/lib/db/schema";
+import { getCompanyById } from "@/lib/queries";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -153,6 +155,12 @@ export async function POST(
 
   const totalContacts = existingContacts.length + contactsAdded;
 
+  revalidatePath("/today");
+  revalidatePath("/companies");
+  revalidatePath(`/companies/${id}`);
+
+  const updatedCompany = await getCompanyById(id);
+
   return NextResponse.json({
     ok: true,
     contacts_added: contactsAdded,
@@ -160,6 +168,7 @@ export async function POST(
     phones_backfilled: phonesBackfilled,
     total_contacts: totalContacts,
     domain,
+    company: updatedCompany,
     message:
       contactsAdded === 0 && personalUpdated === 0
         ? "No new contacts or personal data found"

@@ -16,7 +16,13 @@ export interface CompanyCardData {
   jobListings: JobListing[];
 }
 
-export function CompanyCard({ company }: { company: CompanyCardData }) {
+export function CompanyCard({
+  company,
+  onEnrichComplete,
+}: {
+  company: CompanyCardData;
+  onEnrichComplete?: (company?: CompanyCardData) => void | Promise<void>;
+}) {
   const primaryJob = company.jobListings[0];
   const jobLocation =
     primaryJob?.location ||
@@ -50,6 +56,7 @@ export function CompanyCard({ company }: { company: CompanyCardData }) {
           <EnrichButton
             companyId={company.id}
             contactCount={company.contacts.length}
+            onEnrichComplete={onEnrichComplete}
           />
           <StatusBadge status={company.status} />
           <StatusSelect companyId={company.id} currentStatus={company.status} />

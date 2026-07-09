@@ -35,6 +35,8 @@ write_plist() {
     <string>${label}</string>
     <key>ProgramArguments</key>
     <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-s</string>
         <string>${PYTHON}</string>
         <string>${script}</string>
     </array>
@@ -66,6 +68,8 @@ EOF
     <string>${label}</string>
     <key>ProgramArguments</key>
     <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-s</string>
         <string>${PYTHON}</string>
         <string>${script}</string>
     </array>
@@ -130,6 +134,7 @@ echo ""
 echo "Done. Scheduled:"
 echo "  • Daily pipeline at 6:00 AM and 6:00 PM local time ($DAILY_LABEL)"
 echo "  • Admin 'Run now' poll every 5 minutes ($POLL_LABEL)"
+echo "  • caffeinate -s wraps each job so the Mac won't idle-sleep mid-run"
 echo ""
 echo "Verify: launchctl list | grep vexecsearch"
 echo "Logs:   tail -f $WORKER_ROOT/logs/launchd_stdout.log"

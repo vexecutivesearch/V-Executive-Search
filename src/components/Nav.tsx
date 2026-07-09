@@ -15,15 +15,15 @@ export function Nav() {
       <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3 flex flex-wrap items-center justify-between gap-2">
         <Link
           href="/today"
-          className="shrink-0 rounded-md overflow-hidden bg-black leading-none"
+          className="shrink-0 leading-none"
           aria-label="allthejobs home"
         >
           <Image
             src="/allthejobs-logo.png"
             alt="allthejobs"
-            width={160}
-            height={32}
-            className="h-8 w-auto"
+            width={952}
+            height={309}
+            className="h-8 w-auto dark:invert"
             priority
           />
         </Link>

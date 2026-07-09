@@ -2,15 +2,18 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import type { CompanyCardData } from "./CompanyCard";
 
 export function EnrichButton({
   companyId,
   contactCount,
   compact = false,
+  onEnrichComplete,
 }: {
   companyId: string;
   contactCount: number;
   compact?: boolean;
+  onEnrichComplete?: (company?: CompanyCardData) => void | Promise<void>;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -39,6 +42,11 @@ export function EnrichButton({
         parts.push(`${data.personal_updated} personal updated`);
       }
       setMessage(parts.length ? parts.join(", ") : data.message || "Up to date");
+      if (onEnrichComplete) {
+        await onEnrichComplete(
+          data.company ? (data.company as CompanyCardData) : undefined,
+        );
+      }
       router.refresh();
     } catch {
       setMessage("Network error");

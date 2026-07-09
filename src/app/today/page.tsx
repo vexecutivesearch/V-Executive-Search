@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { CompanyCard } from "@/components/CompanyCard";
+import { RefreshableCompanyCard } from "@/components/RefreshableCompanyCard";
 import { TodayDatePicker } from "@/components/TodayDatePicker";
 import {
   countCallableCompanies,
@@ -82,7 +82,7 @@ export default async function TodayPage({
       ) : (
         <div className="space-y-4">
           {companies.map((company) => (
-            <CompanyCard key={company.id} company={company} />
+            <RefreshableCompanyCard key={company.id} company={company} />
           ))}
         </div>
       )}

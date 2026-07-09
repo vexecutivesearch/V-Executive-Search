@@ -19,6 +19,7 @@ from src.models import CompanyRecord, DomainConfidence, EnrichedCompany, JobList
 from src.scrape import scrape_all
 from src.timezone import business_list_date
 from src.contact_phones import contact_phones_for_display
+from src.caffeinate_guard import prevent_sleep
 from src.email_report import send_daily_report_for_pipeline
 from src.phone_utils import is_personal_email
 
@@ -221,6 +222,28 @@ def _build_ingest_payload(
 
 
 def run_pipeline(
+    *,
+    dry_run: bool = False,
+    skip_crm: bool = False,
+    skip_email: bool = False,
+    use_waterfall: bool = False,
+    config_path: Path | None = None,
+    limit: int | None = None,
+    include_existing: bool = False,
+) -> PipelineResult:
+    with prevent_sleep():
+        return _run_pipeline_impl(
+            dry_run=dry_run,
+            skip_crm=skip_crm,
+            skip_email=skip_email,
+            use_waterfall=use_waterfall,
+            config_path=config_path,
+            limit=limit,
+            include_existing=include_existing,
+        )
+
+
+def _run_pipeline_impl(
     *,
     dry_run: bool = False,
     skip_crm: bool = False,

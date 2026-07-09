@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { companies } from "@/lib/db/schema";
 import { CompanyStatus } from "@/lib/db/schema";
+import { getCompanyById } from "@/lib/queries";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +15,18 @@ const VALID_STATUSES = new Set<string>([
   "client",
   "skipped",
 ]);
+
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+  const company = await getCompanyById(id);
+  if (!company) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  return NextResponse.json({ company });
+}
 
 export async function PATCH(
   request: NextRequest,

@@ -1,4 +1,4 @@
-import { CompanyCard } from "@/components/CompanyCard";
+import { RefreshableCompanyCard } from "@/components/RefreshableCompanyCard";
 import { CompanySearch } from "@/components/CompanySearch";
 import { getCompaniesByStatus, getTodayGeoLabel } from "@/lib/queries";
 import { CompanyStatus } from "@/lib/db/schema";
@@ -81,7 +81,7 @@ export default async function CompaniesPage({
 
       <div className="space-y-4">
         {companies.map((company) => (
-          <CompanyCard key={company.id} company={company} />
+          <RefreshableCompanyCard key={company.id} company={company} />
         ))}
       </div>
     </div>

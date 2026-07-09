@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
 
+from src.caffeinate_guard import prevent_sleep  # noqa: E402
 from src.crm_config import post_pipeline_status  # noqa: E402
 from src.pipeline import LOG_DIR, run_pipeline  # noqa: E402
 
@@ -78,83 +79,84 @@ def main() -> int:
     logger = logging.getLogger(__name__)
     logger.info("Starting pipeline (dry_run=%s)", args.dry_run)
 
-    try:
-        post_pipeline_status("worker_heartbeat")
-    except Exception:
-        pass
+    with prevent_sleep():
+        try:
+            post_pipeline_status("worker_heartbeat")
+        except Exception:
+            pass
 
-    # Rotate old logs
-    rotate_script = WORKER_ROOT / "scripts" / "rotate_logs.sh"
-    if rotate_script.exists():
-        import subprocess
-        subprocess.run(["bash", str(rotate_script)], check=False)
+        # Rotate old logs
+        rotate_script = WORKER_ROOT / "scripts" / "rotate_logs.sh"
+        if rotate_script.exists():
+            import subprocess
+            subprocess.run(["bash", str(rotate_script)], check=False)
 
-    try:
-        result = run_pipeline(
-            dry_run=args.dry_run,
-            skip_crm=args.skip_crm,
-            skip_email=True,
-            use_waterfall=args.waterfall,
-            config_path=args.config,
-            limit=args.limit,
-            include_existing=args.include_existing,
-        )
-    except Exception as exc:
-        logger.exception("Pipeline crashed: %s", exc)
-        send_failure_alert(str(exc))
-        return 1
-
-    if result.errors:
-        for err in result.errors:
-            logger.warning("Error: %s", err)
-        if result.listings_scraped == 0:
-            send_failure_alert("\n".join(result.errors))
+        try:
+            result = run_pipeline(
+                dry_run=args.dry_run,
+                skip_crm=args.skip_crm,
+                skip_email=True,
+                use_waterfall=args.waterfall,
+                config_path=args.config,
+                limit=args.limit,
+                include_existing=args.include_existing,
+            )
+        except Exception as exc:
+            logger.exception("Pipeline crashed: %s", exc)
+            send_failure_alert(str(exc))
             return 1
 
-    if not args.dry_run and not args.skip_crm:
-        try:
-            imessage_script = WORKER_ROOT / "scripts" / "check_imessage.py"
-            if imessage_script.exists():
-                import importlib.util
+        if result.errors:
+            for err in result.errors:
+                logger.warning("Error: %s", err)
+            if result.listings_scraped == 0:
+                send_failure_alert("\n".join(result.errors))
+                return 1
 
-                spec = importlib.util.spec_from_file_location(
-                    "check_imessage", imessage_script
-                )
-                if spec and spec.loader:
-                    mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)
-                    n = mod.run_imessage_checks(
-                        limit=max(50, result.contacts_enriched * 2),
-                        delay=2.0,
+        if not args.dry_run and not args.skip_crm:
+            try:
+                imessage_script = WORKER_ROOT / "scripts" / "check_imessage.py"
+                if imessage_script.exists():
+                    import importlib.util
+
+                    spec = importlib.util.spec_from_file_location(
+                        "check_imessage", imessage_script
                     )
-                    logger.info("iMessage checks completed: %d contact(s)", n)
-        except Exception as exc:
-            logger.warning("iMessage check pass failed (non-fatal): %s", exc)
+                    if spec and spec.loader:
+                        mod = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(mod)
+                        n = mod.run_imessage_checks(
+                            limit=max(50, result.contacts_enriched * 2),
+                            delay=2.0,
+                        )
+                        logger.info("iMessage checks completed: %d contact(s)", n)
+            except Exception as exc:
+                logger.warning("iMessage check pass failed (non-fatal): %s", exc)
 
-        try:
-            from src.config_loader import load_config, get_notification_email
-            from src.email_report import send_daily_report_for_pipeline
+            try:
+                from src.config_loader import load_config, get_notification_email
+                from src.email_report import send_daily_report_for_pipeline
 
-            config = load_config(args.config)
-            notify = get_notification_email(config) or os.environ.get("ALERT_EMAIL")
-            geo_label = (config.get("settings") or {}).get("geo_label", "Unknown")
-            if notify:
-                send_daily_report_for_pipeline(
-                    to_email=notify,
-                    pipeline_rows=result.rows,
-                    result_summary={
-                        "run_date": str(result.run_date),
-                        "listings_scraped": result.listings_scraped,
-                        "companies_enriched": result.companies_enriched,
-                        "credits_used": result.credits_used,
-                    },
-                    geo_label=geo_label,
-                )
-        except Exception as exc:
-            logger.warning("Daily email failed (non-fatal): %s", exc)
+                config = load_config(args.config)
+                notify = get_notification_email(config) or os.environ.get("ALERT_EMAIL")
+                geo_label = (config.get("settings") or {}).get("geo_label", "Unknown")
+                if notify:
+                    send_daily_report_for_pipeline(
+                        to_email=notify,
+                        pipeline_rows=result.rows,
+                        result_summary={
+                            "run_date": str(result.run_date),
+                            "listings_scraped": result.listings_scraped,
+                            "companies_enriched": result.companies_enriched,
+                            "credits_used": result.credits_used,
+                        },
+                        geo_label=geo_label,
+                    )
+            except Exception as exc:
+                logger.warning("Daily email failed (non-fatal): %s", exc)
 
-    logger.info("Log written to %s", log_path)
-    return 0
+        logger.info("Log written to %s", log_path)
+        return 0
 
 
 if __name__ == "__main__":
