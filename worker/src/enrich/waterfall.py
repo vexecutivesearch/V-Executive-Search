@@ -53,7 +53,7 @@ class WaterfallProvider:
         self._contactout = get_contactout_client()
         self._hunter = HunterFallback()
         self._credits_used = 0
-        self._contactout_skip = False
+        self._contactout_api_locked = False
 
     @property
     def credits_used(self) -> int:
@@ -62,11 +62,9 @@ class WaterfallProvider:
     def reset_credits(self) -> None:
         self._apollo.reset_credits()
         self._credits_used = 0
-        self._contactout_skip = False
+        self._contactout_api_locked = False
 
     def _apply_contactout(self, contact: ContactRecord) -> None:
-        if self._contactout_skip:
-            return
         if not contact.linkedin_url or not self._contactout.is_configured:
             return
 
@@ -74,12 +72,17 @@ class WaterfallProvider:
         if not result:
             return
 
+        has_data = bool(
+            result.personal_email or result.phones or result.work_emails
+        )
         if result.phone_api_locked:
-            self._contactout_skip = True
-            logger.warning(
-                "ContactOut out of credits — using Apollo emails and phones only"
-            )
-            return
+            self._contactout_api_locked = True
+            if not has_data:
+                logger.warning(
+                    "ContactOut returned no personal data for %s — Apollo only",
+                    contact.name,
+                )
+                return
 
         self._credits_used += result.credits_used
 

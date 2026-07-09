@@ -481,7 +481,16 @@ def _enrich_call_sheet(
             result.companies_deferred += 1
             break
 
-        enrich_phone = company.lead_score >= min_score_for_phone
+        enrich_phone = bool(enrichment_cfg.get("enrich_phone", True)) and (
+            company.lead_score >= min_score_for_phone
+        )
+        logger.info(
+            "Enrich %s — score=%d phone_reveal=%s (threshold=%d)",
+            company.name,
+            company.lead_score,
+            enrich_phone,
+            min_score_for_phone,
+        )
         credits_before = provider.credits_used
         item = provider.enrich_company(
             company,
@@ -525,7 +534,7 @@ def _enrich_call_sheet(
     if (
         (use_waterfall or use_contactout)
         and isinstance(provider, WaterfallProvider)
-        and getattr(provider, "_contactout_skip", False)
+        and getattr(provider, "_contactout_api_locked", False)
     ):
         from src.credit_alert import send_credit_alert
 

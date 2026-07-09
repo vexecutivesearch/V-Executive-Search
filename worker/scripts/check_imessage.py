@@ -124,6 +124,13 @@ def run_imessage_checks(*, limit: int = 50, delay: float = 2.0) -> int:
                     if is_personal_email(val):
                         addresses.append(val.strip())
 
+        for key in ("personalPhone", "personal_phone", "phone"):
+            val = contact.get(key)
+            if val and isinstance(val, str) and "@" not in val:
+                digits = "".join(ch for ch in val if ch.isdigit())
+                if len(digits) >= 10:
+                    addresses.append(val.strip())
+
         for address in addresses:
             capable = check_imessage(address)
             if capable is None:

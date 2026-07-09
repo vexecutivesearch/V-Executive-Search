@@ -55,6 +55,38 @@ def send_failure_alert(error_summary: str) -> None:
         logging.getLogger(__name__).warning("Could not send alert email: %s", exc)
 
 
+def run_contactout_backfill(limit: int = 10) -> int:
+    """Mac-only: ContactOut dashboard pass for contacts missing personal data."""
+    if sys.platform != "darwin":
+        return 0
+    playwright_root = WORKER_ROOT.parent / "Playwright"
+    script = playwright_root / "scripts" / "contactout_dashboard_sync.py"
+    if not script.exists():
+        return 0
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("contactout_dashboard_sync", script)
+    if not spec or not spec.loader:
+        return 0
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return int(mod.run_dashboard_sync(limit=limit))
+
+
+def run_presence_checks() -> None:
+    """iMessage + email MX verification (Mac iMessage portion)."""
+    script = WORKER_ROOT / "scripts" / "check_presence.py"
+    if not script.exists():
+        return
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("check_presence", script)
+    if spec and spec.loader:
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.main()
+
+
 def run_imessage_checks(limit: int) -> int:
     imessage_script = WORKER_ROOT / "scripts" / "check_imessage.py"
     if not imessage_script.exists():
@@ -262,11 +294,20 @@ def main() -> int:
                 return 1
 
         if not args.dry_run and not args.skip_crm and not args.scrape_only:
+            if result.contacts_enriched > 0 or args.enrich_only:
+                try:
+                    co_n = run_contactout_backfill(
+                        limit=max(10, result.contacts_enriched * 2),
+                    )
+                    if co_n:
+                        logger.info("ContactOut dashboard backfill updated %d contact(s)", co_n)
+                except Exception as exc:
+                    logger.warning("ContactOut backfill failed (non-fatal): %s", exc)
+
             try:
-                n = run_imessage_checks(max(50, result.contacts_enriched * 2))
-                logger.info("iMessage checks completed: %d contact(s)", n)
+                run_presence_checks()
             except Exception as exc:
-                logger.warning("iMessage check pass failed (non-fatal): %s", exc)
+                logger.warning("Presence check failed (non-fatal): %s", exc)
 
         if not args.dry_run and not args.scrape_only and not args.enrich_only:
             try:

@@ -72,16 +72,22 @@ def main() -> int:
                     try:
                         import importlib.util
 
-                        script = WORKER_ROOT / "scripts" / "check_imessage.py"
-                        spec = importlib.util.spec_from_file_location("check_imessage", script)
+                        backfill = WORKER_ROOT / "scripts" / "run_daily.py"
+                        spec = importlib.util.spec_from_file_location("run_daily_helpers", backfill)
                         if spec and spec.loader:
                             mod = importlib.util.module_from_spec(spec)
                             spec.loader.exec_module(mod)
-                            n = mod.run_imessage_checks(limit=50, delay=1.5)
-                            if n:
-                                logging.info("iMessage checks tagged %d contact(s)", n)
+                            co_n = mod.run_contactout_backfill(
+                                limit=max(10, result.contacts_enriched * 2),
+                            )
+                            if co_n:
+                                logging.info(
+                                    "ContactOut dashboard backfill updated %d contact(s)",
+                                    co_n,
+                                )
+                            mod.run_presence_checks()
                     except Exception as exc:
-                        logging.warning("iMessage check pass failed (non-fatal): %s", exc)
+                        logging.warning("Post-enrich presence/backfill failed (non-fatal): %s", exc)
 
                 try:
                     import os
