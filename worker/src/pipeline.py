@@ -11,7 +11,7 @@ from src.config_loader import load_config, get_notification_email
 from src.crm_config import post_pipeline_status
 from src.crm_client import CRMClient
 from src.dedupe import collapse_to_companies, normalize_company_name
-from src.domain_resolver import resolve_domains
+from src.domain_resolver import _search_org, resolve_domains
 from src.enrich import get_provider
 from src.enrich.contactout import get_contactout_client
 from src.enrich.waterfall import WaterfallProvider
@@ -433,6 +433,15 @@ def _enrich_call_sheet(
     )
 
     queue_limit = limit if limit is not None else daily_enrich_quota
+
+    if crm.is_configured and not skip_crm:
+        if not crm.check_pipeline_ready():
+            result.errors.append("CRM v2 pipeline not ready — deploy CRM first")
+            return result
+        backfill = crm.backfill_domains(limit=queue_limit * 3)
+        if backfill.get("updated"):
+            logger.info("Domain backfill updated %s companies", backfill.get("updated"))
+
     queue_items = crm.get_enrichment_queue(limit=queue_limit) if crm.is_configured else []
     companies = [_company_from_queue(item) for item in queue_items]
     deferred = max(0, len(queue_items) - len(companies)) if queue_items else 0
@@ -458,9 +467,14 @@ def _enrich_call_sheet(
     enriched: list[EnrichedCompany] = []
     for company in companies:
         if not company.domain:
-            result.errors.append(f"No domain for {company.name}")
-            enriched.append(EnrichedCompany(company=company))
-            continue
+            lookup = _search_org(company.name)
+            if lookup.domain:
+                company.domain = lookup.domain
+                company.domain_confidence = lookup.confidence
+            else:
+                result.errors.append(f"No domain for {company.name}")
+                enriched.append(EnrichedCompany(company=company))
+                continue
 
         if provider.credits_used >= daily_credit_cap:
             result.errors.append(f"Credit cap reached at {daily_credit_cap}")
@@ -495,6 +509,36 @@ def _enrich_call_sheet(
             result.errors.append("CRM enrich ingest failed")
         else:
             post_pipeline_status("mark_run_complete")
+            enriched_ids = [
+                item.company.crm_id
+                for item in enriched
+                if item.company.crm_id and item.contacts
+            ]
+            if enriched_ids:
+                opener_result = crm.generate_openers(enriched_ids)
+                logger.info(
+                    "Openers generated=%s skipped=%s",
+                    opener_result.get("generated"),
+                    opener_result.get("skipped"),
+                )
+
+    if (
+        (use_waterfall or use_contactout)
+        and isinstance(provider, WaterfallProvider)
+        and getattr(provider, "_contactout_skip", False)
+    ):
+        from src.credit_alert import send_credit_alert
+
+        notify = get_notification_email(config) or os.environ.get("ALERT_EMAIL")
+        if notify:
+            send_credit_alert(
+                to_email=notify,
+                subject="ContactOut credits low",
+                message=(
+                    "ContactOut phone API credits appear exhausted during enrich run. "
+                    "Apollo emails/phones still used — check your ContactOut plan."
+                ),
+            )
 
     notify = get_notification_email(config) or os.environ.get("ALERT_EMAIL")
     geo_label = (config.get("settings") or {}).get("geo_label", "Unknown")

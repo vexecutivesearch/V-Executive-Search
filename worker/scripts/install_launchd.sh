@@ -119,6 +119,12 @@ EOF
 }
 
 # JIT pipeline schedule (Eastern Time via TZ=America/New_York)
+write_calendar_plist "com.vexecsearch.hygiene" \
+  "scripts/run_daily.py --hygiene-only" \
+  2 15 \
+  "$WORKER_ROOT/logs/hygiene_stdout.log" \
+  "$WORKER_ROOT/logs/hygiene_stderr.log"
+
 write_calendar_plist "com.vexecsearch.scrape" \
   "scripts/run_daily.py --scrape-only" \
   2 0 \
@@ -137,11 +143,11 @@ write_calendar_plist "com.vexecsearch.enrich" \
   "$WORKER_ROOT/logs/enrich_stdout.log" \
   "$WORKER_ROOT/logs/enrich_stderr.log"
 
-write_calendar_plist "com.vexecsearch.imessage" \
-  "scripts/run_daily.py --imessage-only" \
+write_calendar_plist "com.vexecsearch.presence" \
+  "scripts/check_presence.py" \
   3 30 \
-  "$WORKER_ROOT/logs/imessage_stdout.log" \
-  "$WORKER_ROOT/logs/imessage_stderr.log"
+  "$WORKER_ROOT/logs/presence_stdout.log" \
+  "$WORKER_ROOT/logs/presence_stderr.log"
 
 write_calendar_plist "com.vexecsearch.email" \
   "scripts/run_daily.py --email-only" \
@@ -158,7 +164,7 @@ write_interval_plist "com.vexecsearch.poll" \
 launchctl bootout "gui/$(id -u)/com.vexecsearch.contactout-keepalive" 2>/dev/null || true
 launchctl bootout "gui/$(id -u)/com.vexecsearch.daily" 2>/dev/null || true
 
-for label in com.vexecsearch.scrape com.vexecsearch.rescore com.vexecsearch.enrich com.vexecsearch.imessage com.vexecsearch.email com.vexecsearch.poll; do
+for label in com.vexecsearch.hygiene com.vexecsearch.scrape com.vexecsearch.rescore com.vexecsearch.enrich com.vexecsearch.presence com.vexecsearch.email com.vexecsearch.poll; do
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENTS/${label}.plist"
   launchctl enable "gui/$(id -u)/$label"
@@ -168,9 +174,10 @@ done
 echo ""
 echo "Done. Scheduled (America/New_York):"
 echo "  • 02:00 Scrape + jobs_only ingest (free)"
+echo "  • 02:15 Archive stale listings (free)"
 echo "  • 02:30 ICP filter + rescore backlog (free)"
 echo "  • 03:00 Enrich top-N call sheet (paid)"
-echo "  • 03:30 iMessage checks (free)"
+echo "  • 03:30 Presence checks — iMessage + email MX (free)"
 echo "  • 06:00 Call sheet email (free)"
 echo "  • Every 5 min Admin 'Run now' poll (com.vexecsearch.poll)"
 echo ""

@@ -123,6 +123,16 @@ def main() -> int:
         action="store_true",
         help="Run iMessage checks on pending contacts",
     )
+    parser.add_argument(
+        "--presence-only",
+        action="store_true",
+        help="Run iMessage + email MX verification",
+    )
+    parser.add_argument(
+        "--hygiene-only",
+        action="store_true",
+        help="Archive stale job listings",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -142,6 +152,10 @@ def main() -> int:
         mode_suffix = "email"
     elif args.imessage_only:
         mode_suffix = "imessage"
+    elif args.presence_only:
+        mode_suffix = "presence"
+    elif args.hygiene_only:
+        mode_suffix = "hygiene"
 
     log_path = setup_logging(run_date_str, args.verbose, mode_suffix)
     logger = logging.getLogger(__name__)
@@ -184,6 +198,28 @@ def main() -> int:
             logger.info("iMessage-only run")
             n = run_imessage_checks(50)
             logger.info("iMessage checks completed: %d contact(s)", n)
+            logger.info("Log written to %s", log_path)
+            return 0
+
+        if args.presence_only:
+            logger.info("Presence-only run")
+            import importlib.util
+
+            script = WORKER_ROOT / "scripts" / "check_presence.py"
+            spec = importlib.util.spec_from_file_location("check_presence", script)
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return mod.main()
+            return 0
+
+        if args.hygiene_only:
+            logger.info("Hygiene-only run")
+            from src.crm_client import CRMClient
+
+            crm = CRMClient()
+            archived = crm.archive_stale_jobs()
+            logger.info("Archived %s stale listings", archived.get("archived"))
             logger.info("Log written to %s", log_path)
             return 0
 

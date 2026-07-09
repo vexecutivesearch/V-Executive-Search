@@ -13,6 +13,7 @@ export const dynamic = "force-dynamic";
 
 type WorkerContactPatch = {
   imessage_capable?: boolean;
+  email_deliverable?: boolean;
   personal_email?: string | null;
   work_email?: string | null;
   email?: string | null;
@@ -53,6 +54,13 @@ export async function PATCH(
 
   if (typeof body.imessage_capable === "boolean") {
     updates.imessageCapable = body.imessage_capable;
+    updates.presenceCheckedAt = new Date();
+  }
+
+  if (typeof body.email_deliverable === "boolean") {
+    updates.emailDeliverable = body.email_deliverable;
+    updates.emailVerifiedAt = new Date();
+    updates.presenceCheckedAt = new Date();
   }
 
   const hasEnrichment =

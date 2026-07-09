@@ -36,15 +36,28 @@ def fetch_daily_report_from_crm() -> dict[str, Any] | None:
         return None
 
 
-def _funnel_header(summary: dict[str, Any]) -> str:
+def _funnel_header(summary: dict[str, Any], leads: list[dict[str, Any]]) -> str:
     scraped = summary.get("listings_scraped", 0)
     icp = summary.get("icp_match_count", 0)
     enriched = summary.get("companies_enriched", 0)
     credits = summary.get("credits_used", 0)
-    return (
+    hot = sum(
+        1
+        for lead in leads
+        if lead.get("reason_to_call") or lead.get("reasonToCall")
+    )
+    base = (
         f"Scraped {scraped} → ICP match {icp} → Enriched today {enriched}"
         f" · Credits used {credits}"
     )
+    if leads:
+        top = leads[:3]
+        names = ", ".join(
+            f"#{lead.get('rank', '?')} {lead.get('company', '')}"
+            for lead in top
+        )
+        return f"{base} · {hot} hot · Call first: {names}"
+    return base
 
 
 def _leads_from_crm_or_rows(
@@ -68,6 +81,7 @@ def _leads_from_crm_or_rows(
             "contact_name": row.get("contact_name") or row.get("contactName", ""),
             "title": row.get("title"),
             "reason_to_call": row.get("reason_to_call") or row.get("reasonToCall"),
+            "call_opener": row.get("call_opener") or row.get("callOpener"),
             "work_email": row.get("work_email") or row.get("workEmail"),
             "personal_email": row.get("personal_email") or row.get("personalEmail"),
             "email": row.get("email"),
@@ -119,7 +133,7 @@ def send_daily_report(
     leads = _leads_from_crm_or_rows(crm_data, rows)
     run_date = html.escape(str(summary.get("run_date", "today")))
     safe_geo = html.escape(geo_label)
-    funnel = html.escape(_funnel_header(summary))
+    funnel = html.escape(_funnel_header(summary, leads))
 
     if not leads:
         body_leads = (

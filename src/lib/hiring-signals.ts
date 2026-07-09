@@ -2,10 +2,11 @@ import type { HiringSignalKey, HiringSignals } from "@/lib/db/schema";
 import type { JobListing } from "@/lib/db/schema";
 import { jobLocationInFocus } from "@/lib/geo-focus";
 import type { pipelineSettings } from "@/lib/db/schema";
+import { businessListDate } from "@/lib/timezone";
 
 const REPOST_WINDOW_DAYS = 21;
 const REPOST_MIN_SIGHTINGS = 3;
-const LONG_RUNNING_DAYS = 30;
+const LONG_RUNNING_DAYS = 21;
 
 export function jobUrlFingerprint(url: string | null | undefined): string | null {
   if (!url?.trim()) return null;
@@ -34,6 +35,7 @@ function daysSince(date: Date | null | undefined): number | null {
 export function detectHiringSignals(
   listings: JobListing[],
   geoSettings: typeof pipelineSettings.$inferSelect,
+  companyFirstSeen?: string | null,
 ): HiringSignals {
   const inFocus = listings.filter((l) =>
     jobLocationInFocus(l.location, geoSettings),
@@ -74,6 +76,10 @@ export function detectHiringSignals(
   );
   if (locations.size >= 2) {
     signals.new_location_cluster = locations.size;
+  }
+
+  if (companyFirstSeen && companyFirstSeen === businessListDate()) {
+    signals.new_company = true;
   }
 
   return signals;
@@ -122,6 +128,13 @@ export function reasonToCallFromSignals(signals: HiringSignals): string | null {
       weight: 60,
     });
   }
+  if (signals.new_company) {
+    reasons.push({
+      key: "new_company",
+      text: "New to your list today",
+      weight: 55,
+    });
+  }
 
   reasons.sort((a, b) => b.weight - a.weight);
   return reasons[0]?.text ?? null;
@@ -133,5 +146,6 @@ export function signalScoreBonus(signals: HiringSignals): number {
   if (signals.multiple_openings) bonus += 18;
   if (signals.long_running) bonus += 12;
   if (signals.new_location_cluster) bonus += 8;
+  if (signals.new_company) bonus += 6;
   return bonus;
 }

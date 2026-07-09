@@ -60,6 +60,19 @@ class CRMClient:
             logger.warning("CRM enrichment-queue lookup failed: %s", exc)
             return []
 
+    def check_pipeline_ready(self) -> bool:
+        if not self.is_configured:
+            return False
+        try:
+            resp = requests.get(
+                f"{self.base_url}/api/health/pipeline",
+                headers=self._headers(),
+                timeout=20,
+            )
+            return resp.ok
+        except requests.RequestException:
+            return False
+
     def rescore_backlog(self) -> dict[str, Any]:
         if not self.is_configured:
             return {}
@@ -74,6 +87,70 @@ class CRMClient:
             return resp.json()
         except requests.RequestException as exc:
             logger.warning("CRM rescore failed: %s", exc)
+            return {}
+
+    def backfill_domains(self, *, limit: int = 50) -> dict[str, Any]:
+        if not self.is_configured:
+            return {}
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/companies/backfill-domains",
+                headers=self._headers(),
+                json={"limit": limit},
+                timeout=120,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as exc:
+            logger.warning("CRM domain backfill failed: %s", exc)
+            return {}
+
+    def archive_stale_jobs(self) -> dict[str, Any]:
+        if not self.is_configured:
+            return {}
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/jobs/archive-stale",
+                headers=self._headers(),
+                json={},
+                timeout=60,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as exc:
+            logger.warning("CRM archive-stale failed: %s", exc)
+            return {}
+
+    def verify_contact_emails(self, *, limit: int = 50) -> dict[str, Any]:
+        if not self.is_configured:
+            return {}
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/contacts/verify-batch",
+                headers=self._headers(),
+                params={"limit": limit},
+                timeout=120,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as exc:
+            logger.warning("CRM email verify failed: %s", exc)
+            return {}
+
+    def generate_openers(self, company_ids: list[str], *, force: bool = False) -> dict[str, Any]:
+        if not self.is_configured or not company_ids:
+            return {}
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/companies/generate-openers",
+                headers=self._headers(),
+                json={"company_ids": company_ids, "force": force},
+                timeout=180,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as exc:
+            logger.warning("CRM generate-openers failed: %s", exc)
             return {}
 
     def ingest_batch(self, payload: dict[str, Any]) -> bool:

@@ -1,10 +1,11 @@
-import { and, count, desc, eq, ilike, inArray, ne, not, or } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, isNull, ne, not, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   companies,
   contacts,
   dailyRuns,
   jobListings,
+  companyActivities,
   CompanyStatus,
 } from "@/lib/db/schema";
 import { CompanyCardData } from "@/components/CompanyCard";
@@ -250,6 +251,15 @@ export async function getMarketJobListings(searchName?: string) {
   }));
 }
 
+export async function getCompanyActivities(companyId: string) {
+  return db
+    .select()
+    .from(companyActivities)
+    .where(eq(companyActivities.companyId, companyId))
+    .orderBy(desc(companyActivities.createdAt))
+    .limit(100);
+}
+
 async function enrichCompanies(
   rows: (typeof companies.$inferSelect)[],
   geoSettings?: Awaited<ReturnType<typeof getGeoFocusSettings>>,
@@ -264,7 +274,12 @@ async function enrichCompanies(
     db
       .select()
       .from(jobListings)
-      .where(inArray(jobListings.companyId, companyIds))
+      .where(
+        and(
+          inArray(jobListings.companyId, companyIds),
+          isNull(jobListings.archivedAt),
+        ),
+      )
       .orderBy(desc(jobListings.createdAt)),
   ]);
 
@@ -303,6 +318,7 @@ async function enrichCompanies(
       hiringSignals: company.hiringSignals ?? {},
       reasonToCall: company.reasonToCall,
       callOpener: company.callOpener,
+      callOpenerGeneratedAt: company.callOpenerGeneratedAt,
       icpStatus: company.icpStatus,
       enrichedAt: company.enrichedAt,
       enrichRunDate: company.enrichRunDate,

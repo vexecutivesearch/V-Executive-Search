@@ -40,9 +40,17 @@ export type HiringSignalKey =
   | "multiple_openings"
   | "long_running"
   | "new_location_cluster"
-  | "internal_ta_only";
+  | "internal_ta_only"
+  | "new_company";
 
 export type HiringSignals = Partial<Record<HiringSignalKey, boolean | number>>;
+
+export const activityTypeEnum = pgEnum("activity_type", [
+  "call",
+  "email",
+  "note",
+  "meeting",
+]);
 
 export const pipelineSettings = pgTable("pipeline_settings", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -119,6 +127,7 @@ export const companies = pgTable("companies", {
   hiringSignals: jsonb("hiring_signals").$type<HiringSignals>().default({}),
   reasonToCall: text("reason_to_call"),
   callOpener: text("call_opener"),
+  callOpenerGeneratedAt: timestamp("call_opener_generated_at"),
   icpStatus: icpStatusEnum("icp_status").default("unknown").notNull(),
   estimatedEmployees: integer("estimated_employees"),
   industry: text("industry"),
@@ -154,6 +163,9 @@ export const contacts = pgTable("contacts", {
   apolloId: text("apollo_id"),
   sourceProvider: text("source_provider").default("apollo"),
   imessageCapable: boolean("imessage_capable"),
+  emailDeliverable: boolean("email_deliverable"),
+  emailVerifiedAt: timestamp("email_verified_at"),
+  presenceCheckedAt: timestamp("presence_checked_at"),
   locationMatched: boolean("location_matched").default(false).notNull(),
   contactLocation: text("contact_location"),
   jobLocation: text("job_location"),
@@ -176,12 +188,31 @@ export const jobListings = pgTable("job_listings", {
   firstSeenAt: timestamp("first_seen_at").defaultNow().notNull(),
   lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
   lastSeenRunDate: date("last_seen_run_date"),
+  archivedAt: timestamp("archived_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const companyActivities = pgTable("company_activities", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  companyId: uuid("company_id")
+    .references(() => companies.id, { onDelete: "cascade" })
+    .notNull(),
+  contactId: uuid("contact_id").references(() => contacts.id, {
+    onDelete: "set null",
+  }),
+  type: activityTypeEnum("type").notNull(),
+  summary: text("summary").notNull(),
+  rawTranscript: text("raw_transcript"),
+  classification: text("classification"),
+  source: text("source").default("manual").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export type Company = typeof companies.$inferSelect;
 export type Contact = typeof contacts.$inferSelect;
 export type JobListing = typeof jobListings.$inferSelect;
+export type CompanyActivity = typeof companyActivities.$inferSelect;
+export type ActivityType = (typeof activityTypeEnum.enumValues)[number];
 export type DailyRun = typeof dailyRuns.$inferSelect;
 export type PipelineSettings = typeof pipelineSettings.$inferSelect;
 export type SearchProfile = typeof searchProfiles.$inferSelect;

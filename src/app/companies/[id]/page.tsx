@@ -1,5 +1,6 @@
 import { RefreshableCompanyCard } from "@/components/RefreshableCompanyCard";
-import { getCompanyById } from "@/lib/queries";
+import { ActivityTimeline } from "@/components/ActivityTimeline";
+import { getCompanyActivities, getCompanyById } from "@/lib/queries";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 
@@ -13,6 +14,7 @@ export default async function CompanyDetailPage({
   const { id } = await params;
   const company = await getCompanyById(id);
   if (!company) notFound();
+  const activities = await getCompanyActivities(id);
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
@@ -23,6 +25,8 @@ export default async function CompanyDetailPage({
         ← Back to companies
       </Link>
       <RefreshableCompanyCard company={company} showLocationDisclaimer />
+
+      <ActivityTimeline companyId={id} initialActivities={activities} />
 
       {company.jobListings.length > 1 && (
         <section className="mt-6">

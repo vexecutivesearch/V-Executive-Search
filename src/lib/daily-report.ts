@@ -32,6 +32,7 @@ export type CallSheetLead = {
   personal_email: string | null;
   phones: DailyReportPhone[];
   imessage_capable: boolean | null;
+  call_opener: string | null;
   job_title: string | null;
   job_location: string | null;
 };
@@ -147,6 +148,7 @@ export async function getDailyCallSheet(): Promise<DailyCallSheet> {
       contact_name: best.name,
       title: best.title,
       reason_to_call: company.reasonToCall,
+      call_opener: company.callOpener,
       work_email: workEmail,
       personal_email: personalEmail,
       phones,

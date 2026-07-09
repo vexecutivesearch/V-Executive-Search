@@ -26,6 +26,8 @@ export function TodayListRow({
   const [company, setCompany] = useState(initial);
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [enrichNotice, setEnrichNotice] = useState<string | null>(null);
+  const [openerBusy, setOpenerBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     setCompany(initial);
@@ -60,6 +62,35 @@ export function TodayListRow({
     await refreshCompany(updated);
     setExpanded(true);
     if (summary) setEnrichNotice(summary);
+  }
+
+  async function generateOpener(force = false) {
+    setOpenerBusy(true);
+    try {
+      const res = await fetch(`/api/companies/${company.id}/generate-opener`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force }),
+      });
+      const data = (await res.json()) as {
+        call_opener?: string;
+        error?: string;
+      };
+      if (res.ok && data.call_opener) {
+        setCompany((c) => ({ ...c, callOpener: data.call_opener }));
+      } else if (data.error) {
+        setEnrichNotice(data.error);
+      }
+    } finally {
+      setOpenerBusy(false);
+    }
+  }
+
+  async function copyOpener() {
+    if (!company.callOpener) return;
+    await navigator.clipboard.writeText(company.callOpener);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
   return (
@@ -240,6 +271,47 @@ export function TodayListRow({
               </span>
             </p>
           )}
+
+          <div className="mb-3 rounded-lg border border-blue-200 dark:border-blue-900 bg-blue-50/60 dark:bg-blue-950/30 p-3">
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <p className="text-xs font-medium uppercase tracking-wide text-blue-800 dark:text-blue-200">
+                Suggested opener
+              </p>
+              <div className="flex gap-2">
+                {company.callOpener && (
+                  <button
+                    type="button"
+                    onClick={copyOpener}
+                    className="text-xs text-blue-700 dark:text-blue-300 hover:underline"
+                  >
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={openerBusy}
+                  onClick={() => generateOpener(Boolean(company.callOpener))}
+                  className="text-xs text-blue-700 dark:text-blue-300 hover:underline disabled:opacity-50"
+                >
+                  {openerBusy
+                    ? "Generating…"
+                    : company.callOpener
+                      ? "Regenerate"
+                      : "Generate"}
+                </button>
+              </div>
+            </div>
+            {company.callOpener ? (
+              <p className="text-sm text-blue-950 dark:text-blue-100 leading-relaxed">
+                {company.callOpener}
+              </p>
+            ) : (
+              <p className="text-sm text-blue-800/70 dark:text-blue-200/70 italic">
+                Generate a personalized opener from the hiring signal and job
+                posting.
+              </p>
+            )}
+          </div>
 
           {company.contacts.length > 0 ? (
             <div className="space-y-2 rounded-lg bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-3">

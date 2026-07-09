@@ -40,7 +40,7 @@ export async function recomputeCompanyScores(
     });
 
     const hrOnly = hasHrOnlyListings(listings);
-    const signals = detectHiringSignals(listings, geoSettings);
+    const signals = detectHiringSignals(listings, geoSettings, company.firstSeen);
     const reasonToCall = reasonToCallFromSignals(signals);
 
     const companyContacts = await db

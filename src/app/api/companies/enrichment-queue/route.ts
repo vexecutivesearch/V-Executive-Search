@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, ne, not, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, not, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { unauthorized, verifyWorkerAuth } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -90,13 +90,21 @@ export async function GET(request: NextRequest) {
     const listings = await db
       .select()
       .from(jobListings)
-      .where(eq(jobListings.companyId, row.id))
+      .where(
+        and(
+          eq(jobListings.companyId, row.id),
+          isNull(jobListings.archivedAt),
+        ),
+      )
       .orderBy(desc(jobListings.sightingsCount), desc(jobListings.lastSeenAt));
 
     const inFocusListings = listings.filter((listing) =>
       jobLocationInFocus(listing.location, geoSettings),
     );
     if (!inFocusListings.length) continue;
+
+    // Prefer enrichable companies — domain required for Apollo
+    if (!row.domain) continue;
 
     result.push({
       id: row.id,

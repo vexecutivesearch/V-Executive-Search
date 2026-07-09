@@ -213,6 +213,15 @@ def format_call_sheet_card(lead: dict[str, Any], crm_base_url: str) -> str:
             f"{job_title}{loc}</p>"
         )
 
+    opener = lead.get("call_opener") or lead.get("callOpener")
+    opener_html = ""
+    if opener:
+        opener_html = (
+            f'<p style="margin:10px 0 0;font-size:13px;color:#1e3a8a;background:#eff6ff;'
+            f'padding:10px;border-radius:8px;line-height:1.45">'
+            f"<strong>Opener:</strong> {_esc(opener)}</p>"
+        )
+
     return f"""
     <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:0 0 12px;background:#fff">
       <div style="display:flex;align-items:flex-start;gap:12px">
@@ -227,6 +236,7 @@ def format_call_sheet_card(lead: dict[str, Any], crm_base_url: str) -> str:
           </p>
           <p style="margin:4px 0 0;font-size:14px;color:#374151">{company}</p>
           {reason_html}
+          {opener_html}
           <div style="margin-top:10px">{channels or '<span style="color:#9ca3af;font-size:12px">No channels yet</span>'}</div>
           {job_html}
           <p style="margin:10px 0 0;font-size:12px">

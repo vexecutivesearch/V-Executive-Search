@@ -28,6 +28,7 @@ export function TodayListView({
   const [sort, setSort] = useState<SortKey>("score");
   const [geoOnly, setGeoOnly] = useState(false);
   const [callableOnly, setCallableOnly] = useState(listMode === "call-sheet");
+  const [hotSignalsOnly, setHotSignalsOnly] = useState(false);
   const [dismissedNotice, setDismissedNotice] = useState(false);
 
   useEffect(() => {
@@ -60,6 +61,10 @@ export function TodayListView({
         !company.contacts.some((c) => c.locationMatched);
       if (geoOnly && geoMismatch) return false;
       if (callableOnly && !company.contacts.some(contactIsCallable)) return false;
+      if (hotSignalsOnly) {
+        const signals = company.hiringSignals ?? {};
+        if (!Object.keys(signals).length) return false;
+      }
 
       if (!term) return true;
 
@@ -89,7 +94,7 @@ export function TodayListView({
     });
 
     return rows;
-  }, [companies, search, sort, geoOnly, callableOnly]);
+  }, [companies, search, sort, geoOnly, callableOnly, hotSignalsOnly]);
 
   const funnelLabel = runStats
     ? `Scraped ${runStats.listingsScraped ?? 0} → ICP match ${runStats.icpMatchCount ?? 0} → Enriched ${runStats.companiesEnriched ?? 0} · Credits ${runStats.creditsUsed ?? 0}`
@@ -167,6 +172,16 @@ export function TodayListView({
               Callable only
             </label>
           )}
+
+          <label className="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={hotSignalsOnly}
+              onChange={(e) => setHotSignalsOnly(e.target.checked)}
+              className="rounded border-gray-300"
+            />
+            Hot signals
+          </label>
         </div>
 
         <p className="text-xs text-gray-500 mt-2">
@@ -185,6 +200,7 @@ export function TodayListView({
               setSearch("");
               setGeoOnly(false);
               setCallableOnly(listMode === "call-sheet");
+              setHotSignalsOnly(false);
             }}
             className="text-sm text-blue-600 dark:text-blue-400 hover:underline mt-2"
           >
