@@ -13,7 +13,6 @@ searches:
 boards:
   - indeed
   - google
-  - zip_recruiter
 
 target_titles:
   - CEO

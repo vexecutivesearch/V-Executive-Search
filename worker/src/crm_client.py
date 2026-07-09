@@ -52,7 +52,7 @@ class CRMClient:
                 f"{self.base_url}/api/ingest",
                 headers=self._headers(),
                 json=payload,
-                timeout=60,
+                timeout=120,
             )
             resp.raise_for_status()
             logger.info("CRM ingest succeeded: %s", resp.json())

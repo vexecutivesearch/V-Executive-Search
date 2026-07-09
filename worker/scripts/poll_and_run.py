@@ -13,7 +13,7 @@ sys.path.insert(0, str(WORKER_ROOT))
 
 load_dotenv(WORKER_ROOT / ".env")
 
-from src.crm_config import get_pipeline_status  # noqa: E402
+from src.crm_config import get_pipeline_status, post_pipeline_status  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
 
 logging.basicConfig(
@@ -29,10 +29,21 @@ def main() -> int:
         return 0
 
     logging.info("Run requested from admin — starting pipeline")
-    result = run_pipeline()
-    if result.errors and result.listings_scraped == 0:
-        return 1
-    return 0
+    exit_code = 0
+    try:
+        result = run_pipeline()
+        if result.errors and result.listings_scraped == 0:
+            exit_code = 1
+    except Exception:
+        logging.exception("Pipeline crashed during admin-triggered run")
+        exit_code = 1
+    finally:
+        if post_pipeline_status("mark_run_complete"):
+            logging.info("Cleared admin run request")
+        else:
+            logging.warning("Failed to clear admin run request — check CRM_API_URL/KEY")
+
+    return exit_code
 
 
 if __name__ == "__main__":

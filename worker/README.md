@@ -1,6 +1,6 @@
 # V Executive Search — Worker
 
-Daily pipeline: JobSpy scrape → dedupe → Apollo enrich → CSV / CRM.
+Daily pipeline: JobSpy scrape → dedupe → Apollo enrich → CRM + email.
 
 ## Setup
 
@@ -10,31 +10,63 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 cp .env.example .env
-# Edit .env with your APOLLO_API_KEY
+# Edit .env — required: APOLLO_API_KEY, CRM_API_URL, CRM_API_KEY
 ```
 
-## Run
+## Run manually
 
 ```bash
-# Full pipeline → CSV in output/
-python scripts/run_daily.py
-
-# Scrape + dedupe only (no Apollo credits)
-python scripts/run_daily.py --dry-run
-
-# With Hunter email fallback
-python scripts/run_daily.py --waterfall
+source .venv/bin/activate
+python scripts/run_daily.py              # full pipeline
+python scripts/run_daily.py --dry-run    # scrape only (no Apollo credits)
+python scripts/run_daily.py --limit 3    # test with 3 companies
+python scripts/health_check.py           # smoke test all integrations
 ```
 
-## Schedule (Mac mini)
+## Schedule on Mac (Mac mini / MacBook)
+
+Must run on a **home Mac with residential IP** (job boards block cloud servers).
 
 ```bash
-cp launchd/com.vexecsearch.daily.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.vexecsearch.daily.plist
+cd worker
+chmod +x scripts/install_launchd.sh
+./scripts/install_launchd.sh
 ```
 
-Edit the plist paths to match your install location.
+This installs two launchd agents:
+
+| Agent | Schedule | Purpose |
+|-------|----------|---------|
+| `com.vexecsearch.daily` | 6:00 AM daily | Full scrape → enrich → CRM ingest → email |
+| `com.vexecsearch.poll` | Every 5 minutes | Picks up **Run now** from admin on your phone |
+
+Verify:
+
+```bash
+launchctl list | grep vexecsearch
+tail -f logs/launchd_stdout.log
+tail -f logs/poll_stdout.log
+```
+
+Unload:
+
+```bash
+launchctl bootout gui/$(id -u)/com.vexecsearch.daily
+launchctl bootout gui/$(id -u)/com.vexecsearch.poll
+```
 
 ## Config
 
-Edit `config/searches.yaml` for job titles, locations, boards, and target contact titles.
+Primary config is the **Admin UI** at `/admin` (geo focus, job titles, email).  
+Fallback: `config/searches.yaml` if CRM is unreachable.
+
+## Required env vars
+
+| Variable | Where | Purpose |
+|----------|-------|---------|
+| `APOLLO_API_KEY` | worker `.env` | Enrichment |
+| `CRM_API_URL` | worker `.env` | Vercel app URL |
+| `CRM_API_KEY` | worker `.env` + Vercel | Worker ↔ CRM auth |
+| `ALERT_EMAIL` | worker `.env` | Failure alerts |
+| `RESEND_API_KEY` | worker `.env` | Daily HTML email report |
+| `APOLLO_API_KEY` | Vercel | Jobs page **Enrich** button |

@@ -198,7 +198,7 @@ export async function buildPipelineConfig() {
       geo_label: zones.map((z) => z.label).join("; "),
     },
     searches,
-    boards: ["indeed", "google", "zip_recruiter"],
+    boards: ["indeed", "google"],
     target_titles: targetTitles,
     target_seniorities: targetSeniorities,
     enrichment: {
