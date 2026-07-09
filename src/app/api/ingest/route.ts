@@ -44,6 +44,7 @@ interface IngestJobListing {
 }
 
 interface IngestCompany {
+  id?: string;
   name: string;
   domain?: string;
   domain_confidence?: string;
@@ -90,6 +91,15 @@ function normalizeCompanyKey(name: string): string {
 }
 
 async function findCompany(item: IngestCompany) {
+  if (item.id) {
+    const [byId] = await db
+      .select()
+      .from(companies)
+      .where(eq(companies.id, item.id))
+      .limit(1);
+    if (byId) return byId;
+  }
+
   const domain = item.domain?.toLowerCase().trim() || null;
   if (domain) {
     const [byDomain] = await db
@@ -194,12 +204,18 @@ export async function POST(request: NextRequest) {
     if (existing) {
       companyId = existing.id;
       updated += 1;
+      const incomingDomain = item.domain?.toLowerCase().trim() || null;
       await db
         .update(companies)
         .set({
           name: item.name,
+          domain: incomingDomain ?? existing.domain,
           domainConfidence:
-            item.domain_confidence === "high" ? "high" : existing.domainConfidence,
+            item.domain_confidence === "high" || existing.domainConfidence === "high"
+              ? "high"
+              : incomingDomain && !existing.domain
+                ? "low"
+                : existing.domainConfidence,
           updatedAt: new Date(),
         })
         .where(eq(companies.id, companyId));

@@ -42,6 +42,32 @@ class CRMClient:
             logger.warning("CRM domain lookup failed: %s", exc)
             return set()
 
+    def get_pending_enrichment(
+        self,
+        *,
+        limit: int = 100,
+        exclude_market_scan: bool = False,
+    ) -> list[dict[str, Any]]:
+        if not self.is_configured:
+            return []
+
+        try:
+            resp = requests.get(
+                f"{self.base_url}/api/companies/pending-enrichment",
+                headers=self._headers(),
+                params={
+                    "limit": limit,
+                    **({"exclude_market_scan": "1"} if exclude_market_scan else {}),
+                },
+                timeout=60,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("companies") or []
+        except requests.RequestException as exc:
+            logger.warning("CRM pending-enrichment lookup failed: %s", exc)
+            return []
+
     def ingest_batch(self, payload: dict[str, Any]) -> bool:
         if not self.is_configured:
             logger.info("CRM not configured — skipping ingest")

@@ -53,9 +53,24 @@ def main() -> int:
     exit_code = 0
     try:
         result = run_pipeline(skip_email=True)
-        if result.errors and result.listings_scraped == 0:
+        if result.errors and result.listings_scraped == 0 and result.companies_found == 0:
             exit_code = 1
-        elif not result.errors or result.listings_scraped > 0:
+        elif not result.errors or result.listings_scraped > 0 or result.companies_enriched > 0:
+            if sys.platform == "darwin":
+                try:
+                    import importlib.util
+
+                    script = WORKER_ROOT / "scripts" / "check_imessage.py"
+                    spec = importlib.util.spec_from_file_location("check_imessage", script)
+                    if spec and spec.loader:
+                        mod = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(mod)
+                        n = mod.run_imessage_checks(limit=50, delay=1.5)
+                        if n:
+                            logging.info("iMessage checks tagged %d contact(s)", n)
+                except Exception as exc:
+                    logging.warning("iMessage check pass failed (non-fatal): %s", exc)
+
             try:
                 import os
                 from src.config_loader import load_config, get_notification_email

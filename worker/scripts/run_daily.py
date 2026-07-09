@@ -117,7 +117,10 @@ def main() -> int:
                 if spec and spec.loader:
                     mod = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(mod)
-                    n = mod.run_imessage_checks(limit=50, delay=2.0)
+                    n = mod.run_imessage_checks(
+                        limit=max(50, result.contacts_enriched * 2),
+                        delay=2.0,
+                    )
                     logger.info("iMessage checks completed: %d contact(s)", n)
         except Exception as exc:
             logger.warning("iMessage check pass failed (non-fatal): %s", exc)

@@ -45,6 +45,7 @@ def filter_existing_companies(
     companies: list[CompanyRecord],
     existing_domains: set[str],
 ) -> tuple[list[CompanyRecord], int]:
+    """Skip companies whose domain already has callable contacts in CRM."""
     if not existing_domains:
         return companies, 0
 
@@ -60,3 +61,29 @@ def filter_existing_companies(
         net_new.append(company)
 
     return net_new, skipped
+
+
+def merge_company_batches(
+    primary: list[CompanyRecord],
+    secondary: list[CompanyRecord],
+) -> list[CompanyRecord]:
+    """Merge company lists; primary wins on name collisions (fresh scrape over backlog)."""
+    merged: dict[str, CompanyRecord] = {}
+
+    for company in secondary:
+        key = company.normalized_name or normalize_company_name(company.name)
+        if key:
+            merged[key] = company
+
+    for company in primary:
+        key = company.normalized_name or normalize_company_name(company.name)
+        if not key:
+            continue
+        existing = merged.get(key)
+        if existing and existing.crm_id and not company.crm_id:
+            company.crm_id = existing.crm_id
+        if existing and not company.listings and existing.listings:
+            company.listings = existing.listings
+        merged[key] = company
+
+    return list(merged.values())

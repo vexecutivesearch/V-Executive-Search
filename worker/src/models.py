@@ -29,6 +29,7 @@ class CompanyRecord:
     domain: str | None = None
     domain_confidence: DomainConfidence = DomainConfidence.LOW
     listings: list[JobListing] = field(default_factory=list)
+    crm_id: str | None = None
 
 
 @dataclass

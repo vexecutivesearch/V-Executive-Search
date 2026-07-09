@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Import a scrape CSV into the CRM via /api/ingest."""
+"""Import a scrape CSV into the CRM via /api/ingest.
+
+Jobs-only import: listings appear on the Jobs page immediately. The next
+scheduled pipeline run (6 AM / 6 PM) resolves domains, enriches contacts,
+checks iMessage, and sends the daily email automatically.
+"""
 
 from __future__ import annotations
 

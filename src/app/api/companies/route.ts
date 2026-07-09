@@ -1,8 +1,8 @@
-import { inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { verifyWorkerAuth, unauthorized } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { companies } from "@/lib/db/schema";
+import { companies, contacts } from "@/lib/db/schema";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,10 +26,21 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ domains: [] });
   }
 
+  // Only treat a domain as "existing" when the company already has callable contacts.
+  // Companies ingested as jobs-only must still be enriched on the next pipeline run.
+  const callableContact = or(
+    isNotNull(contacts.personalPhone),
+    isNotNull(contacts.phone),
+    isNotNull(contacts.personalEmail),
+    isNotNull(contacts.email),
+    isNotNull(contacts.workEmail),
+  );
+
   const rows = await db
-    .select({ domain: companies.domain })
+    .selectDistinct({ domain: companies.domain })
     .from(companies)
-    .where(inArray(companies.domain, domains));
+    .innerJoin(contacts, eq(contacts.companyId, companies.id))
+    .where(and(inArray(companies.domain, domains), callableContact));
 
   return NextResponse.json({
     domains: rows.map((r) => r.domain).filter(Boolean),

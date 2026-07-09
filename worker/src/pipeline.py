@@ -10,12 +10,12 @@ from typing import Any
 from src.config_loader import load_config, get_notification_email
 from src.crm_config import post_pipeline_status
 from src.crm_client import CRMClient
-from src.dedupe import collapse_to_companies, filter_existing_companies
+from src.dedupe import collapse_to_companies, filter_existing_companies, merge_company_batches, normalize_company_name
 from src.domain_resolver import resolve_domains
 from src.enrich import get_provider
 from src.enrich.contactout import get_contactout_client
 from src.enrich.waterfall import WaterfallProvider
-from src.models import EnrichedCompany, PipelineResult
+from src.models import CompanyRecord, DomainConfidence, EnrichedCompany, JobListing, PipelineResult
 from src.scrape import scrape_all
 from src.timezone import business_list_date
 from src.contact_phones import contact_phones_for_display
@@ -26,6 +26,45 @@ logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
+
+
+def _parse_pending_date(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _company_from_pending(item: dict[str, Any]) -> CompanyRecord:
+    name = str(item.get("name") or "").strip()
+    listings = [
+        JobListing(
+            company_name=name,
+            job_title=str(jl.get("title") or "").strip(),
+            location=str(jl.get("location") or "").strip(),
+            board=str(jl.get("board") or "").strip(),
+            job_url=str(jl.get("url") or "").strip(),
+            date_posted=_parse_pending_date(jl.get("posted_at")),
+            search_name=str(jl.get("search_name") or "").strip(),
+        )
+        for jl in item.get("job_listings") or []
+    ]
+    confidence = (
+        DomainConfidence.HIGH
+        if item.get("domain_confidence") == "high"
+        else DomainConfidence.LOW
+    )
+    normalized = normalize_company_name(name)
+    return CompanyRecord(
+        name=name,
+        normalized_name=normalized,
+        domain=item.get("domain"),
+        domain_confidence=confidence,
+        listings=listings,
+        crm_id=item.get("id"),
+    )
 
 
 def _rows_from_enriched(enriched: list[EnrichedCompany]) -> list[dict[str, Any]]:
@@ -102,9 +141,16 @@ def _write_csv(rows: list[dict[str, Any]], run_date: date) -> Path:
         path.write_text("", encoding="utf-8")
         return path
 
-    fieldnames = list(rows[0].keys())
+    fieldnames: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row:
+            if key not in seen:
+                seen.add(key)
+                fieldnames.append(key)
+
     with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
     return path
@@ -117,7 +163,7 @@ def _build_ingest_payload(
     companies_payload = []
     for item in enriched:
         company = item.company
-        companies_payload.append({
+        payload: dict[str, Any] = {
             "name": company.name,
             "domain": company.domain,
             "domain_confidence": company.domain_confidence.value,
@@ -152,7 +198,10 @@ def _build_ingest_payload(
                 }
                 for jl in company.listings
             ],
-        })
+        }
+        if company.crm_id:
+            payload["id"] = company.crm_id
+        companies_payload.append(payload)
 
     return {
         "run_date": result.run_date.isoformat(),
@@ -207,19 +256,32 @@ def run_pipeline(
     listings = scrape_all(config)
     result.listings_scraped = len(listings)
 
-    if not listings:
-        result.errors.append("No listings scraped — check search config or board availability")
-        return result
+    crm = CRMClient()
 
-    # Stage 2: Dedupe
-    logger.info("=== Stage 2: Deduping companies ===")
-    companies = collapse_to_companies(listings)
+    # Stage 2: Merge fresh scrape with CRM backlog (jobs ingested without contacts)
+    logger.info("=== Stage 2: Building company batch ===")
+    scraped = collapse_to_companies(listings)
+    backlog: list[CompanyRecord] = []
+    if crm.is_configured and not skip_crm:
+        pending_limit = max(daily_credit_cap, 50)
+        pending = crm.get_pending_enrichment(limit=pending_limit)
+        backlog = [_company_from_pending(item) for item in pending]
+        if backlog:
+            logger.info(
+                "CRM backlog: %d companies pending enrichment", len(backlog)
+            )
+
+    companies = merge_company_batches(scraped, backlog)
     result.companies_found = len(companies)
 
-    # Resolve domains before CRM skip check
+    if not companies:
+        result.errors.append(
+            "No companies to process — scrape returned nothing and CRM backlog is empty"
+        )
+        return result
+
     companies = resolve_domains(companies)
 
-    crm = CRMClient()
     existing_domains: set[str] = set()
     if crm.is_configured and not skip_crm and not include_existing:
         domains_to_check = [c.domain for c in companies if c.domain]
@@ -230,7 +292,11 @@ def run_pipeline(
     if include_existing:
         logger.info("Including all %d companies (CRM skip disabled)", len(companies))
     else:
-        logger.info("Net-new companies after CRM skip: %d (skipped %d)", len(companies), skipped)
+        logger.info(
+            "Companies queued for enrichment: %d (skipped %d already enriched)",
+            len(companies),
+            skipped,
+        )
 
     if limit is not None:
         companies = companies[:limit]
