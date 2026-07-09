@@ -6,8 +6,18 @@ PhoneSource = Literal["apollo", "contactout"]
 PhoneKind = Literal["mobile", "work", "company", "other"]
 
 
-def _parse_phone(raw: str | None) -> str | None:
+def _parse_phone(raw: str | dict[str, Any] | None) -> str | None:
     if not raw:
+        return None
+    if isinstance(raw, dict):
+        return (
+            _parse_phone(raw.get("sanitized_number"))
+            or _parse_phone(raw.get("number"))
+            or _parse_phone(raw.get("raw_number"))
+            or _parse_phone(raw.get("value"))
+            or _parse_phone(raw.get("phone"))
+        )
+    if not isinstance(raw, str):
         return None
     trimmed = raw.strip()
     if not trimmed:
