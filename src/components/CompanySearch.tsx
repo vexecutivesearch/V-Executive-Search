@@ -2,8 +2,17 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, useState } from "react";
+import type { CompanyStatus } from "@/lib/db/schema";
 
-export function CompanySearch({ initialQuery }: { initialQuery?: string }) {
+export function CompanySearch({
+  initialQuery,
+  view = "leads",
+  status,
+}: {
+  initialQuery?: string;
+  view?: "leads" | "jobs";
+  status?: CompanyStatus;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [q, setQ] = useState(initialQuery ?? "");
@@ -11,9 +20,11 @@ export function CompanySearch({ initialQuery }: { initialQuery?: string }) {
   function onSubmit(e: FormEvent) {
     e.preventDefault();
     const params = new URLSearchParams(searchParams.toString());
+    params.set("view", view);
     const term = q.trim();
     if (term) params.set("q", term);
     else params.delete("q");
+    if (status) params.set("status", status);
     router.push(`/companies?${params.toString()}`);
   }
 

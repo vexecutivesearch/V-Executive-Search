@@ -123,9 +123,11 @@ export async function POST(
   }
 
   let personalUpdated = 0;
+  let contactoutChecked = 0;
   if (contactOutKey) {
     const refresh = await refreshCompanyContactsFromContactOut(id, contactOutKey);
     personalUpdated = refresh.updated;
+    contactoutChecked = refresh.checked;
   }
 
   // Backfill phones json from legacy phone fields (e.g. Apollo webhook async delivery).
@@ -165,13 +167,16 @@ export async function POST(
     ok: true,
     contacts_added: contactsAdded,
     personal_updated: personalUpdated,
+    contactout_checked: contactoutChecked,
     phones_backfilled: phonesBackfilled,
     total_contacts: totalContacts,
     domain,
     company: updatedCompany,
     message:
       contactsAdded === 0 && personalUpdated === 0
-        ? "No new contacts or personal data found"
+        ? contactoutChecked > 0
+          ? `ContactOut checked ${contactoutChecked} contact(s) — no new personal data`
+          : "No new contacts or personal data found"
         : undefined,
   });
 }

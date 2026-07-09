@@ -23,6 +23,7 @@ export function TodayListRow({
   const router = useRouter();
   const [company, setCompany] = useState(initial);
   const [expanded, setExpanded] = useState(defaultExpanded);
+  const [enrichNotice, setEnrichNotice] = useState<string | null>(null);
 
   useEffect(() => {
     setCompany(initial);
@@ -35,37 +36,53 @@ export function TodayListRow({
     null;
   const lead = scoreLead(company);
 
-  async function handleEnrichComplete(updated?: CompanyCardData) {
+  async function refreshCompany(updated?: CompanyCardData) {
     if (updated) {
       setCompany(updated);
-    } else {
-      const res = await fetch(`/api/companies/${initial.id}`, {
-        cache: "no-store",
-      });
-      if (res.ok) {
-        const data = (await res.json()) as { company: CompanyCardData };
-        setCompany(data.company);
-      }
+      return;
     }
+    const res = await fetch(`/api/companies/${initial.id}`, {
+      cache: "no-store",
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { company: CompanyCardData };
+      setCompany(data.company);
+    }
+  }
+
+  async function handleEnrichComplete(
+    updated?: CompanyCardData,
+    summary?: string,
+  ) {
+    await refreshCompany(updated);
+    setExpanded(true);
+    if (summary) setEnrichNotice(summary);
     router.refresh();
   }
 
   return (
     <div className="border-b border-gray-200 dark:border-gray-800 last:border-b-0">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="w-full text-left hover:bg-gray-50 dark:hover:bg-gray-900/60 transition-colors"
-        aria-expanded={expanded}
-      >
-        <div className="grid grid-cols-[3rem_1fr_auto] sm:grid-cols-[3.5rem_minmax(0,1.2fr)_minmax(0,1.4fr)_5rem_6.5rem_auto] gap-x-3 gap-y-1 items-center px-3 py-2.5 sm:px-4">
+      <div className="grid grid-cols-[3rem_1fr_auto] sm:grid-cols-[3.5rem_minmax(0,1.2fr)_minmax(0,1.4fr)_5rem_6.5rem_auto] gap-x-3 gap-y-1 items-center px-3 py-2.5 sm:px-4 hover:bg-gray-50 dark:hover:bg-gray-900/60 transition-colors">
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => setExpanded((v) => !v)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setExpanded((v) => !v);
+            }
+          }}
+          className="contents cursor-pointer"
+          aria-expanded={expanded}
+        >
           <div
             className={`flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg text-sm font-semibold tabular-nums ${scoreBgClass(lead.score)} ${scoreTextClass(lead.score)}`}
           >
             {lead.score}
           </div>
 
-          <div className="min-w-0 col-span-1 sm:col-span-1">
+          <div className="min-w-0 col-span-1 sm:col-span-1 text-left">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
               <Link
                 href={`/companies/${company.id}`}
@@ -90,7 +107,7 @@ export function TodayListRow({
             )}
           </div>
 
-          <div className="hidden sm:block min-w-0">
+          <div className="hidden sm:block min-w-0 text-left">
             {primaryJob ? (
               <>
                 <p className="text-sm truncate">{primaryJob.title}</p>
@@ -104,7 +121,7 @@ export function TodayListRow({
             )}
           </div>
 
-          <div className="hidden sm:block text-sm text-gray-600 dark:text-gray-400 tabular-nums">
+          <div className="hidden sm:block text-sm text-gray-600 dark:text-gray-400 tabular-nums text-left">
             {company.contacts.length > 0 ? (
               <>
                 {lead.callableCount}/{company.contacts.length}
@@ -117,26 +134,36 @@ export function TodayListRow({
           <div className="hidden sm:flex justify-end">
             <StatusBadge status={company.status} />
           </div>
+        </div>
 
-          <div
-            className="flex items-center justify-end gap-1"
-            onClick={(e) => e.stopPropagation()}
+        <div className="flex items-center justify-end gap-1">
+          <EnrichButton
+            companyId={company.id}
+            contactCount={company.contacts.length}
+            onEnrichComplete={handleEnrichComplete}
+          />
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            aria-label={expanded ? "Collapse row" : "Expand row"}
           >
-            <EnrichButton
-              companyId={company.id}
-              contactCount={company.contacts.length}
-              onEnrichComplete={handleEnrichComplete}
-            />
             <span
-              className={`text-gray-400 transition-transform ${expanded ? "rotate-180" : ""}`}
+              className={`inline-block transition-transform ${expanded ? "rotate-180" : ""}`}
               aria-hidden
             >
               ▾
             </span>
-          </div>
+          </button>
         </div>
+      </div>
 
-        <div className="sm:hidden px-3 pb-2 pl-[3.75rem] text-xs text-gray-500">
+      <div className="sm:hidden px-3 pb-2 pl-[3.75rem] text-xs text-gray-500">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="text-left w-full"
+        >
           {primaryJob?.title}
           {primaryJob?.location ? ` · ${primaryJob.location}` : ""}
           {company.contacts.length > 0 && (
@@ -144,8 +171,26 @@ export function TodayListRow({
               · {lead.callableCount}/{company.contacts.length} contacts
             </span>
           )}
+        </button>
+      </div>
+
+      {enrichNotice && (
+        <div
+          className={`mx-4 mb-2 rounded-md border px-3 py-2 text-sm ${
+            enrichNotice.includes("error") ||
+            enrichNotice.includes("failed") ||
+            enrichNotice.includes("not configured")
+              ? "border-red-200 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
+              : enrichNotice.includes("+") ||
+                  enrichNotice.includes("updated") ||
+                  enrichNotice.includes("synced")
+                ? "border-green-200 bg-green-50 text-green-900 dark:border-green-900 dark:bg-green-950/40 dark:text-green-200"
+                : "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+          }`}
+        >
+          {enrichNotice}
         </div>
-      </button>
+      )}
 
       {expanded && (
         <div className="px-4 pb-4 pt-1 bg-gray-50/80 dark:bg-gray-900/40 border-t border-gray-100 dark:border-gray-800">

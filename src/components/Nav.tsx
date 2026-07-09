@@ -1,17 +1,21 @@
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 const NAV = [
   { href: "/today", label: "Today's List" },
   { href: "/companies", label: "Companies" },
-  { href: "/jobs", label: "Jobs" },
   { href: "/runs", label: "Runs" },
   { href: "/admin", label: "Admin" },
 ];
 
 export function Nav() {
+  const pathname = usePathname();
+
   return (
-    <header className="border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-950/80 backdrop-blur sticky top-0 z-10">
+    <header className="border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-950/80 backdrop-blur sticky top-0 z-20">
       <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3 flex flex-wrap items-center justify-between gap-2">
         <Link
           href="/today"
@@ -28,15 +32,25 @@ export function Nav() {
           />
         </Link>
         <nav className="flex flex-wrap justify-end gap-0.5 sm:gap-1">
-          {NAV.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="px-2 sm:px-3 py-1.5 rounded-md text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-            >
-              {item.label}
-            </Link>
-          ))}
+          {NAV.map((item) => {
+            const active =
+              pathname === item.href ||
+              (item.href === "/companies" && pathname.startsWith("/companies"));
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-current={active ? "page" : undefined}
+                className={`px-2 sm:px-3 py-1.5 rounded-md text-xs sm:text-sm transition-colors ${
+                  active
+                    ? "bg-gray-900 text-white dark:bg-white dark:text-gray-900 font-medium"
+                    : "text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+                }`}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
         </nav>
       </div>
     </header>

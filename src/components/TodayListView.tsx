@@ -100,7 +100,7 @@ export function TodayListView({
         </div>
       )}
 
-      <div className="sticky top-0 z-10 -mx-4 px-4 py-3 mb-3 bg-gray-50/95 dark:bg-gray-950/95 backdrop-blur border-y border-gray-200 dark:border-gray-800">
+      <div className="sticky top-[3.25rem] z-10 -mx-4 px-4 py-3 mb-3 bg-gray-50/95 dark:bg-gray-950/95 backdrop-blur border-y border-gray-200 dark:border-gray-800">
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
           <input
             type="search"
