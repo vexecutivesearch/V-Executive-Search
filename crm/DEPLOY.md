@@ -93,8 +93,26 @@ Verify: `launchctl list | grep vexecsearch`
 
 | Issue | Fix |
 |---|---|
+| **404 NOT_FOUND** after deploy | Root Directory is wrong — see fix below |
 | CRM shows "Database not connected" | Check `DATABASE_URL` in Vercel env vars; run `db:push` |
 | Worker ingest 401 | Ensure `CRM_API_KEY` matches `WORKER_API_KEY` |
 | Zero listings scraped | Check `config/searches.yaml`; try `--dry-run -v` |
 | Apollo 403 | Use `/mixed_people/api_search` endpoint (already configured) |
 | Credit burn too high | Lower `daily_credit_cap` in searches.yaml |
+
+### Fix: 404 NOT_FOUND
+
+This happens when Vercel deploys the **repo root** instead of the **`crm`** folder. The root has no Next.js app, so every route 404s.
+
+1. Open your project in [vercel.com/dashboard](https://vercel.com/dashboard)
+2. Go to **Settings → General**
+3. Find **Root Directory** → click **Edit**
+4. Enter `crm` and confirm
+5. Go to **Deployments** → click **⋯** on the latest → **Redeploy**
+
+Also verify under **Settings → General**:
+- **Framework Preset**: Next.js
+- **Build Command**: leave default (or `npm run build`)
+- **Output Directory**: leave **empty** (do not set `.next`)
+
+Do **not** use a custom `outputDirectory` in `vercel.json` — Vercel handles Next.js output automatically.
