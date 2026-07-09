@@ -72,6 +72,17 @@ def main() -> int:
     logger = logging.getLogger(__name__)
     logger.info("Starting pipeline (dry_run=%s)", args.dry_run)
 
+    if sys.platform == "darwin" and not args.dry_run:
+        try:
+            from src.enrich.contactout_dashboard import prepare_contactout_dashboard
+
+            if not prepare_contactout_dashboard():
+                logger.warning(
+                    "ContactOut dashboard not logged in — phone lookups may be skipped until you sign in"
+                )
+        except Exception as exc:
+            logger.warning("ContactOut session prep failed (non-fatal): %s", exc)
+
     # Rotate old logs
     rotate_script = WORKER_ROOT / "scripts" / "rotate_logs.sh"
     if rotate_script.exists():

@@ -25,6 +25,13 @@ logging.basicConfig(
 def main() -> int:
     if sys.platform == "darwin":
         try:
+            from src.enrich.contactout_dashboard import prepare_contactout_dashboard
+
+            prepare_contactout_dashboard()
+        except Exception as exc:
+            logging.warning("ContactOut session prep failed (non-fatal): %s", exc)
+
+        try:
             import importlib.util
 
             script = WORKER_ROOT / "scripts" / "check_imessage.py"
@@ -53,6 +60,23 @@ def main() -> int:
             logging.warning("ContactOut dashboard sync failed (non-fatal): %s", exc)
 
     status = get_pipeline_status()
+    if status.get("contactout_sync_requested_at"):
+        logging.info("ContactOut sync requested from admin")
+        try:
+            import importlib.util
+
+            script = WORKER_ROOT / "scripts" / "contactout_dashboard_sync.py"
+            spec = importlib.util.spec_from_file_location("contactout_dashboard_sync", script)
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                n = mod.run_dashboard_sync(limit=10)
+                logging.info("Admin ContactOut sync updated %d contact(s)", n)
+        except Exception as exc:
+            logging.warning("Admin ContactOut sync failed: %s", exc)
+        finally:
+            post_pipeline_status("clear_contactout_sync_request")
+
     if not status.get("run_requested_at"):
         logging.info("No run requested — exiting")
         return 0

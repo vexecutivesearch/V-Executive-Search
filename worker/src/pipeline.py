@@ -191,6 +191,16 @@ def run_pipeline(
     daily_credit_cap = enrichment_cfg.get("daily_credit_cap", 100)
     provider_name = enrichment_cfg.get("provider", "apollo")
 
+    if not dry_run:
+        try:
+            import sys
+            from src.enrich.contactout_dashboard import prepare_contactout_dashboard
+
+            if sys.platform == "darwin":
+                prepare_contactout_dashboard()
+        except Exception as exc:
+            logger.warning("ContactOut session prep failed (non-fatal): %s", exc)
+
     result = PipelineResult(
         run_date=run_date,
         listings_scraped=0,

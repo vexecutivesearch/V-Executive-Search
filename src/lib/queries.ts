@@ -10,15 +10,18 @@ import {
 import { CompanyCardData } from "@/components/CompanyCard";
 import { businessToday } from "@/lib/timezone";
 import { applySharedLineFilter } from "@/lib/contact-phones";
+import { focusGeoLabel, getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
 
 export async function getTodayCompanies(): Promise<CompanyCardData[]> {
   const today = businessToday();
+  const geoSettings = await getGeoFocusSettings();
 
-  // Callable leads only: new status, added today, with email or phone on file.
+  // Callable leads only: new status, added today, in-focus job, with email or phone.
   const rows = await db
     .selectDistinct({ id: companies.id })
     .from(companies)
     .innerJoin(contacts, eq(contacts.companyId, companies.id))
+    .innerJoin(jobListings, eq(jobListings.companyId, companies.id))
     .where(
       and(
         eq(companies.status, "new"),
@@ -37,7 +40,13 @@ export async function getTodayCompanies(): Promise<CompanyCardData[]> {
     .where(inArray(companies.id, ids))
     .orderBy(desc(companies.createdAt));
 
-  return enrichCompanies(companiesRows);
+  const filtered = await enrichCompanies(companiesRows, geoSettings);
+  return filtered.filter((c) => c.jobListings.length > 0);
+}
+
+export async function getTodayGeoLabel(): Promise<string> {
+  const settings = await getGeoFocusSettings();
+  return focusGeoLabel(settings);
 }
 
 export async function getCompaniesByStatus(
@@ -70,7 +79,9 @@ export async function getCompaniesByStatus(
           .from(companies)
           .orderBy(desc(companies.updatedAt));
 
-  return enrichCompanies(rows);
+  return enrichCompanies(rows, await getGeoFocusSettings()).then((companies) =>
+    companies.filter((c) => c.jobListings.length > 0),
+  );
 }
 
 export async function getCompanyById(
@@ -83,7 +94,7 @@ export async function getCompanyById(
     .limit(1);
 
   if (rows.length === 0) return null;
-  const enriched = await enrichCompanies(rows);
+  const enriched = await enrichCompanies(rows, await getGeoFocusSettings());
   return enriched[0];
 }
 
@@ -141,7 +152,9 @@ export async function getMarketJobListings(searchName?: string) {
 
 async function enrichCompanies(
   rows: (typeof companies.$inferSelect)[],
+  geoSettings?: Awaited<ReturnType<typeof getGeoFocusSettings>>,
 ): Promise<CompanyCardData[]> {
+  const settings = geoSettings ?? (await getGeoFocusSettings());
   const result: CompanyCardData[] = [];
 
   for (const company of rows) {
@@ -156,6 +169,10 @@ async function enrichCompanies(
       .where(eq(jobListings.companyId, company.id))
       .orderBy(desc(jobListings.createdAt));
 
+    const inFocusListings = listings.filter((listing) =>
+      jobLocationInFocus(listing.location, settings),
+    );
+
     result.push({
       id: company.id,
       name: company.name,
@@ -164,7 +181,7 @@ async function enrichCompanies(
       status: company.status,
       firstSeen: company.firstSeen,
       contacts: applySharedLineFilter(companyContacts),
-      jobListings: listings,
+      jobListings: inFocusListings,
     });
   }
 

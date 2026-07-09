@@ -1,4 +1,4 @@
-import { and, count, eq, isNotNull, or, sql } from "drizzle-orm";
+import { and, eq, isNotNull, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { companies, contacts, jobListings } from "@/lib/db/schema";
 import {
@@ -10,6 +10,7 @@ import {
 } from "@/lib/contact-phones";
 import { isPersonalEmail } from "@/lib/phone-utils";
 import { businessToday } from "@/lib/timezone";
+import { getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
 
 export type DailyReportPhone = SourcedPhone;
 
@@ -49,21 +50,22 @@ export async function getDailyReportData(): Promise<{
   rows: DailyReportRow[];
 }> {
   const today = businessToday();
+  const geoSettings = await getGeoFocusSettings();
 
-  const [listingStats] = await db
-    .select({ count: count() })
+  const allListingsToday = await db
+    .select({ listing: jobListings })
     .from(jobListings)
     .innerJoin(companies, eq(jobListings.companyId, companies.id))
     .where(eq(companies.firstSeen, today));
 
-  const [companyStats] = await db
-    .select({ count: sql<number>`count(distinct ${companies.id})::int` })
-    .from(companies)
-    .where(eq(companies.firstSeen, today));
+  const listings_scraped = allListingsToday.filter((row) =>
+    jobLocationInFocus(row.listing.location, geoSettings),
+  ).length;
 
   const rawRows = await db
     .selectDistinctOn([companies.id, contacts.id], {
       company: companies.name,
+      companyId: companies.id,
       contactName: contacts.name,
       title: contacts.title,
       email: contacts.email,
@@ -76,11 +78,11 @@ export async function getDailyReportData(): Promise<{
       sourceProvider: contacts.sourceProvider,
       imessageCapable: contacts.imessageCapable,
       jobTitle: jobListings.title,
-      listingCreatedAt: jobListings.createdAt,
+      jobLocation: jobListings.location,
     })
     .from(companies)
     .innerJoin(contacts, eq(contacts.companyId, companies.id))
-    .leftJoin(jobListings, eq(jobListings.companyId, companies.id))
+    .innerJoin(jobListings, eq(jobListings.companyId, companies.id))
     .where(
       and(
         eq(companies.status, "new"),
@@ -97,8 +99,11 @@ export async function getDailyReportData(): Promise<{
     .orderBy(companies.id, contacts.id, jobListings.createdAt);
 
   const rows: DailyReportRow[] = [];
+  const enrichedCompanyIds = new Set<string>();
 
   for (const row of rawRows) {
+    if (!jobLocationInFocus(row.jobLocation, geoSettings)) continue;
+
     const { workEmail, personalEmail } = resolveEmails(row);
     const phones = sortPhonesForDisplay(
       contactPhonesForDisplay({
@@ -112,6 +117,7 @@ export async function getDailyReportData(): Promise<{
 
     if (!workEmail && !personalEmail && phones.length === 0) continue;
 
+    enrichedCompanyIds.add(row.companyId);
     rows.push({
       company: row.company,
       contact_name: row.contactName,
@@ -132,8 +138,8 @@ export async function getDailyReportData(): Promise<{
 
   return {
     run_date: today,
-    listings_scraped: Number(listingStats?.count ?? 0),
-    companies_enriched: Number(companyStats?.count ?? 0),
+    listings_scraped,
+    companies_enriched: enrichedCompanyIds.size,
     rows,
   };
 }

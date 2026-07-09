@@ -20,7 +20,7 @@ from src.contact_phones import (  # noqa: E402
     pick_primary_from_phones,
 )
 from src.enrich.contactout_api import ContactOutApiClient  # noqa: E402
-from src.enrich.contactout_dashboard import ContactOutDashboardClient  # noqa: E402
+from src.enrich.contactout_dashboard import ContactOutDashboardClient, browser_profile_dir  # noqa: E402
 from src.enrich.contactout_hybrid import api_phone_credits_exhausted  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -77,9 +77,13 @@ def run_dashboard_sync(*, limit: int = 10) -> int:
 
     client = ContactOutDashboardClient()
     if not client.is_configured:
-        logger.warning(
-            "ContactOut dashboard not ready — run: python scripts/contactout_login.py"
-        )
+        logger.warning("ContactOut dashboard not configured on this host")
+        return 0
+
+    from src.enrich.contactout_dashboard import ensure_contactout_session
+
+    if not ensure_contactout_session(timeout_sec=120):
+        logger.warning("ContactOut dashboard not logged in — skipping sync")
         return 0
 
     pending = fetch_pending_contacts(limit)

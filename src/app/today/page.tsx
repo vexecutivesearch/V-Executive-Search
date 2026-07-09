@@ -1,5 +1,5 @@
 import { CompanyCard } from "@/components/CompanyCard";
-import { getTodayCompanies } from "@/lib/queries";
+import { getTodayCompanies, getTodayGeoLabel } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -12,8 +12,12 @@ export default async function TodayPage() {
   });
 
   let companies;
+  let geoLabel = "your focus area";
   try {
-    companies = await getTodayCompanies();
+    [companies, geoLabel] = await Promise.all([
+      getTodayCompanies(),
+      getTodayGeoLabel(),
+    ]);
   } catch {
     return (
       <div className="max-w-6xl mx-auto px-4 py-8">
@@ -36,7 +40,7 @@ export default async function TodayPage() {
         <p className="text-gray-500 dark:text-gray-400 mt-1">{today}</p>
         <p className="text-sm text-gray-400 mt-1">
           {companies.length} callable{" "}
-          {companies.length === 1 ? "lead" : "leads"} with contact info
+          {companies.length === 1 ? "lead" : "leads"} in {geoLabel}
         </p>
       </div>
 

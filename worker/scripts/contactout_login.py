@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""One-time ContactOut login — saves a persistent Chrome session for dashboard mode."""
+"""Ensure ContactOut dashboard login — opens Chrome when session is missing."""
 from __future__ import annotations
 
+import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -12,46 +14,31 @@ sys.path.insert(0, str(WORKER_ROOT))
 load_dotenv(WORKER_ROOT / ".env")
 
 from src.enrich.contactout_dashboard import (  # noqa: E402
-    CONTACTOUT_LOGIN_URL,
     browser_profile_dir,
+    ensure_contactout_session,
 )
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
 def main() -> int:
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        print("Install Playwright first:")
-        print("  pip install playwright")
-        print("  playwright install chrome")
-        return 1
+    parser = argparse.ArgumentParser(description="ContactOut dashboard login")
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="Seconds to wait for manual login (default: 300)",
+    )
+    args = parser.parse_args()
 
     profile = browser_profile_dir()
-    profile.mkdir(parents=True, exist_ok=True)
     print(f"Browser profile: {profile}")
-    print("A Chrome window will open. Log into ContactOut, then return here.")
-
-    with sync_playwright() as playwright:
-        try:
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(profile),
-                channel="chrome",
-                headless=False,
-                viewport={"width": 1440, "height": 900},
-            )
-        except Exception:
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(profile),
-                headless=False,
-                viewport={"width": 1440, "height": 900},
-            )
-        page = context.pages[0] if context.pages else context.new_page()
-        page.goto(CONTACTOUT_LOGIN_URL, wait_until="domcontentloaded")
-        input("Press Enter after you are logged in and can see the dashboard... ")
-        context.close()
-
-    print("Saved session. Set CONTACTOUT_MODE=dashboard in worker/.env")
-    return 0
+    ok = ensure_contactout_session(timeout_sec=args.timeout)
+    if ok:
+        print("ContactOut session ready.")
+        return 0
+    print("ContactOut login not completed — try again and allow Python/Chrome in BlockBlock if prompted.")
+    return 1
 
 
 if __name__ == "__main__":

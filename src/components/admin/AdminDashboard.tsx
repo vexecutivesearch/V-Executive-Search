@@ -129,6 +129,12 @@ export function AdminDashboard({
     setMessage(data.message || (res.ok ? "Run requested." : "Failed."));
   }
 
+  async function triggerContactOut() {
+    const res = await fetch("/api/admin/trigger-contactout", { method: "POST" });
+    const data = await res.json();
+    setMessage(data.message || (res.ok ? "ContactOut sync requested." : "Failed."));
+  }
+
   async function toggleProfile(id: string, isActive: boolean) {
     await fetch("/api/admin/search-profiles", {
       method: "PUT",
@@ -284,6 +290,12 @@ export function AdminDashboard({
           className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800"
         >
           Run now
+        </button>
+        <button
+          onClick={triggerContactOut}
+          className="bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-800 ml-2"
+        >
+          Sync ContactOut phones
         </button>
         {settings.lastRunAt && (
           <p className="text-xs text-gray-400">

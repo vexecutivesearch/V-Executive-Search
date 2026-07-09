@@ -44,6 +44,151 @@ def _linkedin_slug(url: str) -> str:
     return normalize_linkedin(url).rstrip("/").split("/")[-1]
 
 
+def _needs_login_page(page: Any) -> bool:
+    url = page.url.lower()
+    if "/login" in url or "/register" in url:
+        return True
+    if page.locator('input[type="password"]').count() > 0:
+        return True
+    return False
+
+
+def _session_check_with_playwright(*, headless: bool) -> bool:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return False
+
+    profile = browser_profile_dir()
+    profile.mkdir(parents=True, exist_ok=True)
+
+    playwright = sync_playwright().start()
+    context: Any | None = None
+    try:
+        launch_kwargs: dict[str, Any] = {
+            "user_data_dir": str(profile),
+            "headless": headless,
+            "viewport": {"width": 1440, "height": 900},
+            "args": ["--disable-blink-features=AutomationControlled"],
+        }
+        try:
+            context = playwright.chromium.launch_persistent_context(
+                channel="chrome",
+                **launch_kwargs,
+            )
+        except Exception:
+            context = playwright.chromium.launch_persistent_context(**launch_kwargs)
+
+        page = context.pages[0] if context.pages else context.new_page()
+        page.goto(CONTACTOUT_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
+        page.wait_for_timeout(1200)
+        return not _needs_login_page(page)
+    except Exception as exc:
+        logger.debug("ContactOut session check failed: %s", exc)
+        return False
+    finally:
+        if context:
+            try:
+                context.close()
+            except Exception:
+                pass
+        playwright.stop()
+
+
+def dashboard_may_be_needed() -> bool:
+    if sys.platform != "darwin":
+        return False
+    mode = os.environ.get("CONTACTOUT_MODE", "auto").strip().lower()
+    if mode == "api":
+        return False
+    if mode == "dashboard":
+        return True
+    from src.enrich.contactout_api import ContactOutApiClient
+    from src.enrich.contactout_hybrid import api_phone_credits_exhausted
+
+    api = ContactOutApiClient()
+    if not api.is_configured:
+        return True
+    return api_phone_credits_exhausted()
+
+
+def ensure_contactout_session(*, timeout_sec: int = 300) -> bool:
+    """Ensure a logged-in ContactOut dashboard session exists."""
+    if sys.platform != "darwin":
+        return False
+    if not dashboard_may_be_needed():
+        return False
+
+    if _session_check_with_playwright(headless=True):
+        logger.info("ContactOut dashboard session is ready")
+        return True
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        logger.warning(
+            "Playwright not installed — run: pip install -e '.[dashboard]' && playwright install chrome"
+        )
+        return False
+
+    profile = browser_profile_dir()
+    profile.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "ContactOut login required — opening Chrome (sign in at contactout.com; session saves to %s)",
+        profile,
+    )
+
+    playwright = sync_playwright().start()
+    context: Any | None = None
+    try:
+        launch_kwargs: dict[str, Any] = {
+            "user_data_dir": str(profile),
+            "headless": False,
+            "viewport": {"width": 1440, "height": 900},
+            "args": ["--disable-blink-features=AutomationControlled"],
+        }
+        try:
+            context = playwright.chromium.launch_persistent_context(
+                channel="chrome",
+                **launch_kwargs,
+            )
+        except Exception:
+            context = playwright.chromium.launch_persistent_context(**launch_kwargs)
+
+        page = context.pages[0] if context.pages else context.new_page()
+        page.goto(CONTACTOUT_LOGIN_URL, wait_until="domcontentloaded", timeout=45000)
+
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            try:
+                if not _needs_login_page(page):
+                    logger.info("ContactOut dashboard session saved")
+                    return True
+            except Exception:
+                pass
+            page.wait_for_timeout(2000)
+
+        logger.warning("ContactOut login timed out after %ds", timeout_sec)
+        return False
+    except Exception as exc:
+        logger.warning("ContactOut interactive login failed: %s", exc)
+        return False
+    finally:
+        if context:
+            try:
+                context.close()
+            except Exception:
+                pass
+        playwright.stop()
+
+
+def prepare_contactout_dashboard() -> bool:
+    """Called at pipeline start — ensures dashboard login when needed."""
+    if not dashboard_may_be_needed():
+        return True
+    return ensure_contactout_session()
+
+
 class ContactOutDashboardClient:
     """ContactOut via logged-in Chrome dashboard (Mac mini). No LinkedIn browsing."""
 
@@ -118,12 +263,7 @@ class ContactOutDashboardClient:
         return self._page
 
     def _needs_login(self, page: Any) -> bool:
-        url = page.url.lower()
-        if "/login" in url or "/register" in url:
-            return True
-        if page.locator('input[type="password"]').count() > 0:
-            return True
-        return False
+        return _needs_login_page(page)
 
     def _click_reveal_buttons(self, page: Any) -> None:
         patterns = [
@@ -228,9 +368,14 @@ class ContactOutDashboardClient:
         page.wait_for_timeout(1200)
 
         if self._needs_login(page):
-            raise RuntimeError(
-                "ContactOut session expired. Run: python scripts/contactout_login.py"
-            )
+            if not ensure_contactout_session(timeout_sec=120):
+                raise RuntimeError(
+                    "ContactOut session expired — complete login in the Chrome window or run: python scripts/contactout_login.py"
+                )
+            page.goto(CONTACTOUT_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
+            page.wait_for_timeout(1200)
+            if self._needs_login(page):
+                raise RuntimeError("ContactOut login still required after ensure_contactout_session")
 
         search_selectors = [
             'input[placeholder*="Search" i]',

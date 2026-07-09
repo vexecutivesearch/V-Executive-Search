@@ -153,59 +153,9 @@ def main() -> int:
         logger.error("iMessage checks only work on macOS with Messages signed in")
         return 1
 
-    load_dotenv(WORKER_ROOT / ".env")
-    base_url = os.environ.get("CRM_API_URL", "")
-    api_key = os.environ.get("CRM_API_KEY", "")
-    if not base_url or not api_key:
-        logger.error("Set CRM_API_URL and CRM_API_KEY in worker/.env")
-        return 1
-
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-
-    try:
-        contacts = fetch_contacts(base_url, api_key, args.limit * 2)
-    except requests.RequestException as exc:
-        logger.error("Could not fetch contacts: %s", exc)
-        return 1
-
-    checked = 0
-    for contact in contacts:
-        if checked >= args.limit:
-            break
-        if contact.get("imessageCapable") is not None or contact.get("imessage_capable") is not None:
-            continue
-
-        addresses: list[str] = []
-        for key in ("personalEmail", "personal_email"):
-            val = contact.get(key)
-            if val and isinstance(val, str) and "@" in val:
-                addresses.append(val.strip())
-
-        seen: set[str] = set()
-        for address in addresses:
-            if address in seen:
-                continue
-            seen.add(address)
-
-            capable = check_imessage(address)
-            if capable is None:
-                logger.info("  ? %s — could not determine", address)
-                continue
-
-            patch_imessage(base_url, api_key, contact["id"], capable)
-            label = "iMessage" if capable else "SMS only"
-            logger.info(
-                "✓ %s (%s) — %s via %s",
-                contact.get("name"),
-                contact.get("companyName") or contact.get("company_name"),
-                label,
-                address,
-            )
-            checked += 1
-            time.sleep(args.delay)
-            break
-
-    logger.info("Done — checked %d contact(s)", checked)
+    n = run_imessage_checks(limit=args.limit, delay=args.delay)
+    logger.info("Done — checked %d contact(s)", n)
     return 0
 
 

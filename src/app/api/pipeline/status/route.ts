@@ -13,6 +13,8 @@ export async function GET(request: NextRequest) {
   const settings = await getOrCreateSettings();
   return NextResponse.json({
     run_requested_at: settings.runRequestedAt?.toISOString() ?? null,
+    contactout_sync_requested_at:
+      settings.contactoutSyncRequestedAt?.toISOString() ?? null,
     last_run_at: settings.lastRunAt?.toISOString() ?? null,
   });
 }
@@ -33,6 +35,14 @@ export async function POST(request: NextRequest) {
     await db
       .update(pipelineSettings)
       .set({ runRequestedAt: null, updatedAt: new Date() })
+      .where(eq(pipelineSettings.id, settings.id));
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.action === "clear_contactout_sync_request") {
+    await db
+      .update(pipelineSettings)
+      .set({ contactoutSyncRequestedAt: null, updatedAt: new Date() })
       .where(eq(pipelineSettings.id, settings.id));
     return NextResponse.json({ ok: true });
   }

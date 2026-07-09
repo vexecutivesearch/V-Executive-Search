@@ -45,6 +45,7 @@ export const pipelineSettings = pgTable("pipeline_settings", {
     .default("hello@proventheory.co")
     .notNull(),
   runRequestedAt: timestamp("run_requested_at"),
+  contactoutSyncRequestedAt: timestamp("contactout_sync_requested_at"),
   lastRunAt: timestamp("last_run_at"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
