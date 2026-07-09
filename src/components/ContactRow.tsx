@@ -7,7 +7,8 @@ import {
   sortPhonesForDisplay,
   sourceLabel,
 } from "@/lib/contact-phones";
-import { isPersonalEmail } from "@/lib/phone-utils";
+import { isPersonalEmail, parsePhoneValue } from "@/lib/phone-utils";
+import { ImessageIndicator } from "./ImessageIndicator";
 
 function ContactLocationNote({
   jobLocation,
@@ -100,19 +101,11 @@ export function ContactRow({
             >
               {personalEmail}
             </a>
-            {contact.imessageCapable === true && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200 font-medium">
-                iMessage ✓
-              </span>
-            )}
-            {contact.imessageCapable === false && (
-              <span className="text-[10px] text-gray-400">SMS only</span>
-            )}
-            {contact.imessageCapable == null && personalEmail && (
-              <span className="text-[10px] text-gray-400 italic">
-                iMessage check pending
-              </span>
-            )}
+            <ImessageIndicator
+              contactId={contact.id}
+              capable={contact.imessageCapable}
+              personalEmail={personalEmail}
+            />
           </div>
         )}
 
@@ -148,10 +141,10 @@ export function ContactRow({
                 {sourceLabel(p.source)} · {phoneKindLabel(p.kind)}
               </span>
               <a
-                href={`tel:${p.number}`}
+                href={`tel:${parsePhoneValue(p.number) ?? p.number}`}
                 className="text-gray-800 dark:text-gray-200 hover:underline"
               >
-                {p.number}
+                {parsePhoneValue(p.number) ?? p.number}
               </a>
             </div>
           ))

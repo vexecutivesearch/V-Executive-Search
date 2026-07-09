@@ -30,6 +30,9 @@ def main() -> int:
         except Exception:
             pass
 
+        status = get_pipeline_status()
+        imessage_limit = 50 if status.get("imessage_check_requested_at") else 20
+
         try:
             import importlib.util
 
@@ -38,9 +41,11 @@ def main() -> int:
             if spec and spec.loader:
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
-                n = mod.run_imessage_checks(limit=20, delay=1.5)
+                n = mod.run_imessage_checks(limit=imessage_limit, delay=1.5)
                 if n:
                     logging.info("iMessage poll tagged %d contact(s)", n)
+                if status.get("imessage_check_requested_at"):
+                    post_pipeline_status("clear_imessage_check_request")
         except Exception as exc:
             logging.warning("iMessage poll pass failed (non-fatal): %s", exc)
 

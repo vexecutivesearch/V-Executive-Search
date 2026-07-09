@@ -48,7 +48,7 @@ export function extractApolloPhones(
 
   for (const entry of phones) {
     const number = parsePhoneValue(
-      entry.sanitized_number || entry.raw_number || entry.number,
+      entry.sanitized_number ?? entry.raw_number ?? entry.number,
     );
     if (!number) continue;
     out.push({
@@ -65,7 +65,7 @@ export function extractApolloPhones(
     ["direct_phone", "work"],
     ["corporate_phone", "company"],
   ] as const) {
-    const number = parsePhoneValue(String(person[field] ?? ""));
+    const number = parsePhoneValue(person[field]);
     if (number) {
       out.push({ number, source: "apollo", kind });
     }
@@ -79,7 +79,7 @@ export function extractApolloPhones(
       "sanitized_phone",
       "primary_phone_number",
     ]) {
-      const number = parsePhoneValue(String(org[field] ?? ""));
+      const number = parsePhoneValue(org[field]);
       if (number) {
         out.push({ number, source: "apollo", kind: "company" });
         break;
@@ -263,18 +263,24 @@ export function contactPhonesForDisplay(contact: {
     });
   }
   if (contact.phone && contact.phone !== contact.personalPhone) {
-    legacy.push({
-      number: contact.phone,
-      source: "apollo",
-      kind: "mobile",
-    });
+    const phone = parsePhoneValue(contact.phone);
+    if (phone) {
+      legacy.push({
+        number: phone,
+        source: "apollo",
+        kind: "mobile",
+      });
+    }
   }
   if (contact.companyPhone) {
-    legacy.push({
-      number: contact.companyPhone,
-      source: "apollo",
-      kind: "company",
-    });
+    const company = parsePhoneValue(contact.companyPhone);
+    if (company) {
+      legacy.push({
+        number: company,
+        source: "apollo",
+        kind: "company",
+      });
+    }
   }
   return dedupeSourcedPhones(legacy);
 }

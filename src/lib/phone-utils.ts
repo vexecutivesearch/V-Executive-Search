@@ -3,11 +3,21 @@ export function phoneDigits(phone: string): string {
   return phone.replace(/\D/g, "");
 }
 
-/** Parse Apollo JSON phone blobs or plain strings. */
-export function parsePhoneValue(raw: string | null | undefined): string | null {
-  if (!raw) return null;
+/** Parse Apollo JSON phone blobs, nested objects, or plain strings. */
+export function parsePhoneValue(raw: unknown): string | null {
+  if (raw == null) return null;
+  if (typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    return (
+      parsePhoneValue(obj.sanitized_number) ??
+      parsePhoneValue(obj.number) ??
+      parsePhoneValue(obj.raw_number)
+    );
+  }
+  if (typeof raw !== "string") return null;
+
   const trimmed = raw.trim();
-  if (!trimmed) return null;
+  if (!trimmed || trimmed === "[object Object]") return null;
 
   if (trimmed.startsWith("{")) {
     try {

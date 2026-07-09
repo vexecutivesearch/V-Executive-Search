@@ -9,6 +9,7 @@ import { refreshCompanyContactsFromContactOut } from "@/lib/refresh-company-cont
 import { db } from "@/lib/db";
 import { companies, contacts, jobListings } from "@/lib/db/schema";
 import { getCompanyById } from "@/lib/queries";
+import { requestImessageCheck } from "@/lib/imessage-check";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -209,6 +210,14 @@ export async function POST(
 
   const updatedCompany = await getCompanyById(id);
   const existingCount = updatedCompany?.contacts.length ?? totalContacts;
+
+  if (
+    updatedCompany?.contacts.some(
+      (c) => c.personalEmail && c.imessageCapable == null,
+    )
+  ) {
+    await requestImessageCheck();
+  }
 
   let message: string | undefined;
   if (

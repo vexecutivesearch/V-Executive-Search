@@ -15,6 +15,8 @@ export async function GET(request: NextRequest) {
     run_requested_at: settings.runRequestedAt?.toISOString() ?? null,
     contactout_sync_requested_at:
       settings.contactoutSyncRequestedAt?.toISOString() ?? null,
+    imessage_check_requested_at:
+      settings.imessageCheckRequestedAt?.toISOString() ?? null,
     last_run_at: settings.lastRunAt?.toISOString() ?? null,
     worker_last_seen_at: settings.workerLastSeenAt?.toISOString() ?? null,
   });
@@ -44,6 +46,14 @@ export async function POST(request: NextRequest) {
     await db
       .update(pipelineSettings)
       .set({ contactoutSyncRequestedAt: null, updatedAt: new Date() })
+      .where(eq(pipelineSettings.id, settings.id));
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.action === "clear_imessage_check_request") {
+    await db
+      .update(pipelineSettings)
+      .set({ imessageCheckRequestedAt: null, updatedAt: new Date() })
       .where(eq(pipelineSettings.id, settings.id));
     return NextResponse.json({ ok: true });
   }
