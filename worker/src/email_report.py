@@ -20,8 +20,6 @@ def send_daily_report(
         logger.warning("RESEND_API_KEY not set — skipping daily email report")
         return False
 
-    from_email = os.environ.get("REPORT_FROM_EMAIL", "reports@proventheory.co")
-
     contact_rows = [r for r in rows if r.get("email") or r.get("phone")]
     html_rows = ""
     for r in contact_rows:
@@ -68,6 +66,16 @@ def send_daily_report(
     </body></html>
     """
 
+    from_email = os.environ.get("REPORT_FROM_EMAIL", "onboarding@resend.dev")
+    fallback_from = "V Executive Search <onboarding@resend.dev>"
+
+    payload = {
+        "from": from_email,
+        "to": [to_email],
+        "subject": f"Daily List — {geo_label} — {run_date}",
+        "html": html,
+    }
+
     try:
         resp = requests.post(
             "https://api.resend.com/emails",
@@ -75,14 +83,25 @@ def send_daily_report(
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "from": from_email,
-                "to": [to_email],
-                "subject": f"Daily List — {geo_label} — {run_date}",
-                "html": html,
-            },
+            json=payload,
             timeout=30,
         )
+        if resp.status_code == 403 and "domain is not verified" in resp.text.lower():
+            logger.warning(
+                "From address %s not verified on Resend — retrying with %s",
+                from_email,
+                fallback_from,
+            )
+            payload["from"] = fallback_from
+            resp = requests.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=30,
+            )
         resp.raise_for_status()
         logger.info("Daily report emailed to %s", to_email)
         return True
