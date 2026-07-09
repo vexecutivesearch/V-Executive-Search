@@ -1,5 +1,13 @@
 # Deploying the CRM to Vercel + Neon
 
+## Status
+
+- [x] GitHub repo: `git@github.com:proventheory/V-Executive-Search.git`
+- [x] Neon project created: **V-Executive-Search** (`late-haze-93186484`)
+- [x] Database schema pushed (companies, contacts, job_listings, daily_runs)
+- [x] Local env files written (`crm/.env.local`, `worker/.env`)
+- [ ] Vercel deploy (requires your Vercel login — see step 4 below)
+
 ## 1. Neon database
 
 1. Go to [neon.tech](https://neon.tech) and create a free project
@@ -28,15 +36,29 @@ Use the output as `WORKER_API_KEY` in both:
 - `crm/.env.local` (and Vercel env vars)
 - `worker/.env` as `CRM_API_KEY`
 
-## 4. Vercel deploy
+## 4. Vercel deploy (do this now)
 
-1. Push the repo to GitHub
-2. [vercel.com/new](https://vercel.com/new) → Import repo
-3. Set **Root Directory** to `crm`
-4. Add environment variables:
-   - `DATABASE_URL` = your Neon connection string
-   - `WORKER_API_KEY` = the shared secret from step 3
-5. Deploy
+1. Go to [vercel.com/new](https://vercel.com/new)
+2. Import **proventheory/V-Executive-Search** from GitHub
+3. Set **Root Directory** to `crm` (click Edit → enter `crm`)
+4. Add environment variables (copy from your local `crm/.env.local`):
+   - `DATABASE_URL` = Neon connection string
+   - `WORKER_API_KEY` = same value as in `crm/.env.local`
+5. Click **Deploy**
+6. After deploy, copy your Vercel URL (e.g. `https://v-executive-search.vercel.app`)
+7. Update `worker/.env`:
+   ```
+   CRM_API_URL=https://your-actual-url.vercel.app
+   ```
+
+Or via CLI after `npx vercel login`:
+
+```bash
+cd crm
+npx vercel --prod
+npx vercel env add DATABASE_URL production
+npx vercel env add WORKER_API_KEY production
+```
 
 ## 5. Configure Mac mini worker
 
