@@ -23,11 +23,14 @@ python scripts/run_daily.py --limit 3    # test with 3 companies
 python scripts/health_check.py           # smoke test all integrations
 ```
 
-## Schedule on Mac (Mac mini / MacBook)
+## Schedule on Mac (Mac mini — one machine only)
 
-Must run on a **home Mac with residential IP** (job boards block cloud servers).
+Must run on a **home Mac with residential IP** (job boards block cloud servers).  
+Use a **dedicated worker Mac** (e.g. Mac mini). Your MacBook can use `/admin` in a browser but should not run launchd if the mini is the worker.
 
-**One-command setup** (clone repo first):
+> **New machine?** Full checklist: [DEPLOY.md](../DEPLOY.md) (Vercel + Neon + Mac worker + ContactOut identities).
+
+**One-command setup** (on the worker Mac, as the macOS user that will own launchd):
 
 ```bash
 cd worker
@@ -43,12 +46,13 @@ chmod +x scripts/install_launchd.sh
 ./scripts/install_launchd.sh
 ```
 
-This installs two launchd agents:
+This installs three launchd agents:
 
 | Agent | Schedule | Purpose |
 |-------|----------|---------|
 | `com.vexecsearch.daily` | 6:00 AM & 6:00 PM daily | Scrape → Apollo + ContactOut enrich → CRM → iMessage tags |
-| `com.vexecsearch.poll` | Every 5 minutes | Picks up **Run now** from admin on your phone |
+| `com.vexecsearch.poll` | Every 5 minutes | Picks up **Run now** / ContactOut sync from admin |
+| `com.vexecsearch.contactout-keepalive` | Every 5 hours | Refreshes ContactOut session cookies (Layer 0) |
 
 Verify:
 
@@ -58,21 +62,37 @@ tail -f logs/launchd_stdout.log
 tail -f logs/poll_stdout.log
 ```
 
-Unload:
+Unload (e.g. when moving worker to a new Mac):
 
 ```bash
 launchctl bootout gui/$(id -u)/com.vexecsearch.daily
 launchctl bootout gui/$(id -u)/com.vexecsearch.poll
+launchctl bootout gui/$(id -u)/com.vexecsearch.contactout-keepalive
 ```
+
+### MacBook vs Mac mini
+
+| | MacBook (dev / admin) | Mac mini (worker) |
+|--|----------------------|-------------------|
+| `/admin` in browser | Yes | Optional |
+| `worker/.env` | Optional for testing | **Required** |
+| launchd | **No** (if mini is worker) | **Yes** |
+| `.contactout-session.json` | Not used | Created via `contactout_login.py` |
+| Keychain ContactOut password | Not used | `contactout_store_credentials.py` |
+| iMessage checks | Only if worker | Yes, if Messages signed in |
+
+See [DEPLOY.md](../DEPLOY.md) for greenfield setup and identity separation (macOS user vs ContactOut email vs alert inbox).
 
 ## Config
 
 Primary config is the **Admin UI** at `/admin` (geo focus, job titles, email).  
 When `CONTACTOUT_API_KEY` is set (or `CONTACTOUT_MODE=dashboard` on Mac), the pipeline runs **Apollo → ContactOut**.
 
-### ContactOut dashboard mode (Mac mini — unlimited plan workaround)
+### ContactOut dashboard mode (Mac worker — unlimited plan workaround)
 
 Use this when your ContactOut plan includes unlimited lookups in the **web dashboard** but not phone credits on the API.
+
+**Run all steps on the worker Mac** (the macOS user that owns launchd). Credentials and session files do not sync from a MacBook.
 
 1. Install Playwright in the worker venv:
    ```bash
@@ -83,13 +103,14 @@ Use this when your ContactOut plan includes unlimited lookups in the **web dashb
    ```bash
    python scripts/contactout_login.py
    ```
-3. In `worker/.env`:
+3. In `worker/.env` on the **worker Mac**:
    ```bash
    CONTACTOUT_MODE=auto
+   CONTACTOUT_KEYCHAIN_ACCOUNT=your-contactout-login@company.com   # not your macOS username
    ```
-   For launchd/cron, pin the session path (absolute):
+   Pin absolute paths (required for launchd):
    ```bash
-   CONTACTOUT_SESSION_FILE=/Users/you/path/V Executive Search/worker/.contactout-session.json
+   CONTACTOUT_SESSION_FILE=/Users/worker-macos-user/path/to/repo/worker/.contactout-session.json
    ```
 4. The **5-minute poll** trickles dashboard lookups (`contactout_dashboard_sync.py`, 2 contacts per poll, 60–150s apart). Background runs use **headless Playwright Chromium** with the saved session file.
 
@@ -118,7 +139,9 @@ Re-run `./scripts/install_launchd.sh` to add the keepalive agent. ContactOut das
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `CONTACTOUT_SESSION_FILE` | `worker/.contactout-session.json` | Saved login cookies (use absolute path for launchd) |
+| `CONTACTOUT_SESSION_FILE` | `worker/.contactout-session.json` | Saved login cookies (**absolute path** on worker Mac) |
+| `CONTACTOUT_KEYCHAIN_ACCOUNT` | — | ContactOut login email for Keychain lookup |
+| `CONTACTOUT_KEYCHAIN_SERVICE` | `v-execsearch-contactout` | Keychain service name |
 | `CONTACTOUT_DASHBOARD_DELAY_MIN` | 60 | Min seconds between lookups |
 | `CONTACTOUT_DASHBOARD_DELAY_MAX` | 150 | Max seconds between lookups |
 | `CONTACTOUT_HEADLESS` | true | Set `false` to debug the browser |
@@ -145,3 +168,5 @@ python scripts/check_imessage.py --limit 20
 | `REPORT_FROM_EMAIL` | worker `.env` | Email sender address |
 | `APOLLO_API_KEY` | worker `.env` + Vercel | Discovery + work email (Enrich button) |
 | `CONTACTOUT_API_KEY` | worker `.env` + Vercel | Personal email/mobile via LinkedIn |
+
+Full greenfield / multi-machine guide: [DEPLOY.md](../DEPLOY.md).
