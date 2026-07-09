@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { CompanyCardData } from "./CompanyCard";
 import { TodayListRow } from "./TodayListRow";
 import { contactIsCallable } from "@/lib/lead-score";
+import type { ListDateRange } from "@/lib/list-date-range";
+import { backlogSummaryLabel } from "@/lib/list-date-range";
 import type { dailyRuns } from "@/lib/db/schema";
 
 const DISCLAIMER_KEY = "today-list-location-disclaimer-dismissed";
@@ -17,6 +19,7 @@ export function TodayListView({
   listMode = "call-sheet",
   runStats,
   backlogCount,
+  listRange,
   showFunnel = true,
 }: {
   companies: CompanyCardData[];
@@ -24,6 +27,7 @@ export function TodayListView({
   listMode?: ListMode;
   runStats?: typeof dailyRuns.$inferSelect | null;
   backlogCount?: number;
+  listRange?: ListDateRange;
   showFunnel?: boolean;
 }) {
   const [search, setSearch] = useState("");
@@ -100,11 +104,15 @@ export function TodayListView({
 
   const funnelLabel = runStats
     ? [
-        `Today scraped ${runStats.listingsScraped ?? 0} listings · ${runStats.companiesFound ?? 0} new companies`,
+        listRange?.isToday
+          ? `Today scraped ${runStats.listingsScraped ?? 0} listings · ${runStats.companiesFound ?? 0} new companies`
+          : `Pipeline run ${listRange?.snapshotDate ?? ""}: ${runStats.listingsScraped ?? 0} listings · ${runStats.companiesFound ?? 0} new companies`,
         `Enriched ${runStats.companiesEnriched ?? 0} · ${runStats.contactsEnriched ?? 0} contacts · ${runStats.creditsUsed ?? 0} credits`,
-        backlogCount != null
-          ? `${backlogCount} in ranked backlog (all days, awaiting enrich)`
-          : null,
+        backlogCount != null && listRange
+          ? backlogSummaryLabel(listRange, backlogCount)
+          : backlogCount != null
+            ? `${backlogCount} in ranked backlog`
+            : null,
         (runStats.icpMatchCount ?? 0) > 0
           ? `${runStats.icpMatchCount} ICP-pass companies scored`
           : null,
@@ -200,6 +208,9 @@ export function TodayListView({
         <p className="text-xs text-gray-500 mt-2">
           Showing {filtered.length} of {companies.length}{" "}
           {listMode === "backlog" ? "backlog leads" : "call sheet leads"}
+          {listMode === "backlog" && listRange && !listRange.isToday && (
+            <> · snapshot as of {listRange.snapshotDate}</>
+          )}
           {sort === "score" && " · ranked by lead score"}
         </p>
       </div>

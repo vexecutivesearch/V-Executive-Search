@@ -4,16 +4,17 @@ import { TodayListView } from "@/components/TodayListView";
 import { TodayDatePicker } from "@/components/TodayDatePicker";
 import {
   countCallableCompanies,
-  getBacklogCompanies,
+  getBacklogForDateRange,
   getCallSheetCompanies,
   getLatestRunStats,
   getTodayGeoLabel,
 } from "@/lib/queries";
 import {
-  businessListDate,
-  businessListWindowLabel,
-  resolveListDate,
-} from "@/lib/timezone";
+  backlogSummaryLabel,
+  listDateRangeLabel,
+  resolveListDateRange,
+} from "@/lib/list-date-range";
+import { businessListDate } from "@/lib/timezone";
 
 export const dynamic = "force-dynamic";
 
@@ -22,12 +23,17 @@ type ListTab = "call-sheet" | "backlog";
 export default async function TodayPage({
   searchParams,
 }: {
-  searchParams: Promise<{ date?: string; tab?: string }>;
+  searchParams: Promise<{ date?: string; from?: string; to?: string; tab?: string }>;
 }) {
-  const { date: dateParam, tab: tabParam } = await searchParams;
+  const params = await searchParams;
+  const { date: dateParam, from: fromParam, to: toParam, tab: tabParam } = params;
   const tab: ListTab = tabParam === "backlog" ? "backlog" : "call-sheet";
-  const listDate = resolveListDate(dateParam);
-  const listLabel = businessListWindowLabel(dateParam);
+  const listRange = resolveListDateRange({
+    date: dateParam,
+    from: fromParam,
+    to: toParam,
+  });
+  const listLabel = listDateRangeLabel(listRange);
   const currentBusinessDate = businessListDate();
 
   let callSheetCompanies;
@@ -36,9 +42,9 @@ export default async function TodayPage({
   let geoLabel = "your focus area";
   try {
     [callSheetCompanies, backlogCompanies, runStats, geoLabel] = await Promise.all([
-      getCallSheetCompanies(dateParam),
-      getBacklogCompanies(),
-      getLatestRunStats(dateParam),
+      getCallSheetCompanies(listRange),
+      getBacklogForDateRange(listRange),
+      getLatestRunStats(listRange.snapshotDate),
       getTodayGeoLabel(),
     ]);
   } catch {
@@ -58,14 +64,22 @@ export default async function TodayPage({
 
   const companies = tab === "backlog" ? backlogCompanies : callSheetCompanies;
   const callableCount = countCallableCompanies(callSheetCompanies);
+  const backlogLabel = backlogSummaryLabel(listRange, backlogCompanies.length);
 
   function tabHref(nextTab: ListTab) {
-    const params = new URLSearchParams();
-    if (dateParam) params.set("date", dateParam);
-    if (nextTab === "backlog") params.set("tab", "backlog");
-    const qs = params.toString();
-    return qs ? `/today?${qs}` : "/today";
+    const qs = new URLSearchParams();
+    if (listRange.mode === "range") {
+      qs.set("from", listRange.from);
+      qs.set("to", listRange.to);
+    } else if (!listRange.isToday) {
+      qs.set("date", listRange.from);
+    }
+    if (nextTab === "backlog") qs.set("tab", "backlog");
+    const s = qs.toString();
+    return s ? `/today?${s}` : "/today";
   }
+
+  const callSheetTabLabel = `Call sheet (${callSheetCompanies.length})`;
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
@@ -74,7 +88,12 @@ export default async function TodayPage({
         <p className="text-gray-500 dark:text-gray-400 mt-1">{listLabel}</p>
         <p className="text-sm text-gray-400 mt-1">
           {callSheetCompanies.length}{" "}
-          {callSheetCompanies.length === 1 ? "lead" : "leads"} enriched today
+          {callSheetCompanies.length === 1 ? "lead" : "leads"} enriched
+          {listRange.mode === "range"
+            ? ` ${listRange.from === listRange.to ? "on this day" : "in range"}`
+            : listRange.isToday
+              ? " today"
+              : " on this day"}
           {callableCount > 0 && (
             <>
               {" "}
@@ -82,11 +101,11 @@ export default async function TodayPage({
             </>
           )}
           {" "}
-          · {backlogCompanies.length} ranked backlog (all days) · {geoLabel}
+          · {backlogLabel} · {geoLabel}
         </p>
         <Suspense fallback={null}>
           <TodayDatePicker
-            selectedDate={listDate}
+            selectedRange={listRange}
             currentBusinessDate={currentBusinessDate}
           />
         </Suspense>
@@ -101,7 +120,7 @@ export default async function TodayPage({
               : "border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800"
           }`}
         >
-          Call sheet ({callSheetCompanies.length})
+          {callSheetTabLabel}
         </Link>
         <Link
           href={tabHref("backlog")}
@@ -119,13 +138,15 @@ export default async function TodayPage({
         <div className="text-center py-16 text-gray-400">
           <p className="text-lg">
             {tab === "backlog"
-              ? "Backlog is empty"
-              : "No call sheet leads for this business day"}
+              ? "No backlog for this date"
+              : "No call sheet leads for this period"}
           </p>
           <p className="text-sm mt-2">
             {tab === "backlog"
-              ? "New scraped companies appear here until they are enriched."
-              : "The nightly enrich stage populates today's ranked call sheet. Pick another date or check the backlog."}
+              ? listRange.isToday
+                ? "New scraped companies appear here until they are enriched."
+                : "Backlog is reconstructed from scrape dates, enrich history, and contacts as of the selected day."
+              : "The nightly enrich stage populates the ranked call sheet. Pick another date or check the backlog."}
           </p>
         </div>
       ) : (
@@ -135,6 +156,7 @@ export default async function TodayPage({
           listMode={tab}
           runStats={runStats}
           backlogCount={backlogCompanies.length}
+          listRange={listRange}
         />
       )}
     </div>

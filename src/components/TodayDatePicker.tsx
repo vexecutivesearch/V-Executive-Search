@@ -2,54 +2,104 @@
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
+import type { ListDateRange } from "@/lib/list-date-range";
 
 export function TodayDatePicker({
-  selectedDate,
+  selectedRange,
   currentBusinessDate,
 }: {
-  selectedDate: string;
+  selectedRange: ListDateRange;
   currentBusinessDate: string;
 }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [, startTransition] = useTransition();
-  const isToday = selectedDate === currentBusinessDate;
+  const isToday = selectedRange.isToday;
 
-  function navigate(date: string | null) {
+  function navigate(from: string, to: string) {
     const params = new URLSearchParams(searchParams.toString());
-    if (date && date !== currentBusinessDate) {
-      params.set("date", date);
-    } else {
-      params.delete("date");
+    params.delete("date");
+    params.delete("from");
+    params.delete("to");
+
+    const isDefault =
+      from === currentBusinessDate && to === currentBusinessDate;
+
+    if (!isDefault) {
+      if (from === to) {
+        params.set("date", from);
+      } else {
+        params.set("from", from);
+        params.set("to", to);
+      }
     }
+
     const qs = params.toString();
     startTransition(() => {
       router.push(qs ? `${pathname}?${qs}` : pathname);
     });
   }
 
+  function onFromChange(value: string) {
+    if (!value) return;
+    const to =
+      selectedRange.to >= value ? selectedRange.to : value;
+    navigate(value, to);
+  }
+
+  function onToChange(value: string) {
+    if (!value) return;
+    const from =
+      selectedRange.from <= value ? selectedRange.from : value;
+    navigate(from, value);
+  }
+
   return (
-    <div className="flex flex-wrap items-center gap-2 mt-3">
-      <label
-        htmlFor="list-date"
-        className="text-sm text-gray-500 dark:text-gray-400"
-      >
-        Business day
-      </label>
-      <input
-        id="list-date"
-        type="date"
-        value={selectedDate}
-        max={currentBusinessDate}
-        onChange={(e) => navigate(e.target.value || null)}
-        className="text-sm border border-gray-200 dark:border-gray-700 rounded-md px-3 py-1.5 bg-white dark:bg-gray-900"
-      />
+    <div className="flex flex-wrap items-end gap-3 mt-3">
+      <div>
+        <label
+          htmlFor="list-from"
+          className="block text-xs text-gray-500 dark:text-gray-400 mb-1"
+        >
+          From
+        </label>
+        <input
+          id="list-from"
+          type="date"
+          value={selectedRange.from}
+          max={currentBusinessDate}
+          onChange={(e) => onFromChange(e.target.value)}
+          className="text-sm border border-gray-200 dark:border-gray-700 rounded-md px-3 py-1.5 bg-white dark:bg-gray-900"
+        />
+      </div>
+      <div>
+        <label
+          htmlFor="list-to"
+          className="block text-xs text-gray-500 dark:text-gray-400 mb-1"
+        >
+          To
+        </label>
+        <input
+          id="list-to"
+          type="date"
+          value={selectedRange.to}
+          min={selectedRange.from}
+          max={currentBusinessDate}
+          onChange={(e) => onToChange(e.target.value)}
+          className="text-sm border border-gray-200 dark:border-gray-700 rounded-md px-3 py-1.5 bg-white dark:bg-gray-900"
+        />
+      </div>
+      {selectedRange.mode === "range" && (
+        <p className="text-xs text-gray-400 pb-2">
+          Date range · backlog snapshot as of end date
+        </p>
+      )}
       {!isToday && (
         <button
           type="button"
-          onClick={() => navigate(null)}
-          className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+          onClick={() => navigate(currentBusinessDate, currentBusinessDate)}
+          className="text-sm text-blue-600 dark:text-blue-400 hover:underline pb-2"
         >
           Back to today
         </button>

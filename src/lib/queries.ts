@@ -1,4 +1,4 @@
-import { and, count, desc, eq, ilike, inArray, isNull, ne, not, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, ilike, inArray, isNull, lte, ne, not, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   companies,
@@ -9,10 +9,25 @@ import {
   CompanyStatus,
 } from "@/lib/db/schema";
 import { CompanyCardData } from "@/components/CompanyCard";
-import { firstSeenDatesForListQuery, businessListDate } from "@/lib/timezone";
+import { businessListDate, BUSINESS_TIMEZONE } from "@/lib/timezone";
+import type { ListDateRange } from "@/lib/list-date-range";
 import { applySharedLineFilter } from "@/lib/contact-phones";
 import { focusGeoLabel, getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
-import type { Contact } from "@/lib/db/schema";
+import type { Contact, JobListing } from "@/lib/db/schema";
+
+function etDateFromTimestamp(value: Date): string {
+  return value.toLocaleDateString("en-CA", { timeZone: BUSINESS_TIMEZONE });
+}
+
+function jobActiveOnDate(listing: JobListing, asOfDate: string): boolean {
+  if (etDateFromTimestamp(listing.firstSeenAt) > asOfDate) return false;
+  if (listing.archivedAt && etDateFromTimestamp(listing.archivedAt) <= asOfDate) {
+    return false;
+  }
+  const lastSeen =
+    listing.lastSeenRunDate ?? etDateFromTimestamp(listing.lastSeenAt);
+  return lastSeen >= asOfDate;
+}
 
 function hasCallableContact(contact: Contact): boolean {
   return Boolean(
@@ -24,35 +39,49 @@ function hasCallableContact(contact: Contact): boolean {
   );
 }
 
-/** Today's enriched call sheet — top-N JIT leads with callable contacts. */
+/** Call sheet — JIT-enriched leads with callable contacts for a day or range. */
 export async function getCallSheetCompanies(
-  listDateParam?: string,
+  listRange?: Pick<ListDateRange, "from" | "to" | "isToday">,
 ): Promise<CompanyCardData[]> {
-  const listDate = listDateParam ?? businessListDate();
+  const from = listRange?.from ?? businessListDate();
+  const to = listRange?.to ?? from;
+  const isToday =
+    listRange?.isToday ??
+    (from === businessListDate() && to === businessListDate());
   const geoSettings = await getGeoFocusSettings();
 
-  // Promote manual CRM enriches: callable contacts added today but no enrich_run_date yet.
-  await db.execute(sql`
-    UPDATE companies AS c
-    SET
-      enrich_run_date = ${listDate}::date,
-      enriched_at = COALESCE(c.enriched_at, NOW()),
-      updated_at = NOW()
-    WHERE c.status = 'new'
-      AND c.enrich_run_date IS NULL
-      AND EXISTS (
-        SELECT 1 FROM contacts AS ct
-        WHERE ct.company_id = c.id
-          AND (
-            ct.personal_phone IS NOT NULL
-            OR ct.phone IS NOT NULL
-            OR ct.personal_email IS NOT NULL
-            OR ct.email IS NOT NULL
-            OR ct.work_email IS NOT NULL
-          )
-          AND (ct.created_at AT TIME ZONE 'America/New_York')::date = ${listDate}::date
-      )
-  `);
+  // Promote manual CRM enriches on the current business day only.
+  if (isToday) {
+    await db.execute(sql`
+      UPDATE companies AS c
+      SET
+        enrich_run_date = ${from}::date,
+        enriched_at = COALESCE(c.enriched_at, NOW()),
+        updated_at = NOW()
+      WHERE c.status = 'new'
+        AND c.enrich_run_date IS NULL
+        AND EXISTS (
+          SELECT 1 FROM contacts AS ct
+          WHERE ct.company_id = c.id
+            AND (
+              ct.personal_phone IS NOT NULL
+              OR ct.phone IS NOT NULL
+              OR ct.personal_email IS NOT NULL
+              OR ct.email IS NOT NULL
+              OR ct.work_email IS NOT NULL
+            )
+            AND (ct.created_at AT TIME ZONE 'America/New_York')::date = ${from}::date
+        )
+    `);
+  }
+
+  const dateFilter =
+    from === to
+      ? eq(companies.enrichRunDate, from)
+      : and(
+          gte(companies.enrichRunDate, from),
+          lte(companies.enrichRunDate, to),
+        );
 
   const companiesRows = await db
     .select()
@@ -60,7 +89,7 @@ export async function getCallSheetCompanies(
     .where(
       and(
         eq(companies.status, "new"),
-        eq(companies.enrichRunDate, listDate),
+        dateFilter,
         not(ilike(companies.name, "(Listing)%")),
       ),
     )
@@ -75,42 +104,94 @@ export async function getCallSheetCompanies(
     .sort((a, b) => (b.leadScore ?? 0) - (a.leadScore ?? 0));
 }
 
-/** Ranked backlog — scraped in-focus companies awaiting enrichment. */
-export async function getBacklogCompanies(): Promise<CompanyCardData[]> {
+export type BacklogQueryOptions = {
+  asOfDate?: string;
+  firstSeenFrom?: string;
+  firstSeenTo?: string;
+};
+
+/** Ranked backlog snapshot — companies awaiting enrichment as of a business day. */
+export async function getBacklogCompanies(
+  options?: BacklogQueryOptions,
+): Promise<CompanyCardData[]> {
+  const asOfDate = options?.asOfDate ?? businessListDate();
+  const isCurrentDay = asOfDate === businessListDate();
   const geoSettings = await getGeoFocusSettings();
-  const today = businessListDate();
+
+  const conditions = [
+    ne(companies.icpStatus, "fail"),
+    not(ilike(companies.name, "(Listing)%")),
+    lte(companies.firstSeen, asOfDate),
+    or(
+      isNull(companies.enrichRunDate),
+      sql`${companies.enrichRunDate} > ${asOfDate}::date`,
+    ),
+    sql`NOT EXISTS (
+      SELECT 1 FROM contacts AS ct
+      WHERE ct.company_id = ${companies.id}
+        AND (
+          ct.personal_phone IS NOT NULL
+          OR ct.phone IS NOT NULL
+          OR ct.personal_email IS NOT NULL
+          OR ct.email IS NOT NULL
+          OR ct.work_email IS NOT NULL
+        )
+        AND (ct.created_at AT TIME ZONE 'America/New_York')::date <= ${asOfDate}::date
+    )`,
+  ];
+
+  if (isCurrentDay) {
+    conditions.push(eq(companies.status, "new"));
+  }
+
+  if (options?.firstSeenFrom) {
+    conditions.push(gte(companies.firstSeen, options.firstSeenFrom));
+  }
+  if (options?.firstSeenTo) {
+    conditions.push(lte(companies.firstSeen, options.firstSeenTo));
+  }
 
   const companiesRows = await db
     .select()
     .from(companies)
-    .where(
-      and(
-        eq(companies.status, "new"),
-        ne(companies.icpStatus, "fail"),
-        not(ilike(companies.name, "(Listing)%")),
-      ),
-    )
+    .where(and(...conditions))
     .orderBy(desc(companies.leadScore), desc(companies.updatedAt))
-    .limit(200);
+    .limit(500);
 
-  const enriched = await enrichCompanies(companiesRows, geoSettings);
+  const enriched = await enrichCompanies(companiesRows, geoSettings, {
+    asOfDate,
+  });
+
   return enriched
     .filter(
       (c) =>
         c.jobListings.length > 0 &&
-        !c.contacts.some(hasCallableContact) &&
-        c.enrichRunDate !== today,
+        !c.contacts.some(hasCallableContact),
     )
     .sort((a, b) => (b.leadScore ?? 0) - (a.leadScore ?? 0));
 }
 
+export async function getBacklogForDateRange(
+  range: ListDateRange,
+): Promise<CompanyCardData[]> {
+  if (range.mode === "range") {
+    return getBacklogCompanies({
+      asOfDate: range.snapshotDate,
+      firstSeenFrom: range.from,
+      firstSeenTo: range.to,
+    });
+  }
+  return getBacklogCompanies({ asOfDate: range.snapshotDate });
+}
+
 /** @deprecated Use getCallSheetCompanies — kept for compatibility. */
 export async function getDailyListCompanies(
-  listDateParam?: string,
+  listRange?: Pick<ListDateRange, "from" | "to" | "isToday">,
 ): Promise<CompanyCardData[]> {
-  const callSheet = await getCallSheetCompanies(listDateParam);
+  const callSheet = await getCallSheetCompanies(listRange);
   if (callSheet.length > 0) return callSheet;
-  return getBacklogCompanies();
+  const asOf = listRange?.to ?? listRange?.from;
+  return getBacklogCompanies(asOf ? { asOfDate: asOf } : undefined);
 }
 
 /** @deprecated Use getDailyListCompanies — kept for callers expecting callable-only. */
@@ -289,11 +370,13 @@ export async function getCompanyActivities(companyId: string) {
 async function enrichCompanies(
   rows: (typeof companies.$inferSelect)[],
   geoSettings?: Awaited<ReturnType<typeof getGeoFocusSettings>>,
+  options?: { asOfDate?: string },
 ): Promise<CompanyCardData[]> {
   if (rows.length === 0) return [];
 
   const settings = geoSettings ?? (await getGeoFocusSettings());
   const companyIds = rows.map((c) => c.id);
+  const asOfDate = options?.asOfDate;
 
   const [allContacts, allListings] = await Promise.all([
     db.select().from(contacts).where(inArray(contacts.companyId, companyIds)),
@@ -301,10 +384,12 @@ async function enrichCompanies(
       .select()
       .from(jobListings)
       .where(
-        and(
-          inArray(jobListings.companyId, companyIds),
-          isNull(jobListings.archivedAt),
-        ),
+        asOfDate
+          ? inArray(jobListings.companyId, companyIds)
+          : and(
+              inArray(jobListings.companyId, companyIds),
+              isNull(jobListings.archivedAt),
+            ),
       )
       .orderBy(desc(jobListings.createdAt)),
   ]);
@@ -327,8 +412,13 @@ async function enrichCompanies(
   }
 
   return rows.map((company) => {
-    const companyContacts = contactsByCompany.get(company.id) ?? [];
-    const listings = listingsByCompany.get(company.id) ?? [];
+    const companyContacts = (contactsByCompany.get(company.id) ?? []).filter(
+      (contact) =>
+        !asOfDate || etDateFromTimestamp(contact.createdAt) <= asOfDate,
+    );
+    const listings = (listingsByCompany.get(company.id) ?? []).filter(
+      (listing) => !asOfDate || jobActiveOnDate(listing, asOfDate),
+    );
     const inFocusListings = listings.filter((listing) =>
       jobLocationInFocus(listing.location, settings),
     );
