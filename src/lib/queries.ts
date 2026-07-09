@@ -1,4 +1,4 @@
-import { and, count, desc, eq, ilike, inArray, isNull, ne, not, or } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, isNull, ne, not, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   companies,
@@ -31,6 +31,29 @@ export async function getCallSheetCompanies(
   const listDate = listDateParam ?? businessListDate();
   const geoSettings = await getGeoFocusSettings();
 
+  // Promote manual CRM enriches: callable contacts added today but no enrich_run_date yet.
+  await db.execute(sql`
+    UPDATE companies AS c
+    SET
+      enrich_run_date = ${listDate}::date,
+      enriched_at = COALESCE(c.enriched_at, NOW()),
+      updated_at = NOW()
+    WHERE c.status = 'new'
+      AND c.enrich_run_date IS NULL
+      AND EXISTS (
+        SELECT 1 FROM contacts AS ct
+        WHERE ct.company_id = c.id
+          AND (
+            ct.personal_phone IS NOT NULL
+            OR ct.phone IS NOT NULL
+            OR ct.personal_email IS NOT NULL
+            OR ct.email IS NOT NULL
+            OR ct.work_email IS NOT NULL
+          )
+          AND (ct.created_at AT TIME ZONE 'America/New_York')::date = ${listDate}::date
+      )
+  `);
+
   const companiesRows = await db
     .select()
     .from(companies)
@@ -55,6 +78,7 @@ export async function getCallSheetCompanies(
 /** Ranked backlog — scraped in-focus companies awaiting enrichment. */
 export async function getBacklogCompanies(): Promise<CompanyCardData[]> {
   const geoSettings = await getGeoFocusSettings();
+  const today = businessListDate();
 
   const companiesRows = await db
     .select()
@@ -73,7 +97,9 @@ export async function getBacklogCompanies(): Promise<CompanyCardData[]> {
   return enriched
     .filter(
       (c) =>
-        c.jobListings.length > 0 && !c.contacts.some(hasCallableContact),
+        c.jobListings.length > 0 &&
+        !c.contacts.some(hasCallableContact) &&
+        c.enrichRunDate !== today,
     )
     .sort((a, b) => (b.leadScore ?? 0) - (a.leadScore ?? 0));
 }

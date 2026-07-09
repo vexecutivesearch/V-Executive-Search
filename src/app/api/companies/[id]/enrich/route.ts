@@ -10,6 +10,9 @@ import { db } from "@/lib/db";
 import { companies, contacts, jobListings } from "@/lib/db/schema";
 import { getCompanyById } from "@/lib/queries";
 import { requestImessageCheck } from "@/lib/imessage-check";
+import { contactIsCallable } from "@/lib/lead-score";
+import { recomputeCompanyScores } from "@/lib/recompute-company-scores";
+import { businessListDate } from "@/lib/timezone";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -203,6 +206,23 @@ export async function POST(
   }
 
   const totalContacts = existingContactRows.length + contactsAdded;
+
+  const finalContacts = await db
+    .select()
+    .from(contacts)
+    .where(eq(contacts.companyId, id));
+
+  if (finalContacts.some(contactIsCallable)) {
+    await db
+      .update(companies)
+      .set({
+        enrichRunDate: businessListDate(),
+        enrichedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(companies.id, id));
+    await recomputeCompanyScores([id]);
+  }
 
   revalidatePath("/today");
   revalidatePath("/companies");

@@ -224,6 +224,7 @@ export function TodayListView({
               company={company}
               rank={index + 1}
               showReasonToCall
+              listMode={listMode}
             />
           ))}
         </div>

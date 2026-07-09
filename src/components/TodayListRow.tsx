@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { CompanyCardData } from "./CompanyCard";
 import { ContactRow } from "./ContactRow";
 import { EnrichButton } from "./EnrichButton";
 import { StatusBadge, StatusSelect } from "./StatusBadge";
 import {
+  contactIsCallable,
   scoreBgClass,
   scoreLead,
   scoreTextClass,
@@ -17,12 +19,15 @@ export function TodayListRow({
   defaultExpanded = false,
   rank,
   showReasonToCall = false,
+  listMode = "call-sheet",
 }: {
   company: CompanyCardData;
   defaultExpanded?: boolean;
   rank?: number;
   showReasonToCall?: boolean;
+  listMode?: "call-sheet" | "backlog";
 }) {
+  const router = useRouter();
   const [company, setCompany] = useState(initial);
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [enrichNotice, setEnrichNotice] = useState<string | null>(null);
@@ -62,6 +67,18 @@ export function TodayListRow({
     await refreshCompany(updated);
     setExpanded(true);
     if (summary) setEnrichNotice(summary);
+
+    const latest = updated ?? company;
+    const promoted = latest.contacts.some(contactIsCallable);
+    if (promoted) {
+      router.refresh();
+      if (listMode === "backlog") {
+        const params = new URLSearchParams(window.location.search);
+        params.delete("tab");
+        const qs = params.toString();
+        router.push(qs ? `/today?${qs}` : "/today");
+      }
+    }
   }
 
   async function generateOpener(force = false) {
