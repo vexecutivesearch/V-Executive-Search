@@ -273,6 +273,9 @@ def ensure_contactout_session(
                 if _dashboard_loaded(page):
                     page.wait_for_timeout(2000)
                     _persist_session(context)
+                    from src.enrich.contactout_session import clear_session_degraded
+
+                    clear_session_degraded()
                     logger.info("ContactOut dashboard session saved")
                     return True
                 if not _needs_login_page(page):
@@ -281,6 +284,9 @@ def ensure_contactout_session(
                     if _dashboard_loaded(page):
                         page.wait_for_timeout(2000)
                         _persist_session(context)
+                        from src.enrich.contactout_session import clear_session_degraded
+
+                        clear_session_degraded()
                         logger.info("ContactOut dashboard session saved")
                         return True
             except Exception:
@@ -532,7 +538,10 @@ class ContactOutDashboardClient:
         page.wait_for_timeout(1200)
 
         if self._needs_login(page):
-            if not ensure_contactout_session(interactive=True, timeout_sec=600):
+            from src.enrich.contactout_session import ensure_session_healthy
+
+            status = ensure_session_healthy(allow_interactive=True, allow_auto_login=True)
+            if status.value not in ("ok", "not_needed"):
                 raise RuntimeError(
                     "ContactOut session expired — run: python scripts/contactout_login.py"
                 )

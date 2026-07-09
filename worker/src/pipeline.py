@@ -194,10 +194,15 @@ def run_pipeline(
     if not dry_run:
         try:
             import sys
-            from src.enrich.contactout_dashboard import prepare_contactout_dashboard
+            from src.enrich.contactout_session import prepare_for_pipeline
 
             if sys.platform == "darwin":
-                prepare_contactout_dashboard(interactive=False)
+                co_status = prepare_for_pipeline()
+                if co_status.value == "degraded":
+                    logger.warning(
+                        "ContactOut unavailable — continuing with Apollo-only; "
+                        "phones will backfill when session is restored"
+                    )
         except Exception as exc:
             logger.warning("ContactOut session prep failed (non-fatal): %s", exc)
 

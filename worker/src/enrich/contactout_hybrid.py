@@ -8,6 +8,7 @@ from pathlib import Path
 from src.enrich.contactout_api import ContactOutApiClient
 from src.enrich.contactout_base import ContactOutResult, normalize_linkedin
 from src.enrich.contactout_dashboard import ContactOutDashboardClient
+from src.enrich.contactout_session import is_session_degraded
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,11 @@ class ContactOutHybridClient:
         forced = os.environ.get("CONTACTOUT_MODE", "auto").strip().lower()
         if forced == "api":
             return False
+
+        if is_session_degraded():
+            logger.info("ContactOut dashboard skipped — session degraded (Apollo-only until restored)")
+            return False
+
         if forced == "dashboard":
             return self._dashboard_client() is not None
 

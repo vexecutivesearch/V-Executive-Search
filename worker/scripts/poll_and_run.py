@@ -25,6 +25,13 @@ logging.basicConfig(
 def main() -> int:
     if sys.platform == "darwin":
         try:
+            from src.enrich.contactout_session import run_keepalive
+
+            run_keepalive()
+        except Exception as exc:
+            logging.debug("ContactOut keepalive skipped: %s", exc)
+
+        try:
             import importlib.util
 
             script = WORKER_ROOT / "scripts" / "check_imessage.py"
@@ -56,9 +63,13 @@ def main() -> int:
     if status.get("contactout_sync_requested_at"):
         logging.info("ContactOut sync requested from admin")
         try:
-            from src.enrich.contactout_dashboard import ensure_contactout_session
+            from src.enrich.contactout_session import ensure_session_healthy
 
-            ensure_contactout_session(interactive=True, timeout_sec=600)
+            ensure_session_healthy(
+                allow_interactive=True,
+                allow_auto_login=True,
+                alert_on_failure=True,
+            )
             import importlib.util
 
             script = WORKER_ROOT / "scripts" / "contactout_dashboard_sync.py"

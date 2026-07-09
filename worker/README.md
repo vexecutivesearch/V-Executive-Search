@@ -93,10 +93,32 @@ Use this when your ContactOut plan includes unlimited lookups in the **web dashb
    ```
 4. The **5-minute poll** trickles dashboard lookups (`contactout_dashboard_sync.py`, 2 contacts per poll, 60–150s apart). Background runs use **headless Playwright Chromium** with the saved session file.
 
-Apollo still runs in the daily pipeline. ContactOut dashboard lookups happen in the background on the Mac — no LinkedIn browsing, only the ContactOut search portal.
+**Self-healing session ladder** (runs automatically — you only intervene on Layer 3):
+
+| Layer | What | When |
+|-------|------|------|
+| **0** | `contactout_keepalive.py` — headless dashboard visit, refresh cookies | Every 5 hours (launchd) |
+| **1** | Canary check before each pipeline run | 6 AM / 6 PM + Run now |
+| **2** | Auto re-login via Keychain + email/password form (+ optional IMAP OTP) | When canary fails |
+| **3** | Email alert + Apollo-only mode; backfill when session restored | When Layer 2 fails |
+
+Enable Layer 2 (recommended):
+```bash
+python scripts/contactout_store_credentials.py   # macOS Keychain, email+password NOT Google SSO
+```
+
+Optional OTP via inbox (`hello@proventheory.co`):
+```bash
+# worker/.env
+CONTACTOUT_OTP_IMAP_USER=hello@proventheory.co
+CONTACTOUT_OTP_IMAP_PASSWORD=your-app-password
+```
+
+Re-run `./scripts/install_launchd.sh` to add the keepalive agent. ContactOut dashboard lookups happen in the background on the Mac — no LinkedIn browsing, only the ContactOut search portal.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
+| `CONTACTOUT_SESSION_FILE` | `worker/.contactout-session.json` | Saved login cookies (use absolute path for launchd) |
 | `CONTACTOUT_DASHBOARD_DELAY_MIN` | 60 | Min seconds between lookups |
 | `CONTACTOUT_DASHBOARD_DELAY_MAX` | 150 | Max seconds between lookups |
 | `CONTACTOUT_HEADLESS` | true | Set `false` to debug the browser |

@@ -23,7 +23,9 @@ from src.enrich.contactout_api import ContactOutApiClient  # noqa: E402
 from src.enrich.contactout_dashboard import (  # noqa: E402
     ContactOutDashboardClient,
     has_saved_session,
+    login_in_progress,
 )
+from src.enrich.contactout_session import ensure_session_healthy, is_session_degraded  # noqa: E402
 from src.enrich.contactout_hybrid import api_phone_credits_exhausted  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -78,24 +80,26 @@ def run_dashboard_sync(*, limit: int = 10, interactive_login: bool = False) -> i
         logger.debug("Skipping ContactOut dashboard sync (API covers lookups)")
         return 0
 
-    from src.enrich.contactout_dashboard import (
-        ensure_contactout_session,
-        login_in_progress,
-    )
+    if is_session_degraded() and not interactive_login:
+        logger.info("ContactOut session degraded — skipping dashboard sync (Apollo-only mode)")
+        return 0
 
     if login_in_progress():
         logger.info("ContactOut login in progress — skipping dashboard sync this cycle")
         return 0
 
+    status = ensure_session_healthy(
+        allow_interactive=interactive_login,
+        allow_auto_login=True,
+        alert_on_failure=interactive_login,
+    )
+    if status.value not in ("ok", "not_needed"):
+        logger.warning("ContactOut session not ready (%s) — skipping sync", status.value)
+        return 0
+
     client = ContactOutDashboardClient()
     if not client.is_configured:
         logger.warning("ContactOut dashboard not configured on this host")
-        return 0
-
-    if not ensure_contactout_session(interactive=interactive_login, timeout_sec=600):
-        logger.warning(
-            "ContactOut dashboard not logged in — run: python scripts/contactout_login.py"
-        )
         return 0
 
     pending = fetch_pending_contacts(limit)

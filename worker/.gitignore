@@ -7,6 +7,9 @@ __pycache__/
 .contactout-browser/
 .contactout-session.json
 .contactout-login.lock
+.contactout-session-degraded
+.contactout-last-keepalive
+.contactout-alert-sent
 .contactout-api-phone-locked
 *.egg-info/
 dist/

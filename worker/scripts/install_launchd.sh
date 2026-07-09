@@ -6,6 +6,7 @@ WORKER_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
 DAILY_LABEL="com.vexecsearch.daily"
 POLL_LABEL="com.vexecsearch.poll"
+KEEPALIVE_LABEL="com.vexecsearch.contactout-keepalive"
 
 PYTHON="$WORKER_ROOT/.venv/bin/python"
 if [[ ! -x "$PYTHON" ]]; then
@@ -113,7 +114,13 @@ write_plist "$POLL_LABEL" \
   "$WORKER_ROOT/logs/poll_stdout.log" \
   "$WORKER_ROOT/logs/poll_stderr.log"
 
-for label in "$DAILY_LABEL" "$POLL_LABEL"; do
+write_plist "$KEEPALIVE_LABEL" \
+  "$WORKER_ROOT/scripts/contactout_keepalive.py" \
+  "interval:18000" \
+  "$WORKER_ROOT/logs/contactout_keepalive_stdout.log" \
+  "$WORKER_ROOT/logs/contactout_keepalive_stderr.log"
+
+for label in "$DAILY_LABEL" "$POLL_LABEL" "$KEEPALIVE_LABEL"; do
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENTS/${label}.plist"
   launchctl enable "gui/$(id -u)/$label"
@@ -124,6 +131,7 @@ echo ""
 echo "Done. Scheduled:"
 echo "  • Daily pipeline at 6:00 AM and 6:00 PM local time ($DAILY_LABEL)"
 echo "  • Admin 'Run now' poll every 5 minutes ($POLL_LABEL)"
+echo "  • ContactOut session keepalive every 5 hours ($KEEPALIVE_LABEL)"
 echo ""
 echo "Verify: launchctl list | grep vexecsearch"
 echo "Logs:   tail -f $WORKER_ROOT/logs/launchd_stdout.log"

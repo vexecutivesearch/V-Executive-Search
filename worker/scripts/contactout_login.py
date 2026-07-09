@@ -14,9 +14,13 @@ sys.path.insert(0, str(WORKER_ROOT))
 load_dotenv(WORKER_ROOT / ".env")
 
 from src.enrich.contactout_dashboard import (  # noqa: E402
-    ensure_contactout_session,
     has_saved_session,
     login_in_progress,
+)
+from src.enrich.contactout_session import (  # noqa: E402
+    SessionStatus,
+    clear_session_degraded,
+    ensure_session_healthy,
     session_file_path,
 )
 
@@ -42,19 +46,23 @@ def main() -> int:
     if has_saved_session():
         print("Existing session found — will refresh cookies after you sign in.")
     print(
-        "\nA dedicated automation browser will open (NOT your daily Chrome profile).\n"
-        "Sign in to ContactOut and leave the window open.\n"
-        "Cookies are saved to the session file above for headless background runs.\n"
+        "\nDedicated automation browser (NOT your daily Chrome).\n"
+        "Sign in with email + password (not Google SSO) for reliable auto re-login.\n"
         "If BlockBlock prompts, click Allow for Python/Chromium.\n"
     )
 
-    ok = ensure_contactout_session(timeout_sec=args.timeout, interactive=True)
-    if ok:
-        print(f"\nContactOut session ready. Background worker will use: {session}")
+    status = ensure_session_healthy(
+        allow_interactive=True,
+        allow_auto_login=True,
+        alert_on_failure=False,
+    )
+    if status in (SessionStatus.OK, SessionStatus.NOT_NEEDED):
+        clear_session_degraded()
+        print(f"\nContactOut session ready. Background worker uses: {session}")
         return 0
     print(
-        "\nLogin not completed. Re-run this script after signing in, "
-        "or use Admin → Sync ContactOut phones."
+        "\nLogin not completed. Store Keychain credentials for full automation:\n"
+        "  python scripts/contactout_store_credentials.py"
     )
     return 1
 
