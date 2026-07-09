@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+.next/
+out/
+
+# Env
+.env
+.env.local
+.env*.local
+
+# Build
+dist/
+build/
+
+# Python worker
+worker/.venv/
+worker/__pycache__/
+worker/output/
+worker/logs/
+worker/*.egg-info/
+
+# IDE
+.DS_Store
+.idea/
+.vscode/

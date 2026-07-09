@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.vexecsearch.daily</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/miguellozano/Documents/V Executive Search/worker/.venv/bin/python</string>
+        <string>/Users/miguellozano/Documents/V Executive Search/worker/scripts/run_daily.py</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/miguellozano/Documents/V Executive Search/worker/logs/launchd_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/miguellozano/Documents/V Executive Search/worker/logs/launchd_stderr.log</string>
+    <key>WorkingDirectory</key>
+    <string>/Users/miguellozano/Documents/V Executive Search/worker</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    </dict>
+</dict>
+</plist>

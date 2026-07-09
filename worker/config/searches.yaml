@@ -1,0 +1,53 @@
+# Saved job search criteria — add one entry per search you run daily
+searches:
+  - name: "HR Director — Remote US"
+    search_term: "HR Director"
+    location: "United States"
+    google_search_term: "HR Director jobs remote United States since yesterday"
+    country_indeed: "USA"
+    is_remote: true
+    results_wanted: 50
+    hours_old: 24
+
+  - name: "VP People — NYC"
+    search_term: "VP People"
+    location: "New York, NY"
+    google_search_term: "VP People jobs New York NY since yesterday"
+    country_indeed: "USA"
+    is_remote: false
+    results_wanted: 50
+    hours_old: 24
+
+# Job boards to scrape (linkedin is best-effort — may rate-limit)
+boards:
+  - indeed
+  - google
+  - zip_recruiter
+  # - linkedin
+
+# Decision-maker titles to find at each company
+target_titles:
+  - CEO
+  - Founder
+  - Owner
+  - President
+  - HR Manager
+  - Head of Talent
+  - VP People
+  - Chief People Officer
+  - Director of HR
+  - Human Resources Manager
+
+target_seniorities:
+  - c_suite
+  - vp
+  - head
+  - director
+  - manager
+
+# Enrichment settings
+enrichment:
+  contacts_per_company: 2
+  enrich_phone: false
+  daily_credit_cap: 100
+  provider: apollo
