@@ -86,27 +86,53 @@ def merge_sourced_phones(*groups: list[dict[str, str]] | None) -> list[dict[str,
     return dedupe_sourced_phones(merged)
 
 
-def pick_primary_from_phones(phones: list[dict[str, str]]) -> dict[str, str | None]:
-    contactout_mobile = next(
-        (p for p in phones if p.get("source") == "contactout" and p.get("kind") == "mobile"),
-        None,
-    )
-    contactout_any = next((p for p in phones if p.get("source") == "contactout"), None)
-    apollo_mobile = next(
-        (p for p in phones if p.get("source") == "apollo" and p.get("kind") == "mobile"),
-        None,
-    )
-    apollo_other = next(
-        (p for p in phones if p.get("source") == "apollo" and p.get("kind") != "company"),
-        None,
-    )
-    company_line = next((p for p in phones if p.get("kind") == "company"), None)
+def _direct_dial_rank(p: dict[str, str]) -> int:
+    kind = p.get("kind")
+    source = p.get("source")
+    if kind == "company":
+        return 100
+    if source == "contactout" and kind == "mobile":
+        return 0
+    if source == "contactout":
+        return 1
+    if source == "apollo" and kind == "mobile":
+        return 2
+    if source == "apollo" and kind == "work":
+        return 3
+    if source == "apollo" and kind == "other":
+        return 4
+    return 5
 
-    personal = (contactout_mobile or contactout_any or {}).get("number")
-    phone = personal or (apollo_mobile or apollo_other or {}).get("number")
+
+def pick_primary_from_phones(phones: list[dict[str, str]]) -> dict[str, str | None]:
+    sorted_phones = sorted(phones, key=_direct_dial_rank)
+    direct_dial = next((p for p in sorted_phones if p.get("kind") != "company"), None)
+    company_line = next((p for p in sorted_phones if p.get("kind") == "company"), None)
+
+    personal = (
+        next(
+            (
+                p
+                for p in sorted_phones
+                if p.get("source") == "contactout" and p.get("kind") == "mobile"
+            ),
+            None,
+        )
+        or next((p for p in sorted_phones if p.get("source") == "contactout"), None)
+        or next(
+            (
+                p
+                for p in sorted_phones
+                if p.get("source") == "apollo" and p.get("kind") == "mobile"
+            ),
+            None,
+        )
+    )
+
+    phone = (direct_dial or {}).get("number") or (company_line or {}).get("number")
     return {
         "phone": phone,
-        "personal_phone": personal,
+        "personal_phone": (personal or {}).get("number"),
         "company_phone": (company_line or {}).get("number"),
     }
 

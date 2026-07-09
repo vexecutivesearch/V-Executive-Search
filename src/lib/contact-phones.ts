@@ -24,11 +24,21 @@ function apolloTypeToKind(typeCd: string): PhoneKind {
   const t = typeCd.toLowerCase();
   if (t === "mobile" || t === "cell") return "mobile";
   if (t === "work" || t === "direct") return "work";
-  if (t === "company" || t === "hq") return "company";
+  if (t === "company" || t === "hq" || t === "corporate") return "company";
   return "other";
 }
 
-/** All phone numbers from an Apollo person payload (no org HQ fallback). */
+function directDialRank(p: SourcedPhone): number {
+  if (p.kind === "company") return 100;
+  if (p.source === "contactout" && p.kind === "mobile") return 0;
+  if (p.source === "contactout") return 1;
+  if (p.source === "apollo" && p.kind === "mobile") return 2;
+  if (p.source === "apollo" && p.kind === "work") return 3;
+  if (p.source === "apollo" && p.kind === "other") return 4;
+  return 5;
+}
+
+/** Apollo phones on the person + free org HQ lines when present. */
 export function extractApolloPhones(
   person: Record<string, unknown>,
 ): SourcedPhone[] {
@@ -48,16 +58,32 @@ export function extractApolloPhones(
     });
   }
 
-  // Some match responses expose a single mobile on the person root.
+  // Person-level direct dials (credit) vs corporate fields.
   for (const [field, kind] of [
     ["mobile_phone", "mobile"],
     ["phone", "mobile"],
-    ["corporate_phone", "work"],
     ["direct_phone", "work"],
+    ["corporate_phone", "company"],
   ] as const) {
     const number = parsePhoneValue(String(person[field] ?? ""));
     if (number) {
       out.push({ number, source: "apollo", kind });
+    }
+  }
+
+  const org = person.organization as Record<string, unknown> | undefined;
+  if (org) {
+    for (const field of [
+      "primary_phone",
+      "phone",
+      "sanitized_phone",
+      "primary_phone_number",
+    ]) {
+      const number = parsePhoneValue(String(org[field] ?? ""));
+      if (number) {
+        out.push({ number, source: "apollo", kind: "company" });
+        break;
+      }
     }
   }
 
@@ -117,33 +143,27 @@ export function mergeSourcedPhones(
   return dedupeSourcedPhones(groups.flatMap((g) => g ?? []));
 }
 
-/** Prefer ContactOut mobile, then Apollo mobile; never auto-pick company lines as primary. */
+/**
+ * Prefer personal direct dials (mobile, work-direct). Fall back to corporate/HQ.
+ * ContactOut mobile > Apollo mobile > Apollo work-direct > other direct > HQ.
+ */
 export function pickPrimaryFromPhones(phones: SourcedPhone[]): {
   phone: string | null;
   personalPhone: string | null;
   companyPhone: string | null;
 } {
-  const contactOutMobile = phones.find(
-    (p) => p.source === "contactout" && p.kind === "mobile",
-  );
-  const contactOutAny = phones.find((p) => p.source === "contactout");
-  const apolloMobile = phones.find(
-    (p) => p.source === "apollo" && p.kind === "mobile",
-  );
-  const apolloOther = phones.find(
-    (p) => p.source === "apollo" && p.kind !== "company",
-  );
-  const companyLine = phones.find((p) => p.kind === "company");
+  const sorted = [...phones].sort((a, b) => directDialRank(a) - directDialRank(b));
+  const directDial = sorted.find((p) => p.kind !== "company");
+  const companyLine = sorted.find((p) => p.kind === "company");
 
   const personalPhone =
-    contactOutMobile?.number ??
-    contactOutAny?.number ??
+    sorted.find((p) => p.source === "contactout" && p.kind === "mobile")
+      ?.number ??
+    sorted.find((p) => p.source === "contactout")?.number ??
+    sorted.find((p) => p.source === "apollo" && p.kind === "mobile")?.number ??
     null;
-  const phone =
-    personalPhone ??
-    apolloMobile?.number ??
-    apolloOther?.number ??
-    null;
+
+  const phone = directDial?.number ?? companyLine?.number ?? null;
 
   return {
     phone,
@@ -208,10 +228,15 @@ export function applySharedLineFilter<
     const primary = pickPrimaryFromPhones(phones);
     const sharedPrimary =
       primary.phone && (counts.get(phoneDigits(primary.phone)) ?? 0) >= 2;
+    const isCompanyFallback =
+      Boolean(primary.companyPhone) && primary.phone === primary.companyPhone;
     return {
       ...c,
       phones,
-      phone: sharedPrimary && !primary.personalPhone ? null : primary.phone,
+      phone:
+        sharedPrimary && !primary.personalPhone && !isCompanyFallback
+          ? null
+          : primary.phone,
       personalPhone: primary.personalPhone,
       companyPhone: primary.companyPhone,
     };
@@ -255,11 +280,5 @@ export function contactPhonesForDisplay(contact: {
 }
 
 export function sortPhonesForDisplay(phones: SourcedPhone[]): SourcedPhone[] {
-  const rank = (p: SourcedPhone) => {
-    const sourceRank = p.source === "contactout" ? 0 : 1;
-    const kindRank =
-      p.kind === "mobile" ? 0 : p.kind === "work" ? 1 : p.kind === "other" ? 2 : 3;
-    return sourceRank * 10 + kindRank;
-  };
-  return [...phones].sort((a, b) => rank(a) - rank(b));
+  return [...phones].sort((a, b) => directDialRank(a) - directDialRank(b));
 }

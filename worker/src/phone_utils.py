@@ -65,7 +65,7 @@ def extract_apollo_mobile(person: dict[str, Any]) -> str | None:
 
 
 def apply_company_phone_dedupe(contacts: list[Any]) -> None:
-    """Mutates contacts: clears phone when same number appears on 2+ people."""
+    """Mutates contacts: shared direct-dial lines move to company_phone; HQ fallback stays on phone."""
     counts: dict[str, int] = {}
     for contact in contacts:
         for attr in ("personal_phone", "phone", "company_phone"):
@@ -79,15 +79,26 @@ def apply_company_phone_dedupe(contacts: list[Any]) -> None:
     for contact in contacts:
         personal = parse_phone_value(getattr(contact, "personal_phone", None))
         direct = parse_phone_value(getattr(contact, "phone", None))
+        company = parse_phone_value(getattr(contact, "company_phone", None))
+        is_company_fallback = bool(company and direct == company)
 
-        best = personal or direct
-        if best and not personal:
-            key = phone_digits(best)
-            if counts.get(key, 0) >= 2:
-                contact.phone = None
-                if not getattr(contact, "company_phone", None):
-                    contact.company_phone = direct
-            else:
-                contact.phone = best
-        elif personal:
+        if personal:
             contact.phone = personal
+            continue
+
+        if not direct:
+            if company:
+                contact.phone = company
+            continue
+
+        if is_company_fallback:
+            contact.phone = direct
+            continue
+
+        key = phone_digits(direct)
+        if counts.get(key, 0) >= 2:
+            contact.phone = None
+            if not company:
+                contact.company_phone = direct
+        else:
+            contact.phone = direct
