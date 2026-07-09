@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { NextRequest, NextResponse } from "next/server";
-import { enrichCompanyContacts } from "@/lib/apollo-enrich";
+import { enrichCompanyContacts, refreshCompanyContactsFromApollo } from "@/lib/apollo-enrich";
 import { resolveCompanyDomain } from "@/lib/domain-resolver";
 import { syncContactPhoneFields } from "@/lib/contact-phones";
 import { refreshCompanyContactsFromContactOut } from "@/lib/refresh-company-contacts";
@@ -124,10 +124,19 @@ export async function POST(
 
   let personalUpdated = 0;
   let contactoutChecked = 0;
+  let contactoutPhoneLocked = false;
+  let apolloRefreshed = 0;
+  let apolloPhonesRequested = 0;
+
+  const apolloRefresh = await refreshCompanyContactsFromApollo(id, apiKey);
+  apolloRefreshed = apolloRefresh.updated;
+  apolloPhonesRequested = apolloRefresh.phonesRequested;
+
   if (contactOutKey) {
     const refresh = await refreshCompanyContactsFromContactOut(id, contactOutKey);
     personalUpdated = refresh.updated;
     contactoutChecked = refresh.checked;
+    contactoutPhoneLocked = refresh.phoneApiLocked;
   }
 
   // Backfill phones json from legacy phone fields (e.g. Apollo webhook async delivery).
@@ -162,21 +171,45 @@ export async function POST(
   revalidatePath(`/companies/${id}`);
 
   const updatedCompany = await getCompanyById(id);
+  const existingCount = updatedCompany?.contacts.length ?? totalContacts;
+
+  let message: string | undefined;
+  if (
+    contactsAdded === 0 &&
+    personalUpdated === 0 &&
+    apolloRefreshed === 0
+  ) {
+    const parts = [`${existingCount} Apollo contact${existingCount === 1 ? "" : "s"} on file`];
+    if (apolloPhonesRequested > 0) {
+      parts.push(
+        `Apollo phone reveal requested for ${apolloPhonesRequested} (may arrive via webhook)`,
+      );
+    }
+    if (contactoutChecked > 0) {
+      if (contactoutPhoneLocked) {
+        parts.push("ContactOut phone API locked — work emails from Apollo only");
+      } else {
+        parts.push(`ContactOut checked ${contactoutChecked} — no new personal data`);
+      }
+    } else if (!contactOutKey) {
+      parts.push("ContactOut not configured on Vercel");
+    }
+    message = parts.join(" · ");
+  }
 
   return NextResponse.json({
     ok: true,
     contacts_added: contactsAdded,
+    apollo_refreshed: apolloRefreshed,
+    apollo_phones_requested: apolloPhonesRequested,
+    existing_contacts: existingCount,
     personal_updated: personalUpdated,
     contactout_checked: contactoutChecked,
+    contactout_phone_locked: contactoutPhoneLocked,
     phones_backfilled: phonesBackfilled,
     total_contacts: totalContacts,
     domain,
     company: updatedCompany,
-    message:
-      contactsAdded === 0 && personalUpdated === 0
-        ? contactoutChecked > 0
-          ? `ContactOut checked ${contactoutChecked} contact(s) — no new personal data`
-          : "No new contacts or personal data found"
-        : undefined,
+    message,
   });
 }

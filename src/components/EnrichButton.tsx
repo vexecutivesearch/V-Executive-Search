@@ -7,8 +7,12 @@ import type { CompanyCardData } from "./CompanyCard";
 type EnrichResponse = {
   error?: string;
   contacts_added?: number;
+  apollo_refreshed?: number;
+  apollo_phones_requested?: number;
+  existing_contacts?: number;
   personal_updated?: number;
   contactout_checked?: number;
+  contactout_phone_locked?: boolean;
   phones_backfilled?: number;
   message?: string;
   company?: CompanyCardData;
@@ -21,6 +25,9 @@ function buildSummary(data: EnrichResponse): string {
       `+${data.contacts_added} contact${data.contacts_added === 1 ? "" : "s"}`,
     );
   }
+  if ((data.apollo_refreshed ?? 0) > 0) {
+    parts.push(`${data.apollo_refreshed} Apollo updated`);
+  }
   if ((data.personal_updated ?? 0) > 0) {
     parts.push(`${data.personal_updated} personal updated`);
   }
@@ -29,8 +36,8 @@ function buildSummary(data: EnrichResponse): string {
   }
   if (parts.length) return parts.join(" · ");
   if (data.message) return data.message;
-  if ((data.contactout_checked ?? 0) > 0) {
-    return `ContactOut checked ${data.contactout_checked} — no new personal data`;
+  if ((data.existing_contacts ?? 0) > 0) {
+    return `${data.existing_contacts} Apollo contact${data.existing_contacts === 1 ? "" : "s"} on file`;
   }
   return "Up to date — no new contacts or personal data";
 }

@@ -13,7 +13,7 @@ import { contacts } from "@/lib/db/schema";
 export async function refreshCompanyContactsFromContactOut(
   companyId: string,
   contactOutKey: string,
-): Promise<{ updated: number; checked: number }> {
+): Promise<{ updated: number; checked: number; phoneApiLocked: boolean }> {
   const rows = await db
     .select()
     .from(contacts)
@@ -21,10 +21,15 @@ export async function refreshCompanyContactsFromContactOut(
 
   const withLinkedIn = rows.filter((c) => c.linkedinUrl);
   let updated = 0;
+  let phoneApiLocked = false;
 
   for (const contact of withLinkedIn) {
     const co = await enrichFromContactOut(contact.linkedinUrl!, contactOutKey);
     if (!co) continue;
+    if (co.phoneApiLocked) {
+      phoneApiLocked = true;
+      continue;
+    }
 
     const workEmail =
       contact.workEmail ??
@@ -65,5 +70,5 @@ export async function refreshCompanyContactsFromContactOut(
     await new Promise((r) => setTimeout(r, 400));
   }
 
-  return { updated, checked: withLinkedIn.length };
+  return { updated, checked: withLinkedIn.length, phoneApiLocked };
 }

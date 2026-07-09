@@ -144,7 +144,7 @@ export async function enrichFromContactOut(
   if (!emailData) return null;
 
   const base = parseContactOutPayload(emailData);
-  if (base.phoneApiLocked) return null;
+  if (base.phoneApiLocked) return base;
 
   const phoneData = await contactOutGet(apiKey, {
     profile,

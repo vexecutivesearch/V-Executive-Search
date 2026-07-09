@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import {
   CONTACTS_PER_COMPANY,
   ENRICH_PHONE,
@@ -15,9 +16,13 @@ import {
   extractApolloPhones,
   mergeSourcedPhones,
   pickPrimaryFromPhones,
+  contactPhonesForDisplay,
+  syncContactPhoneFields,
   type SourcedPhone,
 } from "@/lib/contact-phones";
 import { isPersonalEmail } from "@/lib/phone-utils";
+import { db } from "@/lib/db";
+import { contacts } from "@/lib/db/schema";
 
 const APOLLO_BASE = "https://api.apollo.io/api/v1";
 
@@ -285,4 +290,96 @@ export async function enrichCompanyContacts(options: {
   }
 
   return dedupeCompanyPhones(results);
+}
+
+function contactNeedsApolloRefresh(contact: {
+  phone: string | null;
+  personalPhone: string | null;
+  phones: SourcedPhone[] | null;
+  personalEmail: string | null;
+  linkedinUrl: string | null;
+}): boolean {
+  const hasPhone =
+    Boolean(contact.personalPhone || contact.phone) ||
+    (contact.phones?.length ?? 0) > 0;
+  const needsPersonal = !contact.personalEmail;
+  const needsLinkedIn = !contact.linkedinUrl;
+  return !hasPhone || needsPersonal || needsLinkedIn;
+}
+
+/** Re-run Apollo match on saved contacts (phones arrive async via webhook too). */
+export async function refreshCompanyContactsFromApollo(
+  companyId: string,
+  apiKey: string,
+): Promise<{ updated: number; phonesRequested: number; checked: number }> {
+  const rows = await db
+    .select()
+    .from(contacts)
+    .where(eq(contacts.companyId, companyId));
+
+  const withApollo = rows.filter((c) => c.apolloId);
+  let updated = 0;
+  let phonesRequested = 0;
+
+  for (const contact of withApollo) {
+    if (!contact.apolloId || !contactNeedsApolloRefresh(contact)) continue;
+
+    phonesRequested += 1;
+    const enriched = await matchPerson(apiKey, contact.apolloId, ENRICH_PHONE);
+    if (!enriched) continue;
+
+    const apolloPhones = extractApolloPhones(enriched);
+    const phones = mergeSourcedPhones(contactPhonesForDisplay(contact), apolloPhones);
+    const synced = syncContactPhoneFields({ ...contact, phones });
+    const primary = pickPrimaryFromPhones(synced.phones);
+
+    const workEmail =
+      contact.workEmail ??
+      (contact.email && !isPersonalEmail(contact.email) ? contact.email : null);
+    const enrichedWork = enriched.email ? String(enriched.email) : null;
+    const nextWorkEmail =
+      workEmail ?? (enrichedWork && !isPersonalEmail(enrichedWork) ? enrichedWork : null);
+
+    let personalEmail = contact.personalEmail;
+    let email = contact.email;
+    if (enrichedWork && isPersonalEmail(enrichedWork)) {
+      personalEmail = enrichedWork;
+      email = enrichedWork;
+    }
+
+    const linkedinUrl =
+      contact.linkedinUrl ??
+      (enriched.linkedin_url ? String(enriched.linkedin_url) : null);
+
+    const changed =
+      linkedinUrl !== contact.linkedinUrl ||
+      personalEmail !== contact.personalEmail ||
+      email !== contact.email ||
+      nextWorkEmail !== contact.workEmail ||
+      JSON.stringify(synced.phones) !== JSON.stringify(contact.phones ?? []) ||
+      primary.phone !== contact.phone ||
+      primary.personalPhone !== contact.personalPhone;
+
+    if (!changed) continue;
+
+    await db
+      .update(contacts)
+      .set({
+        linkedinUrl,
+        email,
+        workEmail: nextWorkEmail,
+        personalEmail,
+        phones: synced.phones,
+        phone: primary.phone,
+        personalPhone: primary.personalPhone,
+        companyPhone: primary.companyPhone,
+        title: contact.title || String(enriched.title ?? ""),
+      })
+      .where(eq(contacts.id, contact.id));
+
+    updated += 1;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+
+  return { updated, phonesRequested, checked: withApollo.length };
 }
