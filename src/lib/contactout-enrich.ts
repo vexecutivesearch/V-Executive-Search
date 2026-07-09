@@ -1,8 +1,8 @@
+import { isPersonalEmail } from "@/lib/phone-utils";
 import {
-  isPersonalEmail,
-  parsePhoneValue,
-  phoneDigits,
-} from "@/lib/phone-utils";
+  extractContactOutPhones,
+  type SourcedPhone,
+} from "@/lib/contact-phones";
 
 const CONTACTOUT_PROFILE_URL = "https://api.contactout.com/v2/enrich/profile";
 const CONTACTOUT_LINKEDIN_URL = "https://api.contactout.com/v1/people/linkedin";
@@ -11,6 +11,7 @@ export type ContactOutData = {
   personalEmail: string | null;
   personalPhone: string | null;
   workEmails: string[];
+  phones: SourcedPhone[];
 };
 
 function normalizeLinkedIn(url: string): string {
@@ -42,28 +43,6 @@ function pickPersonalEmail(emails: unknown[]): string | null {
   return null;
 }
 
-function pickMobilePhone(phones: unknown[]): string | null {
-  for (const entry of phones) {
-    if (typeof entry === "string") return parsePhoneValue(entry);
-    if (!entry || typeof entry !== "object") continue;
-    const obj = entry as Record<string, string>;
-    const type = (obj.type || obj.label || "").toLowerCase();
-    const number = obj.number || obj.sanitized_number || obj.value || obj.phone;
-    if (!number) continue;
-    if (type.includes("mobile") || type.includes("cell") || type.includes("personal")) {
-      return parsePhoneValue(number);
-    }
-  }
-  for (const entry of phones) {
-    if (typeof entry === "string") return parsePhoneValue(entry);
-    if (entry && typeof entry === "object") {
-      const number = (entry as Record<string, string>).number;
-      if (number) return parsePhoneValue(number);
-    }
-  }
-  return null;
-}
-
 function parseContactOutPayload(data: Record<string, unknown>): ContactOutData {
   const profile = (data.profile ?? data.data ?? data) as Record<string, unknown>;
   const emailsRaw: unknown[] = [];
@@ -87,10 +66,15 @@ function parseContactOutPayload(data: Record<string, unknown>): ContactOutData {
     else if (typeof val === "string" && val) workEmails.push(val);
   }
 
+  const phones = extractContactOutPhones(phonesRaw);
+  const personalPhone =
+    phones.find((p) => p.kind === "mobile")?.number ?? phones[0]?.number ?? null;
+
   return {
     personalEmail: pickPersonalEmail(emailsRaw),
-    personalPhone: pickMobilePhone(phonesRaw),
+    personalPhone,
     workEmails,
+    phones,
   };
 }
 
@@ -135,14 +119,19 @@ export async function enrichFromContactOut(
               body: JSON.stringify(params),
             });
       if (resp.status === 404) {
-        return { personalEmail: null, personalPhone: null, workEmails: [] };
+        return {
+          personalEmail: null,
+          personalPhone: null,
+          workEmails: [],
+          phones: [],
+        };
       }
       if (!resp.ok) continue;
       const data = (await resp.json()) as Record<string, unknown>;
       const parsed = parseContactOutPayload(data);
       if (
         parsed.personalEmail ||
-        parsed.personalPhone ||
+        parsed.phones.length ||
         parsed.workEmails.length
       ) {
         return parsed;
@@ -155,33 +144,5 @@ export async function enrichFromContactOut(
   return null;
 }
 
-export function dedupeCompanyPhones<
-  T extends {
-    phone?: string | null;
-    personalPhone?: string | null;
-    companyPhone?: string | null;
-  },
->(contacts: T[]): T[] {
-  const counts = new Map<string, number>();
-  for (const c of contacts) {
-    for (const field of [c.personalPhone, c.phone, c.companyPhone]) {
-      const parsed = parsePhoneValue(field);
-      if (!parsed) continue;
-      const key = phoneDigits(parsed);
-      if (key.length >= 10) counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-  }
-
-  return contacts.map((c) => {
-    const personal = parsePhoneValue(c.personalPhone);
-    const direct = parsePhoneValue(c.phone);
-    let best = personal ?? direct;
-    if (best && !personal) {
-      const key = phoneDigits(best);
-      if ((counts.get(key) ?? 0) >= 2) {
-        return { ...c, phone: null, companyPhone: direct ?? c.companyPhone };
-      }
-    }
-    return { ...c, phone: best ?? null };
-  });
-}
+// Re-export for apollo-enrich company-level dedupe
+export { applySharedLineFilter as dedupeCompanyPhones } from "@/lib/contact-phones";

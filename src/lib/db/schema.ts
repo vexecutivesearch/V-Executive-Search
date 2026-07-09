@@ -105,6 +105,15 @@ export const contacts = pgTable("contacts", {
   phone: text("phone"),
   personalPhone: text("personal_phone"),
   companyPhone: text("company_phone"),
+  phones: jsonb("phones")
+    .$type<
+      Array<{
+        number: string;
+        source: "apollo" | "contactout";
+        kind?: "mobile" | "work" | "company" | "other";
+      }>
+    >()
+    .default([]),
   linkedinUrl: text("linkedin_url"),
   apolloId: text("apollo_id"),
   sourceProvider: text("source_provider").default("apollo"),

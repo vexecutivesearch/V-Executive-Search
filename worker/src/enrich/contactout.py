@@ -8,6 +8,8 @@ from typing import Any
 
 import requests
 
+from src.contact_phones import extract_contactout_phones
+
 logger = logging.getLogger(__name__)
 
 CONTACTOUT_PROFILE_URL = "https://api.contactout.com/v2/enrich/profile"
@@ -19,6 +21,7 @@ class ContactOutResult:
     personal_email: str | None = None
     personal_phone: str | None = None
     work_emails: list[str] | None = None
+    phones: list[dict[str, str]] | None = None
     credits_used: int = 0
 
 
@@ -133,10 +136,17 @@ def _parse_payload(data: dict[str, Any]) -> ContactOutResult:
         elif isinstance(val, str) and val:
             work.append(val)
 
+    phones = extract_contactout_phones(phones_raw)
+    personal_phone = next(
+        (p["number"] for p in phones if p.get("kind") == "mobile"),
+        phones[0]["number"] if phones else None,
+    )
+
     return ContactOutResult(
         personal_email=_pick_personal_email(emails_raw),
-        personal_phone=_pick_mobile_phone(phones_raw),
+        personal_phone=personal_phone,
         work_emails=work or None,
+        phones=phones or None,
         credits_used=1,
     )
 
@@ -182,7 +192,7 @@ class ContactOutClient:
                 resp.raise_for_status()
                 result = _parse_payload(resp.json())
                 self.credits_used += result.credits_used
-                if result.personal_email or result.personal_phone or result.work_emails:
+                if result.personal_email or result.phones or result.work_emails:
                     return result
             except requests.RequestException as exc:
                 detail = ""

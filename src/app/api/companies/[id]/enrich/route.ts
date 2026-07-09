@@ -104,6 +104,7 @@ export async function POST(
         phone: c.phone,
         personalPhone: c.personalPhone,
         companyPhone: c.companyPhone,
+        phones: c.phones,
         linkedinUrl: c.linkedinUrl,
         apolloId: c.apolloId,
         sourceProvider: c.sourceProvider,

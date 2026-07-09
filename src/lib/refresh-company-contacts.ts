@@ -1,6 +1,11 @@
 import { eq } from "drizzle-orm";
 import { enrichFromContactOut } from "@/lib/contactout-enrich";
-import { isPersonalEmail, parsePhoneValue } from "@/lib/phone-utils";
+import {
+  mergeSourcedPhones,
+  pickPrimaryFromPhones,
+  contactPhonesForDisplay,
+} from "@/lib/contact-phones";
+import { isPersonalEmail } from "@/lib/phone-utils";
 import { db } from "@/lib/db";
 import { contacts } from "@/lib/db/schema";
 
@@ -26,28 +31,30 @@ export async function refreshCompanyContactsFromContactOut(
       (contact.email && !isPersonalEmail(contact.email) ? contact.email : null);
 
     const personalEmail = co.personalEmail ?? contact.personalEmail;
-    const personalPhone =
-      parsePhoneValue(co.personalPhone) ?? contact.personalPhone;
+    const phones = mergeSourcedPhones(
+      contactPhonesForDisplay(contact),
+      co.phones,
+    );
+    const primary = pickPrimaryFromPhones(phones);
     const primaryEmail = personalEmail ?? contact.email;
-    const primaryPhone = personalPhone ?? parsePhoneValue(contact.phone);
 
-    if (
-      personalEmail === contact.personalEmail &&
-      personalPhone === contact.personalPhone &&
-      primaryEmail === contact.email &&
-      primaryPhone === contact.phone
-    ) {
-      continue;
-    }
+    const changed =
+      personalEmail !== contact.personalEmail ||
+      primaryEmail !== contact.email ||
+      JSON.stringify(phones) !== JSON.stringify(contact.phones ?? []);
+
+    if (!changed) continue;
 
     await db
       .update(contacts)
       .set({
         workEmail: workEmail ?? co.workEmails[0] ?? null,
         personalEmail,
-        personalPhone,
+        phones,
+        personalPhone: primary.personalPhone,
+        phone: primary.phone,
+        companyPhone: primary.companyPhone,
         email: primaryEmail,
-        phone: primaryPhone,
         sourceProvider: "apollo+contactout",
       })
       .where(eq(contacts.id, contact.id));

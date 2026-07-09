@@ -11,7 +11,13 @@ import {
   personMatchesLocation,
 } from "@/lib/location-match";
 import { enrichFromContactOut, dedupeCompanyPhones } from "@/lib/contactout-enrich";
-import { isPersonalEmail, parsePhoneValue } from "@/lib/phone-utils";
+import {
+  extractApolloPhones,
+  mergeSourcedPhones,
+  pickPrimaryFromPhones,
+  type SourcedPhone,
+} from "@/lib/contact-phones";
+import { isPersonalEmail } from "@/lib/phone-utils";
 
 const APOLLO_BASE = "https://api.apollo.io/api/v1";
 
@@ -24,6 +30,7 @@ export type EnrichedContact = {
   phone: string | null;
   personalPhone: string | null;
   companyPhone: string | null;
+  phones: SourcedPhone[];
   linkedinUrl: string | null;
   apolloId: string;
   sourceProvider: string;
@@ -93,22 +100,6 @@ function personSortKey(
   const locationRank = personMatchesLocation(person, jobLocations) ? 0 : 1;
   const [t, s, title] = executiveRank(person);
   return [locationRank, t, s, title];
-}
-
-function extractPhone(person: Record<string, unknown>): string | null {
-  const phones = (person.phone_numbers as Array<Record<string, string>>) ?? [];
-  for (const entry of phones) {
-    const typeCd = (entry.type_cd || entry.type || "").toLowerCase();
-    if (typeCd === "mobile" || typeCd === "other" || typeCd === "cell") {
-      return (
-        entry.sanitized_number ||
-        entry.raw_number ||
-        entry.number ||
-        null
-      );
-    }
-  }
-  return null;
 }
 
 async function searchPeople(
@@ -245,23 +236,20 @@ export async function enrichCompanyContacts(options: {
         : null;
 
     let personalEmail: string | null = null;
-    let personalPhone: string | null = null;
     let email = workEmail;
-    let phone = extractPhone(enriched);
     let sourceProvider = "apollo";
+
+    let phones = extractApolloPhones(enriched);
 
     if (useContactOut && linkedinUrl && contactOutApiKey) {
       const co = await enrichFromContactOut(linkedinUrl, contactOutApiKey);
       if (co) {
+        phones = mergeSourcedPhones(phones, co.phones);
         if (co.personalEmail) {
           personalEmail = co.personalEmail;
           email = co.personalEmail;
         }
-        if (co.personalPhone) {
-          personalPhone = co.personalPhone;
-          phone = co.personalPhone;
-        }
-        if (co.personalEmail || co.personalPhone) {
+        if (co.personalEmail || co.phones.length) {
           sourceProvider = "apollo+contactout";
         }
       }
@@ -272,15 +260,18 @@ export async function enrichCompanyContacts(options: {
       personalEmail = email;
     }
 
+    const primary = pickPrimaryFromPhones(phones);
+
     results.push({
       name,
       title: String(enriched.title ?? person.title ?? ""),
       email,
       workEmail: personalEmail && workEmail !== personalEmail ? workEmail : null,
       personalEmail,
-      phone: parsePhoneValue(phone),
-      personalPhone: parsePhoneValue(personalPhone),
-      companyPhone: null,
+      phone: primary.phone,
+      personalPhone: primary.personalPhone,
+      companyPhone: primary.companyPhone,
+      phones,
       linkedinUrl,
       apolloId: personId,
       sourceProvider,

@@ -1,8 +1,13 @@
 import { eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
+import {
+  extractApolloPhones,
+  mergeSourcedPhones,
+  pickPrimaryFromPhones,
+  contactPhonesForDisplay,
+} from "@/lib/contact-phones";
 import { db } from "@/lib/db";
 import { contacts } from "@/lib/db/schema";
-import { parsePhoneValue } from "@/lib/phone-utils";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,7 +15,9 @@ export const dynamic = "force-dynamic";
 interface ApolloPhone {
   sanitized_number?: string;
   raw_number?: string;
+  number?: string;
   type_cd?: string;
+  type?: string;
 }
 
 interface ApolloWebhookPerson {
@@ -20,17 +27,6 @@ interface ApolloWebhookPerson {
 
 interface ApolloWebhookPayload {
   people?: ApolloWebhookPerson[];
-}
-
-function pickBestPhone(phones: ApolloPhone[]): string | null {
-  const mobile = phones.find(
-    (p) =>
-      p.type_cd === "mobile" ||
-      p.type_cd === "other" ||
-      p.type_cd === "cell",
-  );
-  if (!mobile) return null;
-  return mobile.sanitized_number ?? mobile.raw_number ?? null;
 }
 
 export async function POST(request: NextRequest) {
@@ -44,19 +40,38 @@ export async function POST(request: NextRequest) {
   let updated = 0;
   for (const person of payload.people ?? []) {
     const apolloId = person.id;
-    const phone = pickBestPhone(person.phone_numbers ?? []);
-    if (!apolloId || !phone) continue;
+    if (!apolloId || !person.phone_numbers?.length) continue;
 
-    const normalized = parsePhoneValue(phone);
-    if (!normalized) continue;
+    const apolloPhones = extractApolloPhones({
+      phone_numbers: person.phone_numbers,
+    });
+    if (!apolloPhones.length) continue;
 
-    const result = await db
-      .update(contacts)
-      .set({ phone: normalized, personalPhone: normalized })
+    const [existing] = await db
+      .select()
+      .from(contacts)
       .where(eq(contacts.apolloId, apolloId))
-      .returning({ id: contacts.id });
+      .limit(1);
 
-    if (result.length > 0) updated += 1;
+    if (!existing) continue;
+
+    const phones = mergeSourcedPhones(
+      contactPhonesForDisplay(existing),
+      apolloPhones,
+    );
+    const primary = pickPrimaryFromPhones(phones);
+
+    await db
+      .update(contacts)
+      .set({
+        phones,
+        phone: primary.phone,
+        personalPhone: primary.personalPhone,
+        companyPhone: primary.companyPhone,
+      })
+      .where(eq(contacts.apolloId, apolloId));
+
+    updated += 1;
   }
 
   return NextResponse.json({ ok: true, contacts_updated: updated });

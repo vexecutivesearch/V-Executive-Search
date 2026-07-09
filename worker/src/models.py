@@ -43,6 +43,7 @@ class ContactRecord:
     phone: str | None = None
     personal_phone: str | None = None
     company_phone: str | None = None
+    phones: list[dict[str, str]] | None = None
     linkedin_url: str | None = None
     source_provider: str = "apollo"
     apollo_id: str | None = None

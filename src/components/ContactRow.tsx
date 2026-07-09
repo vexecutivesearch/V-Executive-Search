@@ -2,10 +2,12 @@
 
 import { Contact } from "@/lib/db/schema";
 import {
-  bestDialPhone,
-  isPersonalEmail,
-  parsePhoneValue,
-} from "@/lib/phone-utils";
+  contactPhonesForDisplay,
+  phoneKindLabel,
+  sortPhonesForDisplay,
+  sourceLabel,
+} from "@/lib/contact-phones";
+import { isPersonalEmail } from "@/lib/phone-utils";
 
 function ContactLocationNote({
   jobLocation,
@@ -45,6 +47,12 @@ function linkedInHref(url: string): string {
   return `https://www.linkedin.com/in/${trimmed.replace(/^\/+/, "")}`;
 }
 
+function sourceBadgeClass(source: "apollo" | "contactout"): string {
+  return source === "contactout"
+    ? "text-green-800 dark:text-green-300 bg-green-50 dark:bg-green-950/50"
+    : "text-blue-800 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/50";
+}
+
 export function ContactRow({
   contact,
   jobLocation,
@@ -52,13 +60,14 @@ export function ContactRow({
   contact: Contact;
   jobLocation: string | null;
 }) {
-  const dialPhone = bestDialPhone(contact);
   const personalEmail = contact.personalEmail ?? (
     contact.email && isPersonalEmail(contact.email) ? contact.email : null
   );
   const workEmail =
     contact.workEmail ??
     (contact.email && !isPersonalEmail(contact.email) ? contact.email : null);
+
+  const phones = sortPhonesForDisplay(contactPhonesForDisplay(contact));
 
   return (
     <div className="space-y-1.5 text-sm border-t border-gray-100 dark:border-gray-800 pt-3 first:border-0 first:pt-0">
@@ -130,23 +139,22 @@ export function ContactRow({
           </a>
         )}
 
-        {dialPhone ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[10px] uppercase tracking-wide text-green-700 dark:text-green-400 font-medium">
-              {contact.personalPhone ? "Mobile" : "Phone"}
-            </span>
-            <a href={`tel:${dialPhone}`} className="text-gray-800 dark:text-gray-200">
-              {dialPhone}
-            </a>
-          </div>
-        ) : contact.companyPhone ? (
-          <div className="flex flex-wrap items-center gap-2 text-amber-700 dark:text-amber-400">
-            <span className="text-[10px] uppercase tracking-wide font-medium">
-              Company line
-            </span>
-            <span>{parsePhoneValue(contact.companyPhone)}</span>
-            <span className="text-xs">(not direct — use ContactOut / LinkedIn)</span>
-          </div>
+        {phones.length > 0 ? (
+          phones.map((p) => (
+            <div key={`${p.source}-${p.number}`} className="flex flex-wrap items-center gap-2">
+              <span
+                className={`text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded ${sourceBadgeClass(p.source)}`}
+              >
+                {sourceLabel(p.source)} · {phoneKindLabel(p.kind)}
+              </span>
+              <a
+                href={`tel:${p.number}`}
+                className="text-gray-800 dark:text-gray-200 hover:underline"
+              >
+                {p.number}
+              </a>
+            </div>
+          ))
         ) : null}
       </div>
 

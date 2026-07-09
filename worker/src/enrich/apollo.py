@@ -8,7 +8,12 @@ from urllib.parse import urlencode
 
 import requests
 
-from src.phone_utils import apply_company_phone_dedupe, extract_apollo_mobile
+from src.contact_phones import (
+    extract_apollo_phones,
+    merge_sourced_phones,
+    pick_primary_from_phones,
+)
+from src.phone_utils import apply_company_phone_dedupe
 from src.location import (
     apollo_location_queries,
     collect_job_locations,
@@ -286,13 +291,19 @@ class ApolloProvider:
                 person_matches_location(person, job_locations)
             )
 
+            phones = extract_apollo_phones(enriched)
+            primary = pick_primary_from_phones(phones)
+
             contact = ContactRecord(
                 name=name,
                 first_name=first,
                 last_name=last,
                 title=enriched.get("title") or person.get("title") or "",
                 email=email,
-                phone=extract_apollo_mobile(enriched),
+                phone=primary.get("phone"),
+                personal_phone=primary.get("personal_phone"),
+                company_phone=primary.get("company_phone"),
+                phones=phones,
                 linkedin_url=enriched.get("linkedin_url"),
                 source_provider="apollo",
                 apollo_id=person_id,

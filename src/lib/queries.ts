@@ -9,7 +9,7 @@ import {
 } from "@/lib/db/schema";
 import { CompanyCardData } from "@/components/CompanyCard";
 import { businessToday } from "@/lib/timezone";
-import { applyCompanyPhoneDedupe } from "@/lib/phone-utils";
+import { applySharedLineFilter } from "@/lib/contact-phones";
 
 export async function getTodayCompanies(): Promise<CompanyCardData[]> {
   const today = businessToday();
@@ -163,7 +163,7 @@ async function enrichCompanies(
       domainConfidence: company.domainConfidence,
       status: company.status,
       firstSeen: company.firstSeen,
-      contacts: applyCompanyPhoneDedupe(companyContacts),
+      contacts: applySharedLineFilter(companyContacts),
       jobListings: listings,
     });
   }

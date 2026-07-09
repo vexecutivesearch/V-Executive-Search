@@ -103,6 +103,7 @@ def _build_ingest_payload(
                     "phone": c.phone,
                     "personal_phone": c.personal_phone,
                     "company_phone": c.company_phone,
+                    "phones": c.phones or [],
                     "linkedin_url": c.linkedin_url,
                     "apollo_id": c.apollo_id,
                     "source_provider": c.source_provider,

@@ -9,6 +9,7 @@ import requests
 from src.enrich.apollo import ApolloProvider
 from src.enrich.contactout import ContactOutClient
 from src.enrich.provider import EnrichmentProvider
+from src.contact_phones import merge_sourced_phones, pick_primary_from_phones
 from src.phone_utils import apply_company_phone_dedupe, is_personal_email
 from src.models import CompanyRecord, ContactRecord, EnrichedCompany
 
@@ -80,11 +81,14 @@ class WaterfallProvider:
         elif result.work_emails and not contact.email:
             contact.email = result.work_emails[0]
 
-        if result.personal_phone:
-            contact.personal_phone = result.personal_phone
-            contact.phone = result.personal_phone
+        phones = merge_sourced_phones(contact.phones, result.phones)
+        primary = pick_primary_from_phones(phones)
+        contact.phones = phones
+        contact.personal_phone = primary.get("personal_phone")
+        contact.phone = primary.get("phone")
+        contact.company_phone = primary.get("company_phone")
 
-        if contact.personal_email or contact.personal_phone:
+        if contact.personal_email or phones:
             contact.source_provider = "apollo+contactout"
             contact.enriched = True
 

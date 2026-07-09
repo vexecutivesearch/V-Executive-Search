@@ -21,6 +21,11 @@ interface IngestContact {
   phone?: string;
   personal_phone?: string;
   company_phone?: string;
+  phones?: Array<{
+    number: string;
+    source: "apollo" | "contactout";
+    kind?: "mobile" | "work" | "company" | "other";
+  }>;
   linkedin_url?: string;
   apollo_id?: string;
   source_provider?: string;
@@ -251,6 +256,7 @@ export async function POST(request: NextRequest) {
         phone: c.phone ?? null,
         personalPhone: c.personal_phone ?? null,
         companyPhone: c.company_phone ?? null,
+        phones: c.phones ?? [],
         linkedinUrl: c.linkedin_url ?? null,
         apolloId: c.apollo_id ?? null,
         sourceProvider: c.source_provider ?? "apollo",
