@@ -73,5 +73,6 @@ CONTACTOUT_API_KEY=<ContactOut API token>
 |-----|----------------|
 | **[DEPLOY.md](DEPLOY.md)** | New Vercel env, Neon DB, Mac worker, env vars |
 | [worker/README.md](worker/README.md) | Worker scripts, launchd, JobSpy boards, ContactOut API |
+| [Playwright/README.md](Playwright/README.md) | **Archived** dashboard automation (not in production) |
 
 **Important:** Scraping and launchd run on **one home Mac** with a residential IP. Vercel hosts the CRM only. Your MacBook browser is enough for `/admin` — it does not need the worker installed unless it *is* the worker Mac.
