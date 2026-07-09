@@ -24,8 +24,7 @@ export async function getTodayCompanies(): Promise<CompanyCardData[]> {
         eq(companies.firstSeen, today),
         or(isNotNull(contacts.email), isNotNull(contacts.phone)),
       ),
-    )
-    .orderBy(desc(companies.createdAt));
+    );
 
   const ids = rows.map((r) => r.id);
   if (!ids.length) return [];
