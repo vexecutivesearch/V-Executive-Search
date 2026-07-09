@@ -82,7 +82,7 @@ export default async function TodayPage({
             </>
           )}
           {" "}
-          · {backlogCompanies.length} in backlog · {geoLabel}
+          · {backlogCompanies.length} ranked backlog (all days) · {geoLabel}
         </p>
         <Suspense fallback={null}>
           <TodayDatePicker
@@ -134,6 +134,7 @@ export default async function TodayPage({
           geoLabel={geoLabel}
           listMode={tab}
           runStats={runStats}
+          backlogCount={backlogCompanies.length}
         />
       )}
     </div>

@@ -16,12 +16,14 @@ export function TodayListView({
   geoLabel,
   listMode = "call-sheet",
   runStats,
+  backlogCount,
   showFunnel = true,
 }: {
   companies: CompanyCardData[];
   geoLabel: string;
   listMode?: ListMode;
   runStats?: typeof dailyRuns.$inferSelect | null;
+  backlogCount?: number;
   showFunnel?: boolean;
 }) {
   const [search, setSearch] = useState("");
@@ -97,7 +99,18 @@ export function TodayListView({
   }, [companies, search, sort, geoOnly, callableOnly, hotSignalsOnly]);
 
   const funnelLabel = runStats
-    ? `Scraped ${runStats.listingsScraped ?? 0} → ICP match ${runStats.icpMatchCount ?? 0} → Enriched ${runStats.companiesEnriched ?? 0} · Credits ${runStats.creditsUsed ?? 0}`
+    ? [
+        `Today scraped ${runStats.listingsScraped ?? 0} listings · ${runStats.companiesFound ?? 0} new companies`,
+        `Enriched ${runStats.companiesEnriched ?? 0} · ${runStats.contactsEnriched ?? 0} contacts · ${runStats.creditsUsed ?? 0} credits`,
+        backlogCount != null
+          ? `${backlogCount} in ranked backlog (all days, awaiting enrich)`
+          : null,
+        (runStats.icpMatchCount ?? 0) > 0
+          ? `${runStats.icpMatchCount} ICP-pass companies scored`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
     : null;
 
   return (

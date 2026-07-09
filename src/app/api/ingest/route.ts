@@ -15,6 +15,16 @@ import type { IcpStatus } from "@/lib/db/schema";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function mergeRunErrors(
+  existing: string | null | undefined,
+  incoming: string[] | undefined,
+): string | null {
+  if (!incoming?.length) return existing ?? null;
+  const prev: string[] = existing ? JSON.parse(existing) : [];
+  const merged = [...prev, ...incoming];
+  return merged.length ? JSON.stringify(merged) : null;
+}
+
 interface IngestContact {
   name: string;
   title?: string;
@@ -198,12 +208,14 @@ export async function POST(request: NextRequest) {
         contactsEnriched:
           meta.contacts_enriched ?? existingRun?.contactsEnriched ?? 0,
         creditsUsed: meta.credits_used ?? existingRun?.creditsUsed ?? 0,
-        icpMatchCount: meta.icp_match_count ?? existingRun?.icpMatchCount ?? 0,
+        icpMatchCount: enrichOnly
+          ? (existingRun?.icpMatchCount ?? 0)
+          : (meta.icp_match_count ?? existingRun?.icpMatchCount ?? 0),
         enrichmentQuota: meta.enrichment_quota ?? existingRun?.enrichmentQuota ?? 0,
         companiesScored: meta.companies_scored ?? existingRun?.companiesScored ?? 0,
         companiesDeferred:
           meta.companies_deferred ?? existingRun?.companiesDeferred ?? 0,
-        errors: meta.errors?.length ? JSON.stringify(meta.errors) : null,
+        errors: mergeRunErrors(existingRun?.errors, meta.errors),
       },
     })
     .returning();
@@ -355,18 +367,13 @@ export async function POST(request: NextRequest) {
   }
 
   const uniqueIds = [...new Set(touchedCompanyIds)];
-  const { scored, icpMatch } = await recomputeCompanyScores(uniqueIds);
+  const { scored } = await recomputeCompanyScores(uniqueIds);
 
-  if (jobsOnly || enrichOnly) {
+  if (jobsOnly) {
     await db
       .update(dailyRuns)
       .set({
         companiesScored: (existingRun?.companiesScored ?? 0) + scored,
-        icpMatchCount: Math.max(
-          meta.icp_match_count ?? 0,
-          icpMatch,
-          existingRun?.icpMatchCount ?? 0,
-        ),
       })
       .where(eq(dailyRuns.id, run.id));
   }
@@ -379,6 +386,5 @@ export async function POST(request: NextRequest) {
     jobs_inserted: jobsInserted,
     jobs_resighted: jobsResighted,
     companies_scored: scored,
-    icp_match_count: icpMatch,
   });
 }

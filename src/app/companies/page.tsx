@@ -57,8 +57,9 @@ export default async function CompaniesPage({
   let geoLabel = "your focus area";
   try {
     if (showLeadSplit && leadList === "call-sheet") {
-      [callSheetCompanies, runStats, geoLabel] = await Promise.all([
+      [callSheetCompanies, backlogCompanies, runStats, geoLabel] = await Promise.all([
         getCallSheetCompanies(),
+        getBacklogCompanies(),
         getLatestRunStats(),
         getTodayGeoLabel(),
       ]);
@@ -227,6 +228,7 @@ export default async function CompaniesPage({
               geoLabel={geoLabel}
               listMode={leadList === "backlog" ? "backlog" : "call-sheet"}
               runStats={runStats}
+              backlogCount={backlogCompanies.length}
               showFunnel={showLeadSplit && leadList !== "all"}
             />
           )}

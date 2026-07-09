@@ -1,12 +1,19 @@
-import { getRecentRuns } from "@/lib/queries";
+import { getBacklogCompanies, getRecentRuns } from "@/lib/queries";
+import { categorizeRunErrors } from "@/lib/run-errors";
+import { businessListDate } from "@/lib/timezone";
 import { formatDate } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
 export default async function RunsPage() {
   let runs;
+  let backlogCount = 0;
+
   try {
-    runs = await getRecentRuns();
+    [runs, backlogCount] = await Promise.all([
+      getRecentRuns(),
+      getBacklogCompanies().then((rows) => rows.length),
+    ]);
   } catch {
     return (
       <div className="max-w-6xl mx-auto px-4 py-8">
@@ -16,9 +23,17 @@ export default async function RunsPage() {
     );
   }
 
+  const today = businessListDate();
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold mb-6">Pipeline Runs</h1>
+      <h1 className="text-2xl font-bold mb-2">Pipeline Runs</h1>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-6 max-w-3xl">
+        Each row is <strong>today&apos;s nightly batch</strong> — listings scraped,
+        new companies ingested, and how many were enriched with paid credits.
+        The ranked backlog ({backlogCount} companies) is cumulative across all
+        days and is not the same as &quot;Companies&quot; in this table.
+      </p>
 
       {runs.length === 0 ? (
         <p className="text-gray-400">No runs recorded yet.</p>
@@ -28,18 +43,25 @@ export default async function RunsPage() {
             <thead>
               <tr className="border-b border-gray-200 dark:border-gray-800 text-left text-gray-500">
                 <th className="py-2 pr-4">Date</th>
-                <th className="py-2 pr-4">Listings</th>
-                <th className="py-2 pr-4">Companies</th>
+                <th className="py-2 pr-4" title="Job listings scraped this batch">
+                  Listings
+                </th>
+                <th className="py-2 pr-4" title="New companies from this scrape">
+                  New cos
+                </th>
                 <th className="py-2 pr-4">Skipped</th>
                 <th className="py-2 pr-4">Enriched</th>
                 <th className="py-2 pr-4">Contacts</th>
                 <th className="py-2 pr-4">Credits</th>
-                <th className="py-2">Errors</th>
+                <th className="py-2">Issues</th>
               </tr>
             </thead>
             <tbody>
               {runs.map((run) => {
                 const errors = run.errors ? JSON.parse(run.errors) : [];
+                const { domainSkipped, other } = categorizeRunErrors(errors);
+                const isToday = run.runDate === today;
+
                 return (
                   <tr
                     key={run.id}
@@ -47,6 +69,11 @@ export default async function RunsPage() {
                   >
                     <td className="py-3 pr-4 font-medium">
                       {formatDate(run.runDate)}
+                      {isToday && (
+                        <span className="ml-2 text-xs font-normal text-gray-400">
+                          backlog {backlogCount}
+                        </span>
+                      )}
                     </td>
                     <td className="py-3 pr-4">{run.listingsScraped}</td>
                     <td className="py-3 pr-4">{run.companiesFound}</td>
@@ -54,21 +81,45 @@ export default async function RunsPage() {
                     <td className="py-3 pr-4">{run.companiesEnriched}</td>
                     <td className="py-3 pr-4">{run.contactsEnriched}</td>
                     <td className="py-3 pr-4">{run.creditsUsed}</td>
-                    <td className="py-3 text-amber-600">
-                      {errors.length > 0 ? (
+                    <td className="py-3">
+                      {domainSkipped.length === 0 && other.length === 0 ? (
+                        "—"
+                      ) : (
                         <details className="cursor-pointer">
-                          <summary>
-                            {errors.length} error
-                            {errors.length > 1 ? "s" : ""}
+                          <summary className="text-amber-600">
+                            {domainSkipped.length > 0 && (
+                              <span>
+                                {domainSkipped.length} skipped (no domain)
+                              </span>
+                            )}
+                            {domainSkipped.length > 0 && other.length > 0 && (
+                              <span> · </span>
+                            )}
+                            {other.length > 0 && (
+                              <span>
+                                {other.length} error{other.length > 1 ? "s" : ""}
+                              </span>
+                            )}
                           </summary>
                           <ul className="mt-1 max-w-md text-xs font-normal text-gray-600 dark:text-gray-400 list-disc pl-4">
-                            {errors.map((err: string, i: number) => (
-                              <li key={i}>{err}</li>
+                            {domainSkipped.length > 0 && (
+                              <li className="list-none -ml-4 font-medium text-gray-500">
+                                No domain (enrich deferred):
+                              </li>
+                            )}
+                            {domainSkipped.map((err: string, i: number) => (
+                              <li key={`d-${i}`}>{err}</li>
+                            ))}
+                            {other.length > 0 && domainSkipped.length > 0 && (
+                              <li className="list-none -ml-4 mt-2 font-medium text-gray-500">
+                                Other errors:
+                              </li>
+                            )}
+                            {other.map((err: string, i: number) => (
+                              <li key={`e-${i}`}>{err}</li>
                             ))}
                           </ul>
                         </details>
-                      ) : (
-                        "—"
                       )}
                     </td>
                   </tr>
