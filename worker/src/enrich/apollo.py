@@ -190,9 +190,16 @@ def _extract_phone(person: dict[str, Any]) -> str | None:
     phones = person.get("phone_numbers") or []
     if phones:
         mobile = next(
-            (p for p in phones if p.get("type_cd") in ("mobile", "other")),
+            (p for p in phones if isinstance(p, dict) and p.get("type_cd") in ("mobile", "other")),
             phones[0],
         )
-        return mobile.get("sanitized_number") or mobile.get("raw_number")
+        if isinstance(mobile, dict):
+            return mobile.get("sanitized_number") or mobile.get("raw_number") or mobile.get("number")
+
     org = person.get("organization") or {}
-    return org.get("primary_phone") or person.get("phone") or None
+    org_phone = org.get("primary_phone") or person.get("phone")
+    if isinstance(org_phone, dict):
+        return org_phone.get("sanitized_number") or org_phone.get("number") or org_phone.get("raw_number")
+    if isinstance(org_phone, str):
+        return org_phone
+    return None
