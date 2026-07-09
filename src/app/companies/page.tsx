@@ -1,8 +1,10 @@
 import { CompanyCard } from "@/components/CompanyCard";
+import { CompanySearch } from "@/components/CompanySearch";
 import { getCompaniesByStatus } from "@/lib/queries";
 import { CompanyStatus } from "@/lib/db/schema";
 import { STATUS_LABELS } from "@/lib/utils";
 import Link from "next/link";
+import { Suspense } from "react";
 
 export const dynamic = "force-dynamic";
 
@@ -18,14 +20,14 @@ const FILTERS: { label: string; value?: CompanyStatus }[] = [
 export default async function CompaniesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string }>;
+  searchParams: Promise<{ status?: string; q?: string }>;
 }) {
-  const { status } = await searchParams;
+  const { status, q } = await searchParams;
   const filterStatus = FILTERS.find((f) => f.value === status)?.value;
 
   let companies;
   try {
-    companies = await getCompaniesByStatus(filterStatus);
+    companies = await getCompaniesByStatus(filterStatus, q);
   } catch {
     return (
       <div className="max-w-6xl mx-auto px-4 py-8">
@@ -41,7 +43,12 @@ export default async function CompaniesPage({
 
       <div className="flex flex-wrap gap-2 mb-6">
         {FILTERS.map((f) => {
-          const href = f.value ? `/companies?status=${f.value}` : "/companies";
+          const params = new URLSearchParams();
+          if (f.value) params.set("status", f.value);
+          if (q?.trim()) params.set("q", q.trim());
+          const href = params.size
+            ? `/companies?${params.toString()}`
+            : "/companies";
           const active = (filterStatus ?? undefined) === f.value;
           return (
             <Link
@@ -58,6 +65,10 @@ export default async function CompaniesPage({
           );
         })}
       </div>
+
+      <Suspense fallback={null}>
+        <CompanySearch initialQuery={q} />
+      </Suspense>
 
       <p className="text-sm text-gray-400 mb-4">
         {companies.length} {companies.length === 1 ? "company" : "companies"}

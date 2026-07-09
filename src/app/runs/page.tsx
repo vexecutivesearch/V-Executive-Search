@@ -55,7 +55,21 @@ export default async function RunsPage() {
                     <td className="py-3 pr-4">{run.contactsEnriched}</td>
                     <td className="py-3 pr-4">{run.creditsUsed}</td>
                     <td className="py-3 text-amber-600">
-                      {errors.length > 0 ? errors.length : "—"}
+                      {errors.length > 0 ? (
+                        <details className="cursor-pointer">
+                          <summary>
+                            {errors.length} error
+                            {errors.length > 1 ? "s" : ""}
+                          </summary>
+                          <ul className="mt-1 max-w-md text-xs font-normal text-gray-600 dark:text-gray-400 list-disc pl-4">
+                            {errors.map((err: string, i: number) => (
+                              <li key={i}>{err}</li>
+                            ))}
+                          </ul>
+                        </details>
+                      ) : (
+                        "—"
+                      )}
                     </td>
                   </tr>
                 );

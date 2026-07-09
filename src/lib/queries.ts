@@ -1,4 +1,4 @@
-import { and, count, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, isNotNull, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   companies,
@@ -13,28 +13,61 @@ import { businessToday } from "@/lib/timezone";
 export async function getTodayCompanies(): Promise<CompanyCardData[]> {
   const today = businessToday();
 
+  // Callable leads only: new status, added today, with email or phone on file.
   const rows = await db
-    .select()
+    .selectDistinct({ id: companies.id })
     .from(companies)
-    .where(and(eq(companies.firstSeen, today), eq(companies.status, "new")))
+    .innerJoin(contacts, eq(contacts.companyId, companies.id))
+    .where(
+      and(
+        eq(companies.status, "new"),
+        eq(companies.firstSeen, today),
+        or(isNotNull(contacts.email), isNotNull(contacts.phone)),
+      ),
+    )
     .orderBy(desc(companies.createdAt));
 
-  return enrichCompanies(rows);
+  const ids = rows.map((r) => r.id);
+  if (!ids.length) return [];
+
+  const companiesRows = await db
+    .select()
+    .from(companies)
+    .where(inArray(companies.id, ids))
+    .orderBy(desc(companies.createdAt));
+
+  return enrichCompanies(companiesRows);
 }
 
 export async function getCompaniesByStatus(
   status?: CompanyStatus,
+  search?: string,
 ): Promise<CompanyCardData[]> {
-  const rows = status
+  const term = search?.trim();
+  const rows = term
     ? await db
         .select()
         .from(companies)
-        .where(eq(companies.status, status))
+        .where(
+          and(
+            status ? eq(companies.status, status) : undefined,
+            or(
+              ilike(companies.name, `%${term}%`),
+              ilike(companies.domain, `%${term}%`),
+            ),
+          ),
+        )
         .orderBy(desc(companies.updatedAt))
-    : await db
-        .select()
-        .from(companies)
-        .orderBy(desc(companies.updatedAt));
+    : status
+      ? await db
+          .select()
+          .from(companies)
+          .where(eq(companies.status, status))
+          .orderBy(desc(companies.updatedAt))
+      : await db
+          .select()
+          .from(companies)
+          .orderBy(desc(companies.updatedAt));
 
   return enrichCompanies(rows);
 }

@@ -35,15 +35,22 @@ export function StatusSelect({
   const [loading, setLoading] = useState(false);
 
   async function handleChange(newStatus: CompanyStatus) {
+    const prev = status;
     setLoading(true);
     setStatus(newStatus);
     try {
-      await fetch(`/api/companies/${companyId}`, {
+      const res = await fetch(`/api/companies/${companyId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: newStatus }),
       });
+      if (!res.ok) {
+        setStatus(prev);
+        return;
+      }
       router.refresh();
+    } catch {
+      setStatus(prev);
     } finally {
       setLoading(false);
     }

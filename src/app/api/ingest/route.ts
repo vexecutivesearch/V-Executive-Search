@@ -57,6 +57,17 @@ interface IngestPayload {
   companies: IngestCompany[];
 }
 
+function earliestFirstSeen(
+  item: IngestCompany,
+  runDate: string,
+): string {
+  const dates = (item.job_listings ?? [])
+    .map((j) => j.posted_at?.slice(0, 10))
+    .filter((d): d is string => Boolean(d));
+  if (dates.length) return dates.sort()[0];
+  return runDate;
+}
+
 function normalizeCompanyKey(name: string): string {
   return name
     .toLowerCase()
@@ -192,7 +203,9 @@ export async function POST(request: NextRequest) {
           domain,
           domainConfidence:
             item.domain_confidence === "high" ? "high" : "low",
-          firstSeen: payload.run_date,
+          firstSeen: jobsOnly
+            ? earliestFirstSeen(item, payload.run_date)
+            : payload.run_date,
           dailyRunId: run.id,
         })
         .returning();
@@ -202,6 +215,28 @@ export async function POST(request: NextRequest) {
 
     for (const c of item.contacts ?? []) {
       if (!c.email && !c.name) continue;
+
+      const existingForCompany = await db
+        .select({ apolloId: contacts.apolloId, email: contacts.email })
+        .from(contacts)
+        .where(eq(contacts.companyId, companyId));
+
+      if (
+        c.apollo_id &&
+        existingForCompany.some((row) => row.apolloId === c.apollo_id)
+      ) {
+        continue;
+      }
+      const emailNorm = c.email?.trim().toLowerCase();
+      if (
+        emailNorm &&
+        existingForCompany.some(
+          (row) => row.email?.trim().toLowerCase() === emailNorm,
+        )
+      ) {
+        continue;
+      }
+
       await db.insert(contacts).values({
         companyId,
         name: c.name,

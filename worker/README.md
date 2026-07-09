@@ -27,6 +27,16 @@ python scripts/health_check.py           # smoke test all integrations
 
 Must run on a **home Mac with residential IP** (job boards block cloud servers).
 
+**One-command setup** (clone repo first):
+
+```bash
+cd worker
+chmod +x scripts/setup_mac.sh
+./scripts/setup_mac.sh
+```
+
+Or manual steps:
+
 ```bash
 cd worker
 chmod +x scripts/install_launchd.sh

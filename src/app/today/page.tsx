@@ -35,15 +35,17 @@ export default async function TodayPage() {
         <h1 className="text-2xl font-bold">Today&apos;s List</h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">{today}</p>
         <p className="text-sm text-gray-400 mt-1">
-          {companies.length} new {companies.length === 1 ? "company" : "companies"} ready for outreach
+          {companies.length} callable{" "}
+          {companies.length === 1 ? "lead" : "leads"} with contact info
         </p>
       </div>
 
       {companies.length === 0 ? (
         <div className="text-center py-16 text-gray-400">
-          <p className="text-lg">No new companies today</p>
+          <p className="text-lg">No callable leads today</p>
           <p className="text-sm mt-2">
-            The scheduled pipeline (6 AM & 6 PM) will populate this list automatically.
+            After the 6 AM / 6 PM pipeline runs, enriched companies with phone or
+            email appear here. Browse unenriched jobs on the Jobs page.
           </p>
         </div>
       ) : (
