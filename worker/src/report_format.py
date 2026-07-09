@@ -85,10 +85,7 @@ def _format_email_cell(email: str | None) -> str:
     return f'<a href="mailto:{safe}" style="color:#2563eb">{safe}</a>'
 
 
-def _format_phones_cell(phones: list[dict[str, str]]) -> str:
-    if not phones:
-        return '<span style="color:#9ca3af">—</span>'
-
+def _format_phones_cell(phones: list[dict[str, str]], row: dict[str, Any]) -> str:
     parts: list[str] = []
     for phone in phones:
         number = parse_phone_value(phone.get("number"))
@@ -107,7 +104,18 @@ def _format_phones_cell(phones: list[dict[str, str]]) -> str:
             f'<a href="tel:{safe_number}" style="color:#111827">{safe_number}</a>'
             f"</div>"
         )
-    return "".join(parts) if parts else '<span style="color:#9ca3af">—</span>'
+
+    personal = row.get("personal_email") or row.get("personalEmail")
+    has_contactout = any(p.get("source") == "contactout" for p in phones)
+    if personal and not has_contactout:
+        parts.append(
+            '<div style="margin:0 0 6px 0;color:#9ca3af;font-style:italic;font-size:12px">'
+            "ContactOut phone not on API plan</div>"
+        )
+
+    if not parts:
+        return '<span style="color:#9ca3af">—</span>'
+    return "".join(parts)
 
 
 def _format_imessage_cell(row: dict[str, Any], personal_email: str | None) -> str:
@@ -144,7 +152,7 @@ def format_contact_row_cells(row: dict[str, Any]) -> dict[str, str]:
         "title": _esc(row.get("title", "")),
         "work_email": _format_email_cell(work_email),
         "personal_email": _format_email_cell(personal_email),
-        "phones": _format_phones_cell(phones),
+        "phones": _format_phones_cell(phones, row),
         "imessage": _format_imessage_cell(row, personal_email),
         "job_title": _esc(row.get("job_title") or row.get("jobTitle", "")),
     }

@@ -3,8 +3,8 @@ import {
   extractContactOutPhones,
   type SourcedPhone,
 } from "@/lib/contact-phones";
+import { isContactOutSampleResponse } from "@/lib/contactout-samples";
 
-const CONTACTOUT_PROFILE_URL = "https://api.contactout.com/v2/enrich/profile";
 const CONTACTOUT_LINKEDIN_URL = "https://api.contactout.com/v1/people/linkedin";
 
 export type ContactOutData = {
@@ -12,6 +12,7 @@ export type ContactOutData = {
   personalPhone: string | null;
   workEmails: string[];
   phones: SourcedPhone[];
+  phoneApiLocked: boolean;
 };
 
 function normalizeLinkedIn(url: string): string {
@@ -43,28 +44,47 @@ function pickPersonalEmail(emails: unknown[]): string | null {
   return null;
 }
 
+function collectProfileLists(
+  profile: Record<string, unknown>,
+  keys: string[],
+): unknown[] {
+  const out: unknown[] = [];
+  for (const key of keys) {
+    const val = profile[key];
+    if (Array.isArray(val)) out.push(...val);
+    else if (typeof val === "string" && val) out.push(val);
+  }
+  return out;
+}
+
 function parseContactOutPayload(data: Record<string, unknown>): ContactOutData {
+  if (isContactOutSampleResponse(data)) {
+    return {
+      personalEmail: null,
+      personalPhone: null,
+      workEmails: [],
+      phones: [],
+      phoneApiLocked: true,
+    };
+  }
+
   const profile = (data.profile ?? data.data ?? data) as Record<string, unknown>;
-  const emailsRaw: unknown[] = [];
-  for (const key of ["personal_email", "personal_emails", "emails", "email"]) {
-    const val = profile[key];
-    if (Array.isArray(val)) emailsRaw.push(...val);
-    else if (typeof val === "string" && val) emailsRaw.push(val);
-  }
-
-  const phonesRaw: unknown[] = [];
-  for (const key of ["phone", "phones", "mobile", "personal_phone"]) {
-    const val = profile[key];
-    if (Array.isArray(val)) phonesRaw.push(...val);
-    else if (typeof val === "string" && val) phonesRaw.push(val);
-  }
-
-  const workEmails: string[] = [];
-  for (const key of ["work_email", "work_emails"]) {
-    const val = profile[key];
-    if (Array.isArray(val)) workEmails.push(...val.map(String));
-    else if (typeof val === "string" && val) workEmails.push(val);
-  }
+  const emailsRaw = collectProfileLists(profile, [
+    "personal_email",
+    "personal_emails",
+    "emails",
+    "email",
+  ]);
+  const phonesRaw = collectProfileLists(profile, [
+    "phone",
+    "phones",
+    "mobile",
+    "personal_phone",
+  ]);
+  const workEmails = collectProfileLists(profile, [
+    "work_email",
+    "work_emails",
+  ]).map(String);
 
   const phones = extractContactOutPhones(phonesRaw);
   const personalPhone =
@@ -75,7 +95,40 @@ function parseContactOutPayload(data: Record<string, unknown>): ContactOutData {
     personalPhone,
     workEmails,
     phones,
+    phoneApiLocked: false,
   };
+}
+
+function mergeContactOutData(
+  base: ContactOutData,
+  phones: ContactOutData,
+): ContactOutData {
+  return {
+    personalEmail: base.personalEmail ?? phones.personalEmail,
+    personalPhone: phones.personalPhone ?? base.personalPhone,
+    workEmails: base.workEmails.length ? base.workEmails : phones.workEmails,
+    phones: [...base.phones, ...phones.phones],
+    phoneApiLocked: base.phoneApiLocked || phones.phoneApiLocked,
+  };
+}
+
+async function contactOutGet(
+  apiKey: string,
+  params: Record<string, string>,
+): Promise<Record<string, unknown> | null> {
+  const resp = await fetch(
+    `${CONTACTOUT_LINKEDIN_URL}?${new URLSearchParams(params)}`,
+    {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        token: apiKey,
+      },
+    },
+  );
+  if (resp.status === 404) return null;
+  if (!resp.ok) return null;
+  return (await resp.json()) as Record<string, unknown>;
 }
 
 export async function enrichFromContactOut(
@@ -83,57 +136,35 @@ export async function enrichFromContactOut(
   apiKey: string,
 ): Promise<ContactOutData | null> {
   const profile = normalizeLinkedIn(linkedinUrl);
-  const attempts: Array<{
-    endpoint: string;
-    method: "get" | "post";
-    params: Record<string, string>;
-  }> = [
-    {
-      endpoint: CONTACTOUT_LINKEDIN_URL,
-      method: "get",
-      params: { profile, include: "personal_email,phone" },
-    },
-    {
-      endpoint: CONTACTOUT_PROFILE_URL,
-      method: "post",
-      params: { profile, include: "personal_email,phone" },
-    },
-  ];
 
-  for (const { endpoint, method, params } of attempts) {
-    try {
-      const headers = {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        token: apiKey,
-      };
-      const resp =
-        method === "get"
-          ? await fetch(`${endpoint}?${new URLSearchParams(params)}`, {
-              method: "GET",
-              headers,
-            })
-          : await fetch(endpoint, {
-              method: "POST",
-              headers,
-              body: JSON.stringify(params),
-            });
-      if (resp.status === 404) continue;
-      if (!resp.ok) continue;
-      const data = (await resp.json()) as Record<string, unknown>;
-      const parsed = parseContactOutPayload(data);
-      if (
-        parsed.personalEmail ||
-        parsed.phones.length ||
-        parsed.workEmails.length
-      ) {
-        return parsed;
-      }
-    } catch {
-      continue;
-    }
+  const emailData = await contactOutGet(apiKey, {
+    profile,
+    email_type: "personal,work",
+  });
+  if (!emailData) return null;
+
+  const base = parseContactOutPayload(emailData);
+  if (base.phoneApiLocked) return null;
+
+  const phoneData = await contactOutGet(apiKey, {
+    profile,
+    include_phone: "true",
+    email_type: "none",
+  });
+  if (!phoneData) {
+    if (base.personalEmail || base.workEmails.length) return base;
+    return null;
   }
 
+  const phoneResult = parseContactOutPayload(phoneData);
+  if (phoneResult.phoneApiLocked) {
+    return base.personalEmail || base.workEmails.length ? base : null;
+  }
+
+  const merged = mergeContactOutData(base, phoneResult);
+  if (merged.personalEmail || merged.phones.length || merged.workEmails.length) {
+    return merged;
+  }
   return null;
 }
 

@@ -2,18 +2,18 @@ from __future__ import annotations
 
 import logging
 import os
-import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import requests
 
 from src.contact_phones import extract_contactout_phones
+from src.enrich.contactout_samples import is_contactout_sample_response
 
 logger = logging.getLogger(__name__)
 
-CONTACTOUT_PROFILE_URL = "https://api.contactout.com/v2/enrich/profile"
 CONTACTOUT_LINKEDIN_URL = "https://api.contactout.com/v1/people/linkedin"
+CONTACTOUT_ENRICH_URL = "https://api.contactout.com/v1/people/enrich"
 
 
 @dataclass
@@ -23,6 +23,7 @@ class ContactOutResult:
     work_emails: list[str] | None = None
     phones: list[dict[str, str]] | None = None
     credits_used: int = 0
+    phone_api_locked: bool = False
 
 
 def _headers(api_key: str) -> dict[str, str]:
@@ -38,6 +39,22 @@ def _normalize_linkedin(url: str) -> str:
     if not url.startswith("http"):
         url = f"https://www.linkedin.com/in/{url.strip('/')}"
     return url
+
+
+def is_personal_email_str(email: str) -> bool:
+    domain = email.split("@")[-1].lower() if "@" in email else ""
+    personal = {
+        "gmail.com",
+        "yahoo.com",
+        "hotmail.com",
+        "outlook.com",
+        "icloud.com",
+        "me.com",
+        "aol.com",
+        "proton.me",
+        "protonmail.com",
+    }
+    return domain in personal or any(domain.endswith(f".{d}") for d in personal)
 
 
 def _pick_personal_email(emails: list[Any]) -> str | None:
@@ -64,77 +81,38 @@ def _pick_personal_email(emails: list[Any]) -> str | None:
     return None
 
 
-def _pick_mobile_phone(phones: list[Any]) -> str | None:
-    for entry in phones:
-        if isinstance(entry, str):
-            return entry
-        if not isinstance(entry, dict):
-            continue
-        phone_type = (entry.get("type") or entry.get("label") or "").lower()
-        number = (
-            entry.get("number")
-            or entry.get("sanitized_number")
-            or entry.get("value")
-            or entry.get("phone")
-        )
-        if not number:
-            continue
-        if "mobile" in phone_type or "cell" in phone_type or "personal" in phone_type:
-            return str(number)
-    for entry in phones:
-        if isinstance(entry, str):
-            return entry
-        if isinstance(entry, dict):
-            number = entry.get("number") or entry.get("sanitized_number")
-            if number:
-                return str(number)
-    return None
-
-
-def is_personal_email_str(email: str) -> bool:
-    domain = email.split("@")[-1].lower() if "@" in email else ""
-    personal = {
-        "gmail.com",
-        "yahoo.com",
-        "hotmail.com",
-        "outlook.com",
-        "icloud.com",
-        "me.com",
-        "aol.com",
-        "proton.me",
-        "protonmail.com",
-    }
-    return domain in personal or any(domain.endswith(f".{d}") for d in personal)
+def _collect_profile_lists(profile: dict[str, Any], keys: tuple[str, ...]) -> list[Any]:
+    out: list[Any] = []
+    for key in keys:
+        val = profile.get(key)
+        if isinstance(val, list):
+            out.extend(val)
+        elif isinstance(val, str) and val:
+            out.append(val)
+    return out
 
 
 def _parse_payload(data: dict[str, Any]) -> ContactOutResult:
+    if is_contactout_sample_response(data):
+        return ContactOutResult(phone_api_locked=True)
+
     profile = data.get("profile") or data.get("data") or data
     if not isinstance(profile, dict):
         return ContactOutResult()
 
-    emails_raw: list[Any] = []
-    for key in ("personal_email", "personal_emails", "emails", "email"):
-        val = profile.get(key)
-        if isinstance(val, list):
-            emails_raw.extend(val)
-        elif isinstance(val, str) and val:
-            emails_raw.append(val)
-
-    phones_raw: list[Any] = []
-    for key in ("phone", "phones", "mobile", "personal_phone"):
-        val = profile.get(key)
-        if isinstance(val, list):
-            phones_raw.extend(val)
-        elif isinstance(val, str) and val:
-            phones_raw.append(val)
-
-    work: list[str] = []
-    for key in ("work_email", "work_emails"):
-        val = profile.get(key)
-        if isinstance(val, list):
-            work.extend(str(v) for v in val if v)
-        elif isinstance(val, str) and val:
-            work.append(val)
+    emails_raw = _collect_profile_lists(
+        profile,
+        ("personal_email", "personal_emails", "emails", "email"),
+    )
+    phones_raw = _collect_profile_lists(
+        profile,
+        ("phone", "phones", "mobile", "personal_phone"),
+    )
+    work = [
+        str(v)
+        for v in _collect_profile_lists(profile, ("work_email", "work_emails"))
+        if v
+    ]
 
     phones = extract_contactout_phones(phones_raw)
     personal_phone = next(
@@ -148,6 +126,23 @@ def _parse_payload(data: dict[str, Any]) -> ContactOutResult:
         work_emails=work or None,
         phones=phones or None,
         credits_used=1,
+    )
+
+
+def _merge_results(base: ContactOutResult, phones: ContactOutResult) -> ContactOutResult:
+    merged_phones = list(base.phones or [])
+    for phone in phones.phones or []:
+        key = f"{phone.get('source')}:{phone.get('number')}"
+        if not any(f"{p.get('source')}:{p.get('number')}" == key for p in merged_phones):
+            merged_phones.append(phone)
+
+    personal_phone = phones.personal_phone or base.personal_phone
+    return replace(
+        base,
+        personal_phone=personal_phone,
+        phones=merged_phones or None,
+        credits_used=base.credits_used + phones.credits_used,
+        phone_api_locked=base.phone_api_locked or phones.phone_api_locked,
     )
 
 
@@ -167,37 +162,57 @@ class ContactOutClient:
         url = _normalize_linkedin(linkedin_url)
         headers = _headers(self._api_key)
 
-        for endpoint, method, payload in (
-            (CONTACTOUT_LINKEDIN_URL, "get", {"profile": url, "include": "personal_email,phone"}),
-            (CONTACTOUT_PROFILE_URL, "post", {"profile": url, "include": "personal_email,phone"}),
-        ):
-            try:
-                if method == "post":
-                    resp = requests.post(
-                        endpoint,
-                        headers=headers,
-                        json=payload,
-                        timeout=30,
-                    )
-                else:
-                    resp = requests.get(
-                        endpoint,
-                        headers=headers,
-                        params={"profile": url},
-                        timeout=30,
-                    )
-                if resp.status_code == 404:
-                    logger.info("ContactOut: no match for %s", url)
-                    return ContactOutResult()
-                resp.raise_for_status()
-                result = _parse_payload(resp.json())
-                self.credits_used += result.credits_used
-                if result.personal_email or result.phones or result.work_emails:
-                    return result
-            except requests.RequestException as exc:
-                detail = ""
-                if hasattr(exc, "response") and exc.response is not None:
-                    detail = exc.response.text[:200]
-                logger.warning("ContactOut %s failed for %s: %s %s", endpoint, url, exc, detail)
+        try:
+            email_resp = requests.get(
+                CONTACTOUT_LINKEDIN_URL,
+                headers=headers,
+                params={
+                    "profile": url,
+                    "email_type": "personal,work",
+                },
+                timeout=30,
+            )
+            if email_resp.status_code == 404:
+                logger.info("ContactOut: no match for %s", url)
+                return ContactOutResult()
+            email_resp.raise_for_status()
+            base = _parse_payload(email_resp.json())
+            if base.phone_api_locked:
+                logger.warning("ContactOut email response looked like sample data for %s", url)
+                return None
+
+            phone_resp = requests.get(
+                CONTACTOUT_LINKEDIN_URL,
+                headers=headers,
+                params={
+                    "profile": url,
+                    "include_phone": "true",
+                    "email_type": "none",
+                },
+                timeout=30,
+            )
+            if phone_resp.status_code == 404:
+                self.credits_used += base.credits_used
+                return base if (base.personal_email or base.work_emails) else None
+
+            phone_resp.raise_for_status()
+            phone_result = _parse_payload(phone_resp.json())
+            if phone_result.phone_api_locked:
+                logger.info(
+                    "ContactOut phone credits unavailable for %s — emails only",
+                    url,
+                )
+                self.credits_used += base.credits_used
+                return base if (base.personal_email or base.work_emails) else None
+
+            merged = _merge_results(base, phone_result)
+            self.credits_used += merged.credits_used
+            if merged.personal_email or merged.phones or merged.work_emails:
+                return merged
+        except requests.RequestException as exc:
+            detail = ""
+            if hasattr(exc, "response") and exc.response is not None:
+                detail = exc.response.text[:200]
+            logger.warning("ContactOut failed for %s: %s %s", url, exc, detail)
 
         return None
