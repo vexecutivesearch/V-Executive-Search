@@ -97,6 +97,7 @@ def _build_ingest_payload(
                     "email": c.email,
                     "phone": c.phone,
                     "linkedin_url": c.linkedin_url,
+                    "apollo_id": c.apollo_id,
                     "source_provider": c.source_provider,
                 }
                 for c in item.contacts

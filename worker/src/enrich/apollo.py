@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from typing import Any
+from urllib.parse import urlencode
 
 import requests
 
@@ -12,8 +13,8 @@ from src.models import CompanyRecord, ContactRecord, EnrichedCompany
 logger = logging.getLogger(__name__)
 
 APOLLO_BASE = "https://api.apollo.io/api/v1"
-PHONE_CREDIT_COST = 8
 EMAIL_CREDIT_COST = 1
+PHONE_CREDIT_COST = 8
 
 
 class ApolloProvider:
@@ -34,6 +35,12 @@ class ApolloProvider:
             "Cache-Control": "no-cache",
             "X-Api-Key": self._api_key,
         }
+
+    def _webhook_url(self) -> str | None:
+        base = (os.environ.get("CRM_API_URL") or "").rstrip("/")
+        if not base:
+            return None
+        return f"{base}/api/apollo/webhook"
 
     def _search_people(
         self,
@@ -71,15 +78,22 @@ class ApolloProvider:
             return []
 
     def _enrich_person(self, person_id: str, enrich_phone: bool) -> dict[str, Any] | None:
-        payload: dict[str, Any] = {"id": person_id}
+        params: dict[str, str] = {"id": person_id}
         if enrich_phone:
-            payload["reveal_phone_number"] = True
+            webhook = self._webhook_url()
+            if not webhook:
+                logger.warning(
+                    "enrich_phone enabled but CRM_API_URL not set — phones will not be revealed"
+                )
+            else:
+                params["reveal_phone_number"] = "true"
+                params["webhook_url"] = webhook
 
         try:
             resp = requests.post(
-                f"{APOLLO_BASE}/people/match",
+                f"{APOLLO_BASE}/people/match?{urlencode(params)}",
                 headers=self._headers(),
-                json=payload,
+                json={},
                 timeout=30,
             )
             resp.raise_for_status()
@@ -87,14 +101,18 @@ class ApolloProvider:
             person = data.get("person")
             if person:
                 self._credits_used += EMAIL_CREDIT_COST
-                if enrich_phone and person.get("phone_numbers"):
+                if enrich_phone and params.get("reveal_phone_number"):
                     self._credits_used += PHONE_CREDIT_COST - EMAIL_CREDIT_COST
+                    logger.info(
+                        "Phone reveal requested for %s — mobile numbers will arrive via webhook",
+                        person_id,
+                    )
             return person
         except requests.RequestException as exc:
             detail = ""
             if hasattr(exc, "response") and exc.response is not None:
                 try:
-                    detail = exc.response.text[:200]
+                    detail = exc.response.text[:300]
                 except Exception:
                     pass
             if "insufficient credits" in detail.lower():
@@ -137,7 +155,7 @@ class ApolloProvider:
                 continue
 
             enriched = self._enrich_person(person_id, enrich_phone)
-            time.sleep(0.3)  # gentle rate limiting
+            time.sleep(0.3)
 
             if not enriched:
                 continue
@@ -155,7 +173,7 @@ class ApolloProvider:
                 last_name=last,
                 title=enriched.get("title") or person.get("title") or "",
                 email=email,
-                phone=_extract_phone(enriched) if enrich_phone else None,
+                phone=_extract_phone(enriched),
                 linkedin_url=enriched.get("linkedin_url"),
                 source_provider="apollo",
                 apollo_id=person_id,
@@ -171,5 +189,10 @@ class ApolloProvider:
 def _extract_phone(person: dict[str, Any]) -> str | None:
     phones = person.get("phone_numbers") or []
     if phones:
-        return phones[0].get("sanitized_number") or phones[0].get("raw_number")
-    return person.get("phone") or None
+        mobile = next(
+            (p for p in phones if p.get("type_cd") in ("mobile", "other")),
+            phones[0],
+        )
+        return mobile.get("sanitized_number") or mobile.get("raw_number")
+    org = person.get("organization") or {}
+    return org.get("primary_phone") or person.get("phone") or None

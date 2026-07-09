@@ -58,6 +58,7 @@ export const contacts = pgTable("contacts", {
   email: text("email"),
   phone: text("phone"),
   linkedinUrl: text("linkedin_url"),
+  apolloId: text("apollo_id"),
   sourceProvider: text("source_provider").default("apollo"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

@@ -48,6 +48,6 @@ target_seniorities:
 # Enrichment settings
 enrichment:
   contacts_per_company: 2
-  enrich_phone: false
-  daily_credit_cap: 100
+  enrich_phone: true
+  daily_credit_cap: 200
   provider: apollo

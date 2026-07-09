@@ -18,6 +18,7 @@ interface IngestContact {
   email?: string;
   phone?: string;
   linkedin_url?: string;
+  apollo_id?: string;
   source_provider?: string;
 }
 
@@ -144,6 +145,7 @@ export async function POST(request: NextRequest) {
         email: c.email ?? null,
         phone: c.phone ?? null,
         linkedinUrl: c.linkedin_url ?? null,
+        apolloId: c.apollo_id ?? null,
         sourceProvider: c.source_provider ?? "apollo",
       });
     }
