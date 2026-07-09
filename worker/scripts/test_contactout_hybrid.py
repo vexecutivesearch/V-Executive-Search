@@ -13,7 +13,7 @@ sys.path.insert(0, str(WORKER_ROOT))
 load_dotenv(WORKER_ROOT / ".env")
 
 from src.enrich.contactout import get_contactout_client  # noqa: E402
-from src.enrich.contactout_dashboard import browser_profile_dir  # noqa: E402
+from src.enrich.contactout_dashboard import has_saved_session, session_file_path  # noqa: E402
 from src.enrich.contactout_hybrid import mark_api_phone_locked  # noqa: E402
 
 PROFILES = [
@@ -26,9 +26,9 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logger = logging.getLogger(__name__)
 
-    profile = browser_profile_dir()
-    logger.info("ContactOut browser profile: %s (exists=%s)", profile, profile.exists())
-    if not profile.exists():
+    session = session_file_path()
+    logger.info("ContactOut session: %s (ready=%s)", session, has_saved_session())
+    if not has_saved_session():
         logger.warning("Run once: python scripts/contactout_login.py")
 
     mark_api_phone_locked()

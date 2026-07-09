@@ -77,17 +77,21 @@ Use this when your ContactOut plan includes unlimited lookups in the **web dashb
 1. Install Playwright in the worker venv:
    ```bash
    pip install -e ".[dashboard]"
-   playwright install chrome
+   playwright install chromium
    ```
-2. Log in once (saves a persistent Chrome profile):
+2. Log in **once** (saves cookies to `worker/.contactout-session.json` — not your daily Chrome):
    ```bash
    python scripts/contactout_login.py
    ```
 3. In `worker/.env`:
    ```bash
-   CONTACTOUT_MODE=dashboard
+   CONTACTOUT_MODE=auto
    ```
-4. The **5-minute poll** trickles dashboard lookups (`contactout_dashboard_sync.py`, 2 contacts per poll, 60–150s apart).
+   For launchd/cron, pin the session path (absolute):
+   ```bash
+   CONTACTOUT_SESSION_FILE=/Users/you/path/V Executive Search/worker/.contactout-session.json
+   ```
+4. The **5-minute poll** trickles dashboard lookups (`contactout_dashboard_sync.py`, 2 contacts per poll, 60–150s apart). Background runs use **headless Playwright Chromium** with the saved session file.
 
 Apollo still runs in the daily pipeline. ContactOut dashboard lookups happen in the background on the Mac — no LinkedIn browsing, only the ContactOut search portal.
 

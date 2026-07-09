@@ -5,6 +5,8 @@ __pycache__/
 *.pyc
 .venv/
 .contactout-browser/
+.contactout-session.json
+.contactout-login.lock
 .contactout-api-phone-locked
 *.egg-info/
 dist/

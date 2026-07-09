@@ -27,15 +27,29 @@ def _worker_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def browser_profile_dir() -> Path:
-    custom = os.environ.get("CONTACTOUT_BROWSER_PROFILE", "").strip()
+def session_file_path() -> Path:
+    """Absolute path to saved ContactOut cookies (used by all background runs)."""
+    custom = os.environ.get("CONTACTOUT_SESSION_FILE", "").strip()
     if custom:
-        return Path(custom).expanduser()
-    return _worker_root() / ".contactout-browser"
+        return Path(custom).expanduser().resolve()
+    return (_worker_root() / ".contactout-session.json").resolve()
+
+
+def browser_profile_dir() -> Path:
+    """Legacy alias — session cookies live in session_file_path()."""
+    return session_file_path().parent
+
+
+def has_saved_session() -> bool:
+    path = session_file_path()
+    try:
+        return path.is_file() and path.stat().st_size > 32
+    except OSError:
+        return False
 
 
 def login_lock_path() -> Path:
-    return browser_profile_dir() / ".login-lock"
+    return (_worker_root() / ".contactout-login.lock").resolve()
 
 
 def _pid_alive(pid: int) -> bool:
@@ -65,8 +79,6 @@ def login_in_progress() -> bool:
 
 def _acquire_login_lock() -> bool:
     path = login_lock_path()
-    profile = browser_profile_dir()
-    profile.mkdir(parents=True, exist_ok=True)
     if login_in_progress():
         return False
     path.write_text(str(os.getpid()), encoding="utf-8")
@@ -117,9 +129,52 @@ def _dashboard_loaded(page: Any) -> bool:
     return False
 
 
+def _chromium_launch_args() -> list[str]:
+    return [
+        "--disable-blink-features=AutomationControlled",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+
+
+def _persist_session(context: Any) -> None:
+    path = session_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    context.storage_state(path=str(path))
+    logger.info("Saved ContactOut session to %s", path)
+
+
+def _open_browser_context(
+    playwright: Any,
+    *,
+    headless: bool,
+    load_session: bool = True,
+) -> tuple[Any, Any, Any]:
+    """Launch Playwright Chromium (not your daily Chrome) and optionally load cookies."""
+    browser = playwright.chromium.launch(
+        headless=headless,
+        args=_chromium_launch_args(),
+    )
+    context_kwargs: dict[str, Any] = {
+        "viewport": {"width": 1440, "height": 900},
+        "user_agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+    }
+    session = session_file_path()
+    if load_session and session.is_file():
+        context_kwargs["storage_state"] = str(session)
+    context = browser.new_context(**context_kwargs)
+    page = context.new_page()
+    return browser, context, page
+
+
 def _session_check_with_playwright(*, headless: bool) -> bool:
     if login_in_progress():
-        logger.info("ContactOut login in progress — skipping headless session check")
+        logger.info("ContactOut login in progress — skipping session check")
+        return False
+    if not has_saved_session():
         return False
 
     try:
@@ -127,27 +182,13 @@ def _session_check_with_playwright(*, headless: bool) -> bool:
     except ImportError:
         return False
 
-    profile = browser_profile_dir()
-    profile.mkdir(parents=True, exist_ok=True)
-
     playwright = sync_playwright().start()
+    browser: Any | None = None
     context: Any | None = None
     try:
-        launch_kwargs: dict[str, Any] = {
-            "user_data_dir": str(profile),
-            "headless": headless,
-            "viewport": {"width": 1440, "height": 900},
-            "args": ["--disable-blink-features=AutomationControlled"],
-        }
-        try:
-            context = playwright.chromium.launch_persistent_context(
-                channel="chrome",
-                **launch_kwargs,
-            )
-        except Exception:
-            context = playwright.chromium.launch_persistent_context(**launch_kwargs)
-
-        page = context.pages[0] if context.pages else context.new_page()
+        browser, context, page = _open_browser_context(
+            playwright, headless=headless, load_session=True
+        )
         page.goto(CONTACTOUT_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(1500)
         return _dashboard_loaded(page)
@@ -158,6 +199,11 @@ def _session_check_with_playwright(*, headless: bool) -> bool:
         if context:
             try:
                 context.close()
+            except Exception:
+                pass
+        if browser:
+            try:
+                browser.close()
             except Exception:
                 pass
         playwright.stop()
@@ -186,8 +232,9 @@ def ensure_contactout_session(
 
     if not interactive:
         logger.info(
-            "ContactOut not logged in — run: python scripts/contactout_login.py "
-            "(or use Admin → Sync ContactOut phones)"
+            "ContactOut not logged in — run once: python scripts/contactout_login.py "
+            "(saves session to %s)",
+            session_file_path(),
         )
         return False
 
@@ -195,7 +242,7 @@ def ensure_contactout_session(
         from playwright.sync_api import sync_playwright
     except ImportError:
         logger.warning(
-            "Playwright not installed — run: pip install -e '.[dashboard]' && playwright install chrome"
+            "Playwright not installed — run: pip install -e '.[dashboard]' && playwright install chromium"
         )
         return False
 
@@ -203,45 +250,37 @@ def ensure_contactout_session(
         logger.info("ContactOut login already in progress — waiting for that session to finish")
         return False
 
-    profile = browser_profile_dir()
+    session_path = session_file_path()
     logger.info(
-        "ContactOut login required — opening Chrome. Sign in and leave the window open until "
-        "this script confirms success (do not close it yourself). Profile: %s",
-        profile,
+        "ContactOut login required — opening a dedicated automation browser (not your daily Chrome). "
+        "Sign in and leave the window open until this script confirms success. "
+        "Session will be saved to: %s",
+        session_path,
     )
 
     playwright = sync_playwright().start()
+    browser: Any | None = None
     context: Any | None = None
     try:
-        launch_kwargs: dict[str, Any] = {
-            "user_data_dir": str(profile),
-            "headless": False,
-            "viewport": {"width": 1440, "height": 900},
-            "args": ["--disable-blink-features=AutomationControlled"],
-        }
-        try:
-            context = playwright.chromium.launch_persistent_context(
-                channel="chrome",
-                **launch_kwargs,
-            )
-        except Exception:
-            context = playwright.chromium.launch_persistent_context(**launch_kwargs)
-
-        page = context.pages[0] if context.pages else context.new_page()
+        browser, context, page = _open_browser_context(
+            playwright, headless=False, load_session=has_saved_session()
+        )
         page.goto(CONTACTOUT_LOGIN_URL, wait_until="domcontentloaded", timeout=45000)
 
         deadline = time.time() + timeout_sec
         while time.time() < deadline:
             try:
                 if _dashboard_loaded(page):
-                    page.wait_for_timeout(3000)
+                    page.wait_for_timeout(2000)
+                    _persist_session(context)
                     logger.info("ContactOut dashboard session saved")
                     return True
                 if not _needs_login_page(page):
                     page.goto(CONTACTOUT_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
                     page.wait_for_timeout(2000)
                     if _dashboard_loaded(page):
-                        page.wait_for_timeout(3000)
+                        page.wait_for_timeout(2000)
+                        _persist_session(context)
                         logger.info("ContactOut dashboard session saved")
                         return True
             except Exception:
@@ -249,7 +288,7 @@ def ensure_contactout_session(
             page.wait_for_timeout(2000)
 
         logger.warning(
-            "ContactOut login timed out after %ds — finish sign-in in the Chrome window, then re-run "
+            "ContactOut login timed out after %ds — finish sign-in, then re-run "
             "python scripts/contactout_login.py",
             timeout_sec,
         )
@@ -261,6 +300,11 @@ def ensure_contactout_session(
         if context:
             try:
                 context.close()
+            except Exception:
+                pass
+        if browser:
+            try:
+                browser.close()
             except Exception:
                 pass
         playwright.stop()
@@ -297,6 +341,7 @@ class ContactOutDashboardClient:
     def __init__(self) -> None:
         self.credits_used = 0
         self._playwright: Any | None = None
+        self._browser: Any | None = None
         self._context: Any | None = None
         self._page: Any | None = None
         self._lookups = 0
@@ -308,7 +353,6 @@ class ContactOutDashboardClient:
         mode = os.environ.get("CONTACTOUT_MODE", "auto").strip().lower()
         if mode == "api":
             return False
-        # Profile is created on first launch; login is saved after contactout_login.py
         return True
 
     def close(self) -> None:
@@ -317,17 +361,38 @@ class ContactOutDashboardClient:
                 self._context.close()
             except Exception:
                 pass
+        if self._browser:
+            try:
+                self._browser.close()
+            except Exception:
+                pass
         if self._playwright:
             try:
                 self._playwright.stop()
             except Exception:
                 pass
         self._context = None
+        self._browser = None
         self._playwright = None
         self._page = None
 
     def __del__(self) -> None:
         self.close()
+
+    def _reset_browser(self) -> None:
+        if self._context:
+            try:
+                self._context.close()
+            except Exception:
+                pass
+        if self._browser:
+            try:
+                self._browser.close()
+            except Exception:
+                pass
+        self._context = None
+        self._browser = None
+        self._page = None
 
     def _ensure_browser(self) -> Any:
         if self._page is not None:
@@ -338,35 +403,27 @@ class ContactOutDashboardClient:
                 "ContactOut login in progress — finish signing in, then retry"
             )
 
+        if not has_saved_session():
+            raise RuntimeError(
+                f"ContactOut not logged in — run once: python scripts/contactout_login.py "
+                f"(saves session to {session_file_path()})"
+            )
+
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
             raise RuntimeError(
-                "Playwright not installed. Run: pip install playwright && playwright install chrome"
+                "Playwright not installed. Run: pip install -e '.[dashboard]' && playwright install chromium"
             ) from exc
 
-        profile = browser_profile_dir()
-        profile.mkdir(parents=True, exist_ok=True)
         headless = os.environ.get("CONTACTOUT_HEADLESS", "true").lower() == "true"
 
         self._playwright = sync_playwright().start()
-        launch_kwargs: dict[str, Any] = {
-            "user_data_dir": str(profile),
-            "headless": headless,
-            "viewport": {"width": 1440, "height": 900},
-            "args": ["--disable-blink-features=AutomationControlled"],
-        }
-        try:
-            self._context = self._playwright.chromium.launch_persistent_context(
-                channel="chrome",
-                **launch_kwargs,
-            )
-        except Exception:
-            self._context = self._playwright.chromium.launch_persistent_context(
-                **launch_kwargs,
-            )
-
-        self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
+        self._browser, self._context, self._page = _open_browser_context(
+            self._playwright,
+            headless=headless,
+            load_session=True,
+        )
         return self._page
 
     def _needs_login(self, page: Any) -> bool:
@@ -479,6 +536,8 @@ class ContactOutDashboardClient:
                 raise RuntimeError(
                     "ContactOut session expired — run: python scripts/contactout_login.py"
                 )
+            self._reset_browser()
+            page = self._ensure_browser()
             page.goto(CONTACTOUT_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
             page.wait_for_timeout(1200)
             if self._needs_login(page):

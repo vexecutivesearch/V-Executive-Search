@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ensure ContactOut dashboard login — opens Chrome when session is missing."""
+"""One-time ContactOut login — saves cookies for unattended background runs."""
 from __future__ import annotations
 
 import argparse
@@ -14,9 +14,10 @@ sys.path.insert(0, str(WORKER_ROOT))
 load_dotenv(WORKER_ROOT / ".env")
 
 from src.enrich.contactout_dashboard import (  # noqa: E402
-    browser_profile_dir,
     ensure_contactout_session,
+    has_saved_session,
     login_in_progress,
+    session_file_path,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -36,19 +37,23 @@ def main() -> int:
         print("ContactOut login already in progress in another window — use that window.")
         return 1
 
-    profile = browser_profile_dir()
-    print(f"Browser profile: {profile}")
+    session = session_file_path()
+    print(f"Session file: {session}")
+    if has_saved_session():
+        print("Existing session found — will refresh cookies after you sign in.")
     print(
-        "Chrome will open. Sign in to ContactOut and leave the window open.\n"
-        "The script closes it automatically once login is confirmed.\n"
-        "If BlockBlock prompts, click Allow for Python/Chrome."
+        "\nA dedicated automation browser will open (NOT your daily Chrome profile).\n"
+        "Sign in to ContactOut and leave the window open.\n"
+        "Cookies are saved to the session file above for headless background runs.\n"
+        "If BlockBlock prompts, click Allow for Python/Chromium.\n"
     )
+
     ok = ensure_contactout_session(timeout_sec=args.timeout, interactive=True)
     if ok:
-        print("ContactOut session ready.")
+        print(f"\nContactOut session ready. Background worker will use: {session}")
         return 0
     print(
-        "ContactOut login not completed. Re-run this script after signing in, "
+        "\nLogin not completed. Re-run this script after signing in, "
         "or use Admin → Sync ContactOut phones."
     )
     return 1

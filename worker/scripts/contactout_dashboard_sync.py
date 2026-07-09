@@ -20,7 +20,10 @@ from src.contact_phones import (  # noqa: E402
     pick_primary_from_phones,
 )
 from src.enrich.contactout_api import ContactOutApiClient  # noqa: E402
-from src.enrich.contactout_dashboard import ContactOutDashboardClient, browser_profile_dir  # noqa: E402
+from src.enrich.contactout_dashboard import (  # noqa: E402
+    ContactOutDashboardClient,
+    has_saved_session,
+)
 from src.enrich.contactout_hybrid import api_phone_credits_exhausted  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -41,7 +44,7 @@ def should_run_dashboard_sync() -> bool:
     dashboard = ContactOutDashboardClient()
     if not dashboard.is_configured:
         return False
-    if not browser_profile_dir().exists():
+    if not has_saved_session():
         return False
     api = ContactOutApiClient()
     if not api.is_configured:

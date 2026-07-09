@@ -40,13 +40,13 @@ def main() -> int:
     co_mode = os.environ.get("CONTACTOUT_MODE", "api")
     co = os.environ.get("CONTACTOUT_API_KEY")
     if co_mode == "dashboard" or co_mode == "auto":
-        from src.enrich.contactout_dashboard import browser_profile_dir
+        from src.enrich.contactout_dashboard import has_saved_session, session_file_path
 
-        profile = browser_profile_dir()
+        session = session_file_path()
         check(
-            "ContactOut dashboard profile",
-            profile.exists(),
-            f"ready at {profile}" if profile.exists() else "run: python scripts/contactout_login.py",
+            "ContactOut session file",
+            has_saved_session(),
+            f"ready at {session}" if has_saved_session() else "run: python scripts/contactout_login.py",
         )
     else:
         check(
