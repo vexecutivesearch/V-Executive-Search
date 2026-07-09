@@ -218,6 +218,9 @@ export async function buildPipelineConfig() {
       target_seniorities: targetSeniorities,
       enrich_phone: true,
       daily_credit_cap: 200,
+      daily_enrich_quota: settings.dailyEnrichQuota ?? 25,
+      min_score_for_enrich: settings.minScoreForEnrich ?? 60,
+      min_score_for_phone: settings.minScoreForPhone ?? 75,
       provider: "apollo",
     },
     dedupe: {

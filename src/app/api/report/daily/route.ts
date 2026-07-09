@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { unauthorized, verifyWorkerAuth } from "@/lib/auth";
-import { getDailyReportData } from "@/lib/daily-report";
+import { getDailyCallSheet } from "@/lib/daily-report";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,6 +11,6 @@ export async function GET(request: NextRequest) {
     return unauthorized();
   }
 
-  const data = await getDailyReportData();
+  const data = await getDailyCallSheet();
   return NextResponse.json(data);
 }

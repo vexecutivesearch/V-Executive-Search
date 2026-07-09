@@ -10,7 +10,7 @@ from typing import Any
 from src.config_loader import load_config, get_notification_email
 from src.crm_config import post_pipeline_status
 from src.crm_client import CRMClient
-from src.dedupe import collapse_to_companies, filter_existing_companies, merge_company_batches, normalize_company_name
+from src.dedupe import collapse_to_companies, normalize_company_name
 from src.domain_resolver import resolve_domains
 from src.enrich import get_provider
 from src.enrich.contactout import get_contactout_client
@@ -38,7 +38,7 @@ def _parse_pending_date(value: str | None) -> datetime | None:
         return None
 
 
-def _company_from_pending(item: dict[str, Any]) -> CompanyRecord:
+def _company_from_queue(item: dict[str, Any]) -> CompanyRecord:
     name = str(item.get("name") or "").strip()
     listings = [
         JobListing(
@@ -65,6 +65,7 @@ def _company_from_pending(item: dict[str, Any]) -> CompanyRecord:
         domain_confidence=confidence,
         listings=listings,
         crm_id=item.get("id"),
+        lead_score=int(item.get("lead_score") or 0),
     )
 
 
@@ -159,7 +160,50 @@ def _write_csv(rows: list[dict[str, Any]], run_date: date) -> Path:
     return path
 
 
-def _build_ingest_payload(
+def _build_jobs_only_payload(
+    companies: list[CompanyRecord],
+    result: PipelineResult,
+) -> dict[str, Any]:
+    companies_payload = []
+    for company in companies:
+        payload: dict[str, Any] = {
+            "name": company.name,
+            "domain": company.domain,
+            "domain_confidence": company.domain_confidence.value,
+            "estimated_employees": company.estimated_employees,
+            "industry": company.industry,
+            "job_listings": [
+                {
+                    "title": jl.job_title,
+                    "board": jl.board,
+                    "url": jl.job_url,
+                    "location": jl.location,
+                    "search_name": jl.search_name,
+                    "posted_at": jl.date_posted.isoformat() if jl.date_posted else None,
+                }
+                for jl in company.listings
+            ],
+        }
+        if company.crm_id:
+            payload["id"] = company.crm_id
+        companies_payload.append(payload)
+
+    return {
+        "run_date": result.run_date.isoformat(),
+        "import_mode": "jobs_only",
+        "metadata": {
+            "listings_scraped": result.listings_scraped,
+            "companies_found": result.companies_found,
+            "companies_skipped_existing": result.companies_skipped_existing,
+            "icp_match_count": result.icp_match_count,
+            "companies_scored": result.companies_scored,
+            "errors": result.errors,
+        },
+        "companies": companies_payload,
+    }
+
+
+def _build_enrich_payload(
     enriched: list[EnrichedCompany],
     result: PipelineResult,
 ) -> dict[str, Any]:
@@ -204,17 +248,18 @@ def _build_ingest_payload(
         }
         if company.crm_id:
             payload["id"] = company.crm_id
+        payload["enrich_run_date"] = result.run_date.isoformat()
         companies_payload.append(payload)
 
     return {
         "run_date": result.run_date.isoformat(),
+        "import_mode": "enrich_only",
         "metadata": {
-            "listings_scraped": result.listings_scraped,
-            "companies_found": result.companies_found,
-            "companies_skipped_existing": result.companies_skipped_existing,
             "companies_enriched": result.companies_enriched,
             "contacts_enriched": result.contacts_enriched,
             "credits_used": result.credits_used,
+            "enrichment_quota": result.enrichment_quota,
+            "companies_deferred": result.companies_deferred,
             "errors": result.errors,
         },
         "companies": companies_payload,
@@ -230,6 +275,8 @@ def run_pipeline(
     config_path: Path | None = None,
     limit: int | None = None,
     include_existing: bool = False,
+    scrape_only: bool = False,
+    enrich_only: bool = False,
 ) -> PipelineResult:
     with prevent_sleep():
         return _run_pipeline_impl(
@@ -240,6 +287,8 @@ def run_pipeline(
             config_path=config_path,
             limit=limit,
             include_existing=include_existing,
+            scrape_only=scrape_only,
+            enrich_only=enrich_only,
         )
 
 
@@ -252,6 +301,8 @@ def _run_pipeline_impl(
     config_path: Path | None = None,
     limit: int | None = None,
     include_existing: bool = False,
+    scrape_only: bool = False,
+    enrich_only: bool = False,
 ) -> PipelineResult:
     run_date = business_list_date()
     config = load_config(config_path)
@@ -262,8 +313,9 @@ def _run_pipeline_impl(
         "target_seniorities", []
     )
     contacts_per_company = enrichment_cfg.get("contacts_per_company", 3)
-    enrich_phone = enrichment_cfg.get("enrich_phone", False)
     daily_credit_cap = enrichment_cfg.get("daily_credit_cap", 100)
+    daily_enrich_quota = enrichment_cfg.get("daily_enrich_quota", 25)
+    min_score_for_phone = enrichment_cfg.get("min_score_for_phone", 75)
     provider_name = enrichment_cfg.get("provider", "apollo")
 
     result = PipelineResult(
@@ -274,75 +326,130 @@ def _run_pipeline_impl(
         companies_enriched=0,
         contacts_enriched=0,
         credits_used=0,
+        enrichment_quota=daily_enrich_quota,
     )
 
-    # Stage 1: Scrape
+    crm = CRMClient()
+
+    if enrich_only:
+        return _enrich_call_sheet(
+            result=result,
+            crm=crm,
+            config=config,
+            enrichment_cfg=enrichment_cfg,
+            dry_run=dry_run,
+            skip_crm=skip_crm,
+            skip_email=skip_email,
+            use_waterfall=use_waterfall,
+            provider_name=provider_name,
+            contacts_per_company=contacts_per_company,
+            daily_credit_cap=daily_credit_cap,
+            daily_enrich_quota=daily_enrich_quota,
+            min_score_for_phone=min_score_for_phone,
+            limit=limit,
+        )
+
+    # Stage 1: Scrape (free)
     logger.info("=== Stage 1: Scraping job listings ===")
     listings = scrape_all(config)
     result.listings_scraped = len(listings)
 
-    crm = CRMClient()
-
-    # Stage 2: Merge fresh scrape with CRM backlog (jobs ingested without contacts)
-    logger.info("=== Stage 2: Building company batch ===")
-    scraped = collapse_to_companies(listings)
-    backlog: list[CompanyRecord] = []
-    if crm.is_configured and not skip_crm:
-        pending_limit = max(daily_credit_cap, 50)
-        pending = crm.get_pending_enrichment(limit=pending_limit)
-        backlog = [_company_from_pending(item) for item in pending]
-        if backlog:
-            logger.info(
-                "CRM backlog: %d companies pending enrichment", len(backlog)
-            )
-
-    companies = merge_company_batches(scraped, backlog)
+    # Stage 2: Build batch and resolve domains (free)
+    logger.info("=== Stage 2: Building company batch (jobs-only ingest) ===")
+    companies = collapse_to_companies(listings)
     result.companies_found = len(companies)
 
     if not companies:
-        result.errors.append(
-            "No companies to process — scrape returned nothing and CRM backlog is empty"
-        )
+        result.errors.append("No companies from scrape")
         return result
 
     companies = resolve_domains(companies)
 
-    existing_domains: set[str] = set()
-    if crm.is_configured and not skip_crm and not include_existing:
-        domains_to_check = [c.domain for c in companies if c.domain]
-        existing_domains = crm.get_existing_domains(domains_to_check)
-
-    companies, skipped = filter_existing_companies(companies, existing_domains)
-    result.companies_skipped_existing = skipped
-    if include_existing:
-        logger.info("Including all %d companies (CRM skip disabled)", len(companies))
-    else:
-        logger.info(
-            "Companies queued for enrichment: %d (skipped %d already enriched)",
-            len(companies),
-            skipped,
-        )
-
     if limit is not None:
         companies = companies[:limit]
-        logger.info("Limited to %d companies for this run", len(companies))
 
     if dry_run:
-        logger.info("Dry run — stopping before enrichment")
+        logger.info("Dry run — stopping before CRM ingest")
         result.rows = _rows_from_enriched([
             EnrichedCompany(company=c) for c in companies
         ])
-        csv_path = _write_csv(result.rows, run_date)
-        logger.info("Dry-run CSV written to %s", csv_path)
         return result
 
-    # Stage 3: Enrich
+    if crm.is_configured and not skip_crm:
+        payload = _build_jobs_only_payload(companies, result)
+        if not crm.ingest_batch(payload):
+            result.errors.append("CRM jobs-only ingest failed")
+        else:
+            rescore = crm.rescore_backlog()
+            result.companies_scored = int(rescore.get("scored") or 0)
+            result.icp_match_count = int(rescore.get("icpMatch") or 0)
+
+    if scrape_only:
+        logger.info(
+            "Scrape-only complete — %d listings, %d companies ingested",
+            result.listings_scraped,
+            result.companies_found,
+        )
+        return result
+
+    return _enrich_call_sheet(
+        result=result,
+        crm=crm,
+        config=config,
+        enrichment_cfg=enrichment_cfg,
+        dry_run=False,
+        skip_crm=skip_crm,
+        skip_email=skip_email,
+        use_waterfall=use_waterfall,
+        provider_name=provider_name,
+        contacts_per_company=contacts_per_company,
+        daily_credit_cap=daily_credit_cap,
+        daily_enrich_quota=daily_enrich_quota,
+        min_score_for_phone=min_score_for_phone,
+        limit=limit,
+    )
+
+
+def _enrich_call_sheet(
+    *,
+    result: PipelineResult,
+    crm: CRMClient,
+    config: dict[str, Any],
+    enrichment_cfg: dict[str, Any],
+    dry_run: bool,
+    skip_crm: bool,
+    skip_email: bool,
+    use_waterfall: bool,
+    provider_name: str,
+    contacts_per_company: int,
+    daily_credit_cap: int,
+    daily_enrich_quota: int,
+    min_score_for_phone: int,
+    limit: int | None,
+) -> PipelineResult:
+    target_titles = enrichment_cfg.get("target_titles") or config.get("target_titles", [])
+    target_seniorities = enrichment_cfg.get("target_seniorities") or config.get(
+        "target_seniorities", []
+    )
+
+    queue_limit = limit if limit is not None else daily_enrich_quota
+    queue_items = crm.get_enrichment_queue(limit=queue_limit) if crm.is_configured else []
+    companies = [_company_from_queue(item) for item in queue_items]
+    deferred = max(0, len(queue_items) - len(companies)) if queue_items else 0
+    result.companies_deferred = deferred
+
+    if not companies:
+        result.errors.append("Enrichment queue empty — no ranked backlog leads")
+        return result
+
+    logger.info("=== Stage 3: Enriching top %d call-sheet companies ===", len(companies))
+
     client = get_contactout_client()
     use_contactout = client.is_configured
     effective_provider = provider_name
     if use_waterfall or use_contactout:
         effective_provider = "apollo+contactout (API)"
-    logger.info("=== Stage 3: Enriching contacts via %s ===", effective_provider)
+    logger.info("Provider: %s", effective_provider)
     if use_waterfall or use_contactout:
         provider = WaterfallProvider()
     else:
@@ -351,16 +458,17 @@ def _run_pipeline_impl(
     enriched: list[EnrichedCompany] = []
     for company in companies:
         if not company.domain:
-            result.errors.append(f"No domain resolved for {company.name}")
+            result.errors.append(f"No domain for {company.name}")
             enriched.append(EnrichedCompany(company=company))
             continue
 
-        credits_before = provider.credits_used
         if provider.credits_used >= daily_credit_cap:
-            logger.warning("Daily credit cap (%d) reached — stopping enrichment", daily_credit_cap)
             result.errors.append(f"Credit cap reached at {daily_credit_cap}")
+            result.companies_deferred += 1
             break
 
+        enrich_phone = company.lead_score >= min_score_for_phone
+        credits_before = provider.credits_used
         item = provider.enrich_company(
             company,
             target_titles,
@@ -368,8 +476,7 @@ def _run_pipeline_impl(
             contacts_per_company,
             enrich_phone,
         )
-        credits_delta = provider.credits_used - credits_before
-        item.credits_used = credits_delta
+        item.credits_used = provider.credits_used - credits_before
         enriched.append(item)
 
         if item.contacts:
@@ -379,15 +486,13 @@ def _run_pipeline_impl(
     result.credits_used = provider.credits_used
     result.rows = _rows_from_enriched(enriched)
 
-    # Stage 4: Output
-    logger.info("=== Stage 4: Writing output ===")
-    csv_path = _write_csv(result.rows, run_date)
+    csv_path = _write_csv(result.rows, result.run_date)
     logger.info("CSV written to %s (%d rows)", csv_path, len(result.rows))
 
     if crm.is_configured and not skip_crm:
-        payload = _build_ingest_payload(enriched, result)
+        payload = _build_enrich_payload(enriched, result)
         if not crm.ingest_batch(payload):
-            result.errors.append("CRM ingest failed")
+            result.errors.append("CRM enrich ingest failed")
         else:
             post_pipeline_status("mark_run_complete")
 
@@ -398,8 +503,9 @@ def _run_pipeline_impl(
             to_email=notify,
             pipeline_rows=result.rows,
             result_summary={
-                "run_date": str(run_date),
+                "run_date": str(result.run_date),
                 "listings_scraped": result.listings_scraped,
+                "icp_match_count": result.icp_match_count,
                 "companies_enriched": result.companies_enriched,
                 "credits_used": result.credits_used,
             },
@@ -407,12 +513,10 @@ def _run_pipeline_impl(
         )
 
     logger.info(
-        "Pipeline complete — listings=%d companies=%d enriched=%d contacts=%d credits=%d errors=%d",
-        result.listings_scraped,
-        result.companies_found,
+        "Enrich complete — enriched=%d contacts=%d credits=%d deferred=%d",
         result.companies_enriched,
         result.contacts_enriched,
         result.credits_used,
-        len(result.errors),
+        result.companies_deferred,
     )
     return result

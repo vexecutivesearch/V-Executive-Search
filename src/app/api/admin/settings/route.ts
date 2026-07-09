@@ -33,6 +33,9 @@ export async function PUT(request: NextRequest) {
     focus_counties?: string[];
     notification_email?: string;
     job_boards?: string[];
+    daily_enrich_quota?: number;
+    min_score_for_enrich?: number;
+    min_score_for_phone?: number;
   };
   try {
     body = await request.json();
@@ -64,6 +67,12 @@ export async function PUT(request: NextRequest) {
       focusCounties,
       notificationEmail: body.notification_email ?? current.notificationEmail,
       jobBoards,
+      dailyEnrichQuota:
+        body.daily_enrich_quota ?? current.dailyEnrichQuota,
+      minScoreForEnrich:
+        body.min_score_for_enrich ?? current.minScoreForEnrich,
+      minScoreForPhone:
+        body.min_score_for_phone ?? current.minScoreForPhone,
       updatedAt: new Date(),
     })
     .where(eq(pipelineSettings.id, current.id))

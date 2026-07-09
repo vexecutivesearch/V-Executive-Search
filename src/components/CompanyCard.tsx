@@ -1,4 +1,4 @@
-import { Contact, JobListing } from "@/lib/db/schema";
+import { Contact, JobListing, type IcpStatus } from "@/lib/db/schema";
 import { CompanyStatus } from "@/lib/db/schema";
 import Link from "next/link";
 import { StatusBadge, StatusSelect } from "./StatusBadge";
@@ -12,6 +12,13 @@ export interface CompanyCardData {
   domainConfidence: string;
   status: CompanyStatus;
   firstSeen: string;
+  leadScore?: number;
+  hiringSignals?: Record<string, boolean | number>;
+  reasonToCall?: string | null;
+  callOpener?: string | null;
+  icpStatus?: IcpStatus;
+  enrichedAt?: Date | null;
+  enrichRunDate?: string | null;
   contacts: Contact[];
   jobListings: JobListing[];
 }

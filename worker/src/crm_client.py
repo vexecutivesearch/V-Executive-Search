@@ -42,31 +42,39 @@ class CRMClient:
             logger.warning("CRM domain lookup failed: %s", exc)
             return set()
 
-    def get_pending_enrichment(
-        self,
-        *,
-        limit: int = 100,
-        exclude_market_scan: bool = False,
-    ) -> list[dict[str, Any]]:
+    def get_enrichment_queue(self, *, limit: int = 25) -> list[dict[str, Any]]:
         if not self.is_configured:
             return []
 
         try:
             resp = requests.get(
-                f"{self.base_url}/api/companies/pending-enrichment",
+                f"{self.base_url}/api/companies/enrichment-queue",
                 headers=self._headers(),
-                params={
-                    "limit": limit,
-                    **({"exclude_market_scan": "1"} if exclude_market_scan else {}),
-                },
+                params={"limit": limit},
                 timeout=60,
             )
             resp.raise_for_status()
             data = resp.json()
             return data.get("companies") or []
         except requests.RequestException as exc:
-            logger.warning("CRM pending-enrichment lookup failed: %s", exc)
+            logger.warning("CRM enrichment-queue lookup failed: %s", exc)
             return []
+
+    def rescore_backlog(self) -> dict[str, Any]:
+        if not self.is_configured:
+            return {}
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/companies/rescore",
+                headers=self._headers(),
+                json={},
+                timeout=120,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as exc:
+            logger.warning("CRM rescore failed: %s", exc)
+            return {}
 
     def ingest_batch(self, payload: dict[str, Any]) -> bool:
         if not self.is_configured:

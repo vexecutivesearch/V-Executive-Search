@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import html
 import logging
+import os
 from typing import Any
 
 import requests
 
-from src.report_format import format_contact_row_cells, has_contact_data
+from src.report_format import format_call_sheet_card, has_contact_data
 
 logger = logging.getLogger(__name__)
 
+CRM_BASE_URL = (os.environ.get("CRM_API_URL") or "https://v-executive-search.vercel.app").rstrip("/")
+
 
 def fetch_daily_report_from_crm() -> dict[str, Any] | None:
-    import os
-
     base = (os.environ.get("CRM_API_URL") or "").rstrip("/")
     api_key = os.environ.get("CRM_API_KEY", "")
     if not base or not api_key:
@@ -35,84 +36,126 @@ def fetch_daily_report_from_crm() -> dict[str, Any] | None:
         return None
 
 
+def _funnel_header(summary: dict[str, Any]) -> str:
+    scraped = summary.get("listings_scraped", 0)
+    icp = summary.get("icp_match_count", 0)
+    enriched = summary.get("companies_enriched", 0)
+    credits = summary.get("credits_used", 0)
+    return (
+        f"Scraped {scraped} → ICP match {icp} → Enriched today {enriched}"
+        f" · Credits used {credits}"
+    )
+
+
+def _leads_from_crm_or_rows(
+    crm_data: dict[str, Any] | None,
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if crm_data and crm_data.get("leads"):
+        return crm_data["leads"]
+
+    leads: list[dict[str, Any]] = []
+    rank = 0
+    for row in rows:
+        if not has_contact_data(row):
+            continue
+        rank += 1
+        leads.append({
+            "rank": rank,
+            "score": row.get("score") or row.get("lead_score") or 0,
+            "company": row.get("company", ""),
+            "company_id": row.get("company_id") or row.get("companyId"),
+            "contact_name": row.get("contact_name") or row.get("contactName", ""),
+            "title": row.get("title"),
+            "reason_to_call": row.get("reason_to_call") or row.get("reasonToCall"),
+            "work_email": row.get("work_email") or row.get("workEmail"),
+            "personal_email": row.get("personal_email") or row.get("personalEmail"),
+            "email": row.get("email"),
+            "phones": row.get("phones"),
+            "phone": row.get("phone"),
+            "personal_phone": row.get("personal_phone"),
+            "company_phone": row.get("company_phone"),
+            "source_provider": row.get("source_provider"),
+            "imessage_capable": row.get("imessage_capable"),
+            "job_title": row.get("job_title") or row.get("jobTitle"),
+            "job_location": row.get("job_location") or row.get("jobLocation"),
+        })
+    return leads
+
+
 def send_daily_report(
     to_email: str,
     rows: list[dict[str, Any]],
     result_summary: dict[str, Any],
     geo_label: str,
+    *,
+    crm_data: dict[str, Any] | None = None,
 ) -> bool:
-    api_key = __import__("os").environ.get("RESEND_API_KEY")
+    api_key = os.environ.get("RESEND_API_KEY")
     if not api_key:
         logger.warning("RESEND_API_KEY not set — skipping daily email report")
         return False
 
-    contact_rows = [r for r in rows if has_contact_data(r)]
-    html_rows = ""
-    for r in contact_rows:
-        cells = format_contact_row_cells(r)
-        html_rows += f"""
-        <tr>
-          <td style="padding:8px;border:1px solid #ddd;vertical-align:top">{cells["company"]}</td>
-          <td style="padding:8px;border:1px solid #ddd;vertical-align:top">{cells["contact_name"]}</td>
-          <td style="padding:8px;border:1px solid #ddd;vertical-align:top">{cells["title"]}</td>
-          <td style="padding:8px;border:1px solid #ddd;vertical-align:top">{cells["work_email"]}</td>
-          <td style="padding:8px;border:1px solid #ddd;vertical-align:top">{cells["personal_email"]}</td>
-          <td style="padding:8px;border:1px solid #ddd;vertical-align:top">{cells["phones"]}</td>
-          <td style="padding:8px;border:1px solid #ddd;vertical-align:top">{cells["imessage"]}</td>
-          <td style="padding:8px;border:1px solid #ddd;vertical-align:top">{cells["job_title"]}</td>
-          <td style="padding:8px;border:1px solid #ddd;vertical-align:top">{cells["job_location"]}</td>
-        </tr>"""
+    if crm_data:
+        summary = {
+            **result_summary,
+            "run_date": crm_data.get("run_date", result_summary.get("run_date")),
+            "listings_scraped": crm_data.get(
+                "listings_scraped", result_summary.get("listings_scraped", 0)
+            ),
+            "icp_match_count": crm_data.get(
+                "icp_match_count", result_summary.get("icp_match_count", 0)
+            ),
+            "companies_enriched": crm_data.get(
+                "companies_enriched", result_summary.get("companies_enriched", 0)
+            ),
+            "credits_used": crm_data.get(
+                "credits_used", result_summary.get("credits_used", 0)
+            ),
+        }
+    else:
+        summary = result_summary
 
-    if not html_rows:
-        html_rows = (
-            '<tr><td colspan="9" style="padding:12px">No contacts enriched today.</td></tr>'
+    leads = _leads_from_crm_or_rows(crm_data, rows)
+    run_date = html.escape(str(summary.get("run_date", "today")))
+    safe_geo = html.escape(geo_label)
+    funnel = html.escape(_funnel_header(summary))
+
+    if not leads:
+        body_leads = (
+            '<p style="font-size:15px;color:#4b5563;margin:24px 0">'
+            "No hot leads today — nothing above your enrichment threshold. "
+            "Check the backlog in the CRM.</p>"
+        )
+    else:
+        body_leads = "".join(
+            format_call_sheet_card(lead, CRM_BASE_URL) for lead in leads
         )
 
-    run_date = html.escape(str(result_summary.get("run_date", "today")))
-    safe_geo = html.escape(geo_label)
     html_body = f"""
-    <html><body style="font-family:sans-serif;color:#111;max-width:1100px">
-      <h2>V Executive Search — Daily List ({safe_geo})</h2>
-      <p>Run date: {run_date}</p>
-      <ul>
-        <li>Listings scraped: {result_summary.get("listings_scraped", 0)}</li>
-        <li>Companies enriched: {result_summary.get("companies_enriched", 0)}</li>
-        <li>Contacts with data: {len(contact_rows)}</li>
-        <li>Apollo credits: {result_summary.get("credits_used", 0)}</li>
-      </ul>
-      <table style="border-collapse:collapse;width:100%">
-        <thead>
-          <tr style="background:#f3f4f6">
-            <th style="padding:8px;border:1px solid #ddd;text-align:left">Company</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left">Contact</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left">Title</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left">Work email</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left">Personal email</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left">Phones</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left">iMessage</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left">Job</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left">Location</th>
-          </tr>
-        </thead>
-        <tbody>{html_rows}</tbody>
-      </table>
-      <p style="margin-top:24px;color:#666;font-size:12px">
-        Phone labels show source: <strong>Apollo</strong> or <strong>ContactOut</strong>.
-        iMessage checks run on Mac after enrichment.
+    <html><body style="font-family:sans-serif;color:#111;max-width:680px;margin:0 auto;padding:16px">
+      <h2 style="margin:0 0 8px">V Executive Search — Call Sheet ({safe_geo})</h2>
+      <p style="margin:0 0 4px;color:#6b7280;font-size:14px">Run date: {run_date}</p>
+      <p style="margin:0 0 20px;font-size:14px;font-weight:600;color:#111827">{funnel}</p>
+      {body_leads}
+      <p style="margin-top:28px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:13px">
+        <a href="{CRM_BASE_URL}/today" style="color:#2563eb;font-weight:600">
+          Open full call sheet in CRM →
+        </a>
       </p>
-      <p style="color:#666;font-size:12px">
-        <a href="https://v-executive-search.vercel.app/today">Open CRM</a>
+      <p style="color:#9ca3af;font-size:11px;margin-top:16px">
+        Ranked by lead score. iMessage checks run on your Mac after enrichment.
       </p>
     </body></html>
     """
 
-    from_email = __import__("os").environ.get("REPORT_FROM_EMAIL", "onboarding@resend.dev")
+    from_email = os.environ.get("REPORT_FROM_EMAIL", "onboarding@resend.dev")
     fallback_from = "V Executive Search <onboarding@resend.dev>"
 
     payload = {
         "from": from_email,
         "to": [to_email],
-        "subject": f"Daily List — {geo_label} — {run_date}",
+        "subject": f"Call Sheet — {geo_label} — {run_date}",
         "html": html_body,
     }
 
@@ -143,7 +186,7 @@ def send_daily_report(
                 timeout=30,
             )
         resp.raise_for_status()
-        logger.info("Daily report emailed to %s", to_email)
+        logger.info("Daily call sheet emailed to %s (%d leads)", to_email, len(leads))
         return True
     except requests.RequestException as exc:
         logger.error("Failed to send daily report: %s", exc)
@@ -157,19 +200,12 @@ def send_daily_report_for_pipeline(
     result_summary: dict[str, Any],
     geo_label: str,
 ) -> bool:
-    """Prefer CRM report rows (full emails/phones/iMessage); fallback to pipeline rows."""
+    """Prefer CRM call sheet (ranked leads); fallback to pipeline rows."""
     crm_data = fetch_daily_report_from_crm()
-    if crm_data and crm_data.get("rows"):
-        summary = {
-            **result_summary,
-            "run_date": crm_data.get("run_date", result_summary.get("run_date")),
-            "listings_scraped": crm_data.get(
-                "listings_scraped", result_summary.get("listings_scraped", 0)
-            ),
-            "companies_enriched": crm_data.get(
-                "companies_enriched", result_summary.get("companies_enriched", 0)
-            ),
-        }
-        return send_daily_report(to_email, crm_data["rows"], summary, geo_label)
-
-    return send_daily_report(to_email, pipeline_rows, result_summary, geo_label)
+    return send_daily_report(
+        to_email,
+        pipeline_rows,
+        result_summary,
+        geo_label,
+        crm_data=crm_data,
+    )

@@ -3,28 +3,40 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CompanyCardData } from "./CompanyCard";
 import { TodayListRow } from "./TodayListRow";
-import { contactIsCallable, scoreLead } from "@/lib/lead-score";
+import { contactIsCallable } from "@/lib/lead-score";
+import type { dailyRuns } from "@/lib/db/schema";
 
 const DISCLAIMER_KEY = "today-list-location-disclaimer-dismissed";
 
 type SortKey = "score" | "name" | "contacts";
+type ListMode = "call-sheet" | "backlog";
 
 export function TodayListView({
   companies,
   geoLabel,
+  listMode = "call-sheet",
+  runStats,
+  showFunnel = true,
 }: {
   companies: CompanyCardData[];
   geoLabel: string;
+  listMode?: ListMode;
+  runStats?: typeof dailyRuns.$inferSelect | null;
+  showFunnel?: boolean;
 }) {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortKey>("score");
   const [geoOnly, setGeoOnly] = useState(false);
-  const [callableOnly, setCallableOnly] = useState(false);
+  const [callableOnly, setCallableOnly] = useState(listMode === "call-sheet");
   const [dismissedNotice, setDismissedNotice] = useState(false);
 
   useEffect(() => {
     setDismissedNotice(localStorage.getItem(DISCLAIMER_KEY) === "1");
   }, []);
+
+  useEffect(() => {
+    setCallableOnly(listMode === "call-sheet");
+  }, [listMode]);
 
   const showLocationNotice =
     !dismissedNotice &&
@@ -43,8 +55,10 @@ export function TodayListView({
     const term = search.trim().toLowerCase();
 
     let rows = companies.filter((company) => {
-      const lead = scoreLead(company);
-      if (geoOnly && lead.geoMismatch) return false;
+      const geoMismatch =
+        company.contacts.length > 0 &&
+        !company.contacts.some((c) => c.locationMatched);
+      if (geoOnly && geoMismatch) return false;
       if (callableOnly && !company.contacts.some(contactIsCallable)) return false;
 
       if (!term) return true;
@@ -53,6 +67,7 @@ export function TodayListView({
       const haystack = [
         company.name,
         company.domain ?? "",
+        company.reasonToCall ?? "",
         primaryJob?.title ?? "",
         primaryJob?.location ?? "",
         ...company.contacts.map((c) => `${c.name} ${c.title ?? ""}`),
@@ -68,16 +83,26 @@ export function TodayListView({
       if (sort === "contacts") {
         return b.contacts.length - a.contacts.length || a.name.localeCompare(b.name);
       }
-      const sa = scoreLead(a).score;
-      const sb = scoreLead(b).score;
+      const sa = a.leadScore ?? 0;
+      const sb = b.leadScore ?? 0;
       return sb - sa || a.name.localeCompare(b.name);
     });
 
     return rows;
   }, [companies, search, sort, geoOnly, callableOnly]);
 
+  const funnelLabel = runStats
+    ? `Scraped ${runStats.listingsScraped ?? 0} → ICP match ${runStats.icpMatchCount ?? 0} → Enriched ${runStats.companiesEnriched ?? 0} · Credits ${runStats.creditsUsed ?? 0}`
+    : null;
+
   return (
     <div>
+      {showFunnel && funnelLabel && (
+        <div className="mb-4 rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
+          <span className="font-medium">Pipeline funnel:</span> {funnelLabel}
+        </div>
+      )}
+
       {showLocationNotice && (
         <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40 px-3 py-2.5 text-sm text-amber-900 dark:text-amber-200">
           <span className="text-base leading-none mt-0.5" aria-hidden>
@@ -131,20 +156,23 @@ export function TodayListView({
             Geo match only
           </label>
 
-          <label className="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={callableOnly}
-              onChange={(e) => setCallableOnly(e.target.checked)}
-              className="rounded border-gray-300"
-            />
-            Callable only
-          </label>
+          {listMode !== "backlog" && (
+            <label className="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={callableOnly}
+                onChange={(e) => setCallableOnly(e.target.checked)}
+                className="rounded border-gray-300"
+              />
+              Callable only
+            </label>
+          )}
         </div>
 
         <p className="text-xs text-gray-500 mt-2">
-          Showing {filtered.length} of {companies.length} leads
-          {sort === "score" && " · ranked best-first"}
+          Showing {filtered.length} of {companies.length}{" "}
+          {listMode === "backlog" ? "backlog leads" : "call sheet leads"}
+          {sort === "score" && " · ranked by lead score"}
         </p>
       </div>
 
@@ -156,7 +184,7 @@ export function TodayListView({
             onClick={() => {
               setSearch("");
               setGeoOnly(false);
-              setCallableOnly(false);
+              setCallableOnly(listMode === "call-sheet");
             }}
             className="text-sm text-blue-600 dark:text-blue-400 hover:underline mt-2"
           >
@@ -174,8 +202,13 @@ export function TodayListView({
             <span className="text-right pr-6">Action</span>
           </div>
 
-          {filtered.map((company) => (
-            <TodayListRow key={company.id} company={company} />
+          {filtered.map((company, index) => (
+            <TodayListRow
+              key={company.id}
+              company={company}
+              rank={index + 1}
+              showReasonToCall
+            />
           ))}
         </div>
       )}

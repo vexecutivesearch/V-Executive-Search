@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Install launchd agents for daily pipeline (6 AM + 6 PM) and admin poll (every 5 min).
+# Install launchd agents for JIT pipeline stages and admin poll (every 5 min).
 set -euo pipefail
 
 WORKER_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
-DAILY_LABEL="com.vexecsearch.daily"
-POLL_LABEL="com.vexecsearch.poll"
 
 PYTHON="$WORKER_ROOT/.venv/bin/python"
 if [[ ! -x "$PYTHON" ]]; then
@@ -15,18 +13,76 @@ fi
 
 mkdir -p "$WORKER_ROOT/logs" "$LAUNCH_AGENTS"
 
-write_plist() {
+write_calendar_plist() {
+  local label="$1"
+  local script_args="$2"
+  local hour="$3"
+  local minute="$4"
+  local out_log="$5"
+  local err_log="$6"
+
+  local plist_path="$LAUNCH_AGENTS/${label}.plist"
+
+  # script_args is space-separated: e.g. "run_daily.py --scrape-only"
+  read -r -a args <<< "$script_args"
+
+  cat > "$plist_path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-s</string>
+        <string>${PYTHON}</string>
+EOF
+
+  for arg in "${args[@]}"; do
+    echo "        <string>${arg}</string>" >> "$plist_path"
+  done
+
+  cat >> "$plist_path" <<EOF
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>${hour}</integer>
+        <key>Minute</key>
+        <integer>${minute}</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>${out_log}</string>
+    <key>StandardErrorPath</key>
+    <string>${err_log}</string>
+    <key>WorkingDirectory</key>
+    <string>${WORKER_ROOT}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+        <key>TZ</key>
+        <string>America/New_York</string>
+    </dict>
+</dict>
+</plist>
+EOF
+
+  echo "Wrote $plist_path"
+}
+
+write_interval_plist() {
   local label="$1"
   local script="$2"
-  local interval_or_calendar="$3"
+  local seconds="$3"
   local out_log="$4"
   local err_log="$5"
 
   local plist_path="$LAUNCH_AGENTS/${label}.plist"
 
-  if [[ "$interval_or_calendar" == interval:* ]]; then
-    local seconds="${interval_or_calendar#interval:}"
-    cat > "$plist_path" <<EOF
+  cat > "$plist_path" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -58,72 +114,51 @@ write_plist() {
 </dict>
 </plist>
 EOF
-  else
-    cat > "$plist_path" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>${label}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/bin/caffeinate</string>
-        <string>-s</string>
-        <string>${PYTHON}</string>
-        <string>${script}</string>
-    </array>
-    <key>StartCalendarInterval</key>
-    <array>
-        <dict>
-            <key>Hour</key>
-            <integer>6</integer>
-            <key>Minute</key>
-            <integer>0</integer>
-        </dict>
-        <dict>
-            <key>Hour</key>
-            <integer>18</integer>
-            <key>Minute</key>
-            <integer>0</integer>
-        </dict>
-    </array>
-    <key>StandardOutPath</key>
-    <string>${out_log}</string>
-    <key>StandardErrorPath</key>
-    <string>${err_log}</string>
-    <key>WorkingDirectory</key>
-    <string>${WORKER_ROOT}</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
-        <key>TZ</key>
-        <string>America/New_York</string>
-    </dict>
-</dict>
-</plist>
-EOF
-  fi
 
   echo "Wrote $plist_path"
 }
 
-write_plist "$DAILY_LABEL" \
-  "$WORKER_ROOT/scripts/run_daily.py" \
-  "calendar" \
-  "$WORKER_ROOT/logs/launchd_stdout.log" \
-  "$WORKER_ROOT/logs/launchd_stderr.log"
+# JIT pipeline schedule (Eastern Time via TZ=America/New_York)
+write_calendar_plist "com.vexecsearch.scrape" \
+  "scripts/run_daily.py --scrape-only" \
+  2 0 \
+  "$WORKER_ROOT/logs/scrape_stdout.log" \
+  "$WORKER_ROOT/logs/scrape_stderr.log"
 
-write_plist "$POLL_LABEL" \
+write_calendar_plist "com.vexecsearch.rescore" \
+  "scripts/run_daily.py --rescore-only" \
+  2 30 \
+  "$WORKER_ROOT/logs/rescore_stdout.log" \
+  "$WORKER_ROOT/logs/rescore_stderr.log"
+
+write_calendar_plist "com.vexecsearch.enrich" \
+  "scripts/run_daily.py --enrich-only" \
+  3 0 \
+  "$WORKER_ROOT/logs/enrich_stdout.log" \
+  "$WORKER_ROOT/logs/enrich_stderr.log"
+
+write_calendar_plist "com.vexecsearch.imessage" \
+  "scripts/run_daily.py --imessage-only" \
+  3 30 \
+  "$WORKER_ROOT/logs/imessage_stdout.log" \
+  "$WORKER_ROOT/logs/imessage_stderr.log"
+
+write_calendar_plist "com.vexecsearch.email" \
+  "scripts/run_daily.py --email-only" \
+  6 0 \
+  "$WORKER_ROOT/logs/email_stdout.log" \
+  "$WORKER_ROOT/logs/email_stderr.log"
+
+write_interval_plist "com.vexecsearch.poll" \
   "$WORKER_ROOT/scripts/poll_and_run.py" \
-  "interval:300" \
+  300 \
   "$WORKER_ROOT/logs/poll_stdout.log" \
   "$WORKER_ROOT/logs/poll_stderr.log"
 
 launchctl bootout "gui/$(id -u)/com.vexecsearch.contactout-keepalive" 2>/dev/null || true
+launchctl bootout "gui/$(id -u)/com.vexecsearch.daily" 2>/dev/null || true
 
-for label in "$DAILY_LABEL" "$POLL_LABEL"; do
+for label in com.vexecsearch.scrape com.vexecsearch.rescore com.vexecsearch.enrich com.vexecsearch.imessage com.vexecsearch.email com.vexecsearch.poll; do
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENTS/${label}.plist"
   launchctl enable "gui/$(id -u)/$label"
@@ -131,10 +166,12 @@ for label in "$DAILY_LABEL" "$POLL_LABEL"; do
 done
 
 echo ""
-echo "Done. Scheduled:"
-echo "  • Daily pipeline at 6:00 AM and 6:00 PM local time ($DAILY_LABEL)"
-echo "  • Admin 'Run now' poll every 5 minutes ($POLL_LABEL)"
-echo "  • caffeinate -s wraps each job so the Mac won't idle-sleep mid-run"
+echo "Done. Scheduled (America/New_York):"
+echo "  • 02:00 Scrape + jobs_only ingest (free)"
+echo "  • 02:30 ICP filter + rescore backlog (free)"
+echo "  • 03:00 Enrich top-N call sheet (paid)"
+echo "  • 03:30 iMessage checks (free)"
+echo "  • 06:00 Call sheet email (free)"
+echo "  • Every 5 min Admin 'Run now' poll (com.vexecsearch.poll)"
 echo ""
 echo "Verify: launchctl list | grep vexecsearch"
-echo "Logs:   tail -f $WORKER_ROOT/logs/launchd_stdout.log"

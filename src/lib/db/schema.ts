@@ -33,6 +33,17 @@ export const geographicScopeEnum = pgEnum("geographic_scope", [
   "county",
 ]);
 
+export const icpStatusEnum = pgEnum("icp_status", ["pass", "fail", "unknown"]);
+
+export type HiringSignalKey =
+  | "reposted_role"
+  | "multiple_openings"
+  | "long_running"
+  | "new_location_cluster"
+  | "internal_ta_only";
+
+export type HiringSignals = Partial<Record<HiringSignalKey, boolean | number>>;
+
 export const pipelineSettings = pgTable("pipeline_settings", {
   id: uuid("id").defaultRandom().primaryKey(),
   geographicScope: geographicScopeEnum("geographic_scope")
@@ -52,6 +63,9 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   runRequestedAt: timestamp("run_requested_at"),
   contactoutSyncRequestedAt: timestamp("contactout_sync_requested_at"),
   imessageCheckRequestedAt: timestamp("imessage_check_requested_at"),
+  dailyEnrichQuota: integer("daily_enrich_quota").default(25).notNull(),
+  minScoreForEnrich: integer("min_score_for_enrich").default(60).notNull(),
+  minScoreForPhone: integer("min_score_for_phone").default(75).notNull(),
   lastRunAt: timestamp("last_run_at"),
   workerLastSeenAt: timestamp("worker_last_seen_at"),
   missedRunAlertSlot: text("missed_run_alert_slot"),
@@ -83,6 +97,10 @@ export const dailyRuns = pgTable("daily_runs", {
   companiesEnriched: integer("companies_enriched").default(0),
   contactsEnriched: integer("contacts_enriched").default(0),
   creditsUsed: integer("credits_used").default(0),
+  icpMatchCount: integer("icp_match_count").default(0),
+  enrichmentQuota: integer("enrichment_quota").default(0),
+  companiesScored: integer("companies_scored").default(0),
+  companiesDeferred: integer("companies_deferred").default(0),
   errors: text("errors"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -97,6 +115,15 @@ export const companies = pgTable("companies", {
   status: companyStatusEnum("status").default("new").notNull(),
   firstSeen: date("first_seen").notNull(),
   dailyRunId: uuid("daily_run_id").references(() => dailyRuns.id),
+  leadScore: integer("lead_score").default(0).notNull(),
+  hiringSignals: jsonb("hiring_signals").$type<HiringSignals>().default({}),
+  reasonToCall: text("reason_to_call"),
+  callOpener: text("call_opener"),
+  icpStatus: icpStatusEnum("icp_status").default("unknown").notNull(),
+  estimatedEmployees: integer("estimated_employees"),
+  industry: text("industry"),
+  enrichedAt: timestamp("enriched_at"),
+  enrichRunDate: date("enrich_run_date"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -144,6 +171,11 @@ export const jobListings = pgTable("job_listings", {
   location: text("location"),
   searchName: text("search_name"),
   postedAt: timestamp("posted_at"),
+  urlFingerprint: text("url_fingerprint"),
+  sightingsCount: integer("sightings_count").default(1).notNull(),
+  firstSeenAt: timestamp("first_seen_at").defaultNow().notNull(),
+  lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
+  lastSeenRunDate: date("last_seen_run_date"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -155,3 +187,4 @@ export type PipelineSettings = typeof pipelineSettings.$inferSelect;
 export type SearchProfile = typeof searchProfiles.$inferSelect;
 export type CompanyStatus = (typeof companyStatusEnum.enumValues)[number];
 export type GeographicScope = (typeof geographicScopeEnum.enumValues)[number];
+export type IcpStatus = (typeof icpStatusEnum.enumValues)[number];

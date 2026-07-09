@@ -1,6 +1,6 @@
-import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { companies, contacts, jobListings } from "@/lib/db/schema";
+import { companies, contacts, dailyRuns, jobListings } from "@/lib/db/schema";
 import {
   contactPhonesForDisplay,
   phoneKindLabel,
@@ -9,22 +9,40 @@ import {
   type SourcedPhone,
 } from "@/lib/contact-phones";
 import { isPersonalEmail } from "@/lib/phone-utils";
-import { businessDayFirstSeenDates, businessListDate } from "@/lib/timezone";
+import { businessListDate } from "@/lib/timezone";
 import { getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
 import { parseJobLocation } from "@/lib/location-match";
+import { contactIsCallable } from "@/lib/lead-score";
+import type { Contact } from "@/lib/db/schema";
 
-export type DailyReportPhone = SourcedPhone;
+export type DailyReportPhone = SourcedPhone & {
+  source_label: string;
+  kind_label: string;
+};
 
-export type DailyReportRow = {
+export type CallSheetLead = {
+  rank: number;
+  score: number;
   company: string;
+  company_id: string;
   contact_name: string;
   title: string | null;
+  reason_to_call: string | null;
   work_email: string | null;
   personal_email: string | null;
   phones: DailyReportPhone[];
   imessage_capable: boolean | null;
   job_title: string | null;
   job_location: string | null;
+};
+
+export type DailyCallSheet = {
+  run_date: string;
+  listings_scraped: number;
+  icp_match_count: number;
+  companies_enriched: number;
+  credits_used: number;
+  leads: CallSheetLead[];
 };
 
 function resolveEmails(contact: {
@@ -45,108 +63,130 @@ function resolveEmails(contact: {
   };
 }
 
-export async function getDailyReportData(): Promise<{
-  run_date: string;
-  listings_scraped: number;
-  companies_enriched: number;
-  rows: DailyReportRow[];
-}> {
-  const listDates = businessDayFirstSeenDates();
+function pickBestContact(contacts: Contact[]): Contact | undefined {
+  return [...contacts].sort((a, b) => {
+    if (a.locationMatched !== b.locationMatched) {
+      return a.locationMatched ? -1 : 1;
+    }
+    const aCallable = contactIsCallable(a);
+    const bCallable = contactIsCallable(b);
+    if (aCallable !== bCallable) return aCallable ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  })[0];
+}
+
+export async function getDailyCallSheet(): Promise<DailyCallSheet> {
+  const runDate = businessListDate();
   const geoSettings = await getGeoFocusSettings();
 
-  const allListingsToday = await db
-    .select({ listing: jobListings })
-    .from(jobListings)
-    .innerJoin(companies, eq(jobListings.companyId, companies.id))
-    .where(inArray(companies.firstSeen, listDates));
+  const [run] = await db
+    .select()
+    .from(dailyRuns)
+    .where(eq(dailyRuns.runDate, runDate))
+    .limit(1);
 
-  const listings_scraped = allListingsToday.filter((row) =>
-    jobLocationInFocus(row.listing.location, geoSettings),
-  ).length;
-
-  const rawRows = await db
-    .selectDistinctOn([companies.id, contacts.id], {
-      company: companies.name,
-      companyId: companies.id,
-      contactName: contacts.name,
-      title: contacts.title,
-      email: contacts.email,
-      workEmail: contacts.workEmail,
-      personalEmail: contacts.personalEmail,
-      phone: contacts.phone,
-      personalPhone: contacts.personalPhone,
-      companyPhone: contacts.companyPhone,
-      phones: contacts.phones,
-      sourceProvider: contacts.sourceProvider,
-      imessageCapable: contacts.imessageCapable,
-      jobTitle: jobListings.title,
-      jobLocation: jobListings.location,
-    })
+  const companyRows = await db
+    .select()
     .from(companies)
-    .innerJoin(contacts, eq(contacts.companyId, companies.id))
-    .innerJoin(jobListings, eq(jobListings.companyId, companies.id))
     .where(
       and(
         eq(companies.status, "new"),
-        inArray(companies.firstSeen, listDates),
-        or(
-          isNotNull(contacts.personalPhone),
-          isNotNull(contacts.phone),
-          isNotNull(contacts.personalEmail),
-          isNotNull(contacts.email),
-          isNotNull(contacts.workEmail),
-        ),
+        eq(companies.enrichRunDate, runDate),
       ),
     )
-    .orderBy(companies.id, contacts.id, jobListings.createdAt);
+    .orderBy(desc(companies.leadScore));
 
-  const rows: DailyReportRow[] = [];
-  const enrichedCompanyIds = new Set<string>();
+  const leads: CallSheetLead[] = [];
+  let rank = 0;
 
-  for (const row of rawRows) {
-    if (!jobLocationInFocus(row.jobLocation, geoSettings)) continue;
+  for (const company of companyRows) {
+    const companyContacts = await db
+      .select()
+      .from(contacts)
+      .where(eq(contacts.companyId, company.id));
 
-    const { workEmail, personalEmail } = resolveEmails(row);
+    const callable = companyContacts.filter(contactIsCallable);
+    if (!callable.length) continue;
+
+    const listings = await db
+      .select()
+      .from(jobListings)
+      .where(eq(jobListings.companyId, company.id))
+      .orderBy(desc(jobListings.sightingsCount));
+
+    const inFocus = listings.filter((l) =>
+      jobLocationInFocus(l.location, geoSettings),
+    );
+    if (!inFocus.length) continue;
+
+    const best = pickBestContact(callable);
+    if (!best) continue;
+
+    const { workEmail, personalEmail } = resolveEmails(best);
     const phones = sortPhonesForDisplay(
       contactPhonesForDisplay({
-        phones: row.phones,
-        phone: row.phone,
-        personalPhone: row.personalPhone,
-        companyPhone: row.companyPhone,
-        sourceProvider: row.sourceProvider,
+        phones: best.phones,
+        phone: best.phone,
+        personalPhone: best.personalPhone,
+        companyPhone: best.companyPhone,
+        sourceProvider: best.sourceProvider,
       }),
-    );
+    ).map((p) => ({
+      ...p,
+      source_label: sourceLabel(p.source),
+      kind_label: phoneKindLabel(p.kind),
+    }));
 
-    if (!workEmail && !personalEmail && phones.length === 0) continue;
-
-    enrichedCompanyIds.add(row.companyId);
-    const jobLocationLabel =
-      (row.jobLocation && parseJobLocation(row.jobLocation)?.label) ||
-      row.jobLocation ||
-      null;
-    rows.push({
-      company: row.company,
-      contact_name: row.contactName,
-      title: row.title,
+    rank += 1;
+    const primaryJob = inFocus[0];
+    leads.push({
+      rank,
+      score: company.leadScore ?? 0,
+      company: company.name,
+      company_id: company.id,
+      contact_name: best.name,
+      title: best.title,
+      reason_to_call: company.reasonToCall,
       work_email: workEmail,
       personal_email: personalEmail,
-      phones: phones.map((p) => ({
-        number: p.number,
-        source: p.source,
-        kind: p.kind,
-        source_label: sourceLabel(p.source),
-        kind_label: phoneKindLabel(p.kind),
-      })),
-      imessage_capable: row.imessageCapable,
-      job_title: row.jobTitle,
-      job_location: jobLocationLabel,
+      phones,
+      imessage_capable: best.imessageCapable,
+      job_title: primaryJob?.title ?? null,
+      job_location:
+        (primaryJob?.location &&
+          parseJobLocation(primaryJob.location)?.label) ||
+        primaryJob?.location ||
+        null,
     });
   }
 
   return {
-    run_date: businessListDate(),
-    listings_scraped,
-    companies_enriched: enrichedCompanyIds.size,
-    rows,
+    run_date: runDate,
+    listings_scraped: run?.listingsScraped ?? 0,
+    icp_match_count: run?.icpMatchCount ?? 0,
+    companies_enriched: run?.companiesEnriched ?? leads.length,
+    credits_used: run?.creditsUsed ?? 0,
+    leads,
+  };
+}
+
+/** @deprecated Use getDailyCallSheet */
+export async function getDailyReportData() {
+  const sheet = await getDailyCallSheet();
+  return {
+    run_date: sheet.run_date,
+    listings_scraped: sheet.listings_scraped,
+    companies_enriched: sheet.companies_enriched,
+    rows: sheet.leads.map((lead) => ({
+      company: lead.company,
+      contact_name: lead.contact_name,
+      title: lead.title,
+      work_email: lead.work_email,
+      personal_email: lead.personal_email,
+      phones: lead.phones,
+      imessage_capable: lead.imessage_capable,
+      job_title: lead.job_title,
+      job_location: lead.job_location,
+    })),
   };
 }

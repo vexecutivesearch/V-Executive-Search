@@ -8,6 +8,9 @@ import {
   dailyRuns,
   jobListings,
 } from "@/lib/db/schema";
+import { jobUrlFingerprint } from "@/lib/hiring-signals";
+import { recomputeCompanyScores } from "@/lib/recompute-company-scores";
+import type { IcpStatus } from "@/lib/db/schema";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,13 +51,17 @@ interface IngestCompany {
   name: string;
   domain?: string;
   domain_confidence?: string;
+  estimated_employees?: number;
+  industry?: string;
+  icp_status?: IcpStatus;
+  enrich_run_date?: string;
   contacts?: IngestContact[];
   job_listings?: IngestJobListing[];
 }
 
 interface IngestPayload {
   run_date: string;
-  import_mode?: "pipeline" | "jobs_only";
+  import_mode?: "pipeline" | "jobs_only" | "enrich_only";
   metadata?: {
     listings_scraped?: number;
     companies_found?: number;
@@ -62,6 +69,10 @@ interface IngestPayload {
     companies_enriched?: number;
     contacts_enriched?: number;
     credits_used?: number;
+    icp_match_count?: number;
+    enrichment_quota?: number;
+    companies_scored?: number;
+    companies_deferred?: number;
     errors?: string[];
   };
   companies: IngestCompany[];
@@ -124,16 +135,13 @@ async function findCompany(item: IngestCompany) {
   return all.find((row) => normalizeCompanyKey(row.name) === nameKey) ?? null;
 }
 
-async function existingJobUrls(urls: string[]): Promise<Set<string>> {
-  const cleaned = urls.map((u) => u.trim()).filter(Boolean);
-  if (!cleaned.length) return new Set();
-
-  const rows = await db
-    .select({ url: jobListings.url })
+async function findJobByUrl(url: string) {
+  const [row] = await db
+    .select()
     .from(jobListings)
-    .where(inArray(jobListings.url, cleaned));
-
-  return new Set(rows.map((r) => r.url).filter(Boolean) as string[]);
+    .where(eq(jobListings.url, url))
+    .limit(1);
+  return row ?? null;
 }
 
 export async function POST(request: NextRequest) {
@@ -150,6 +158,7 @@ export async function POST(request: NextRequest) {
 
   const meta = payload.metadata ?? {};
   const jobsOnly = payload.import_mode === "jobs_only";
+  const enrichOnly = payload.import_mode === "enrich_only";
 
   const [existingRun] = await db
     .select()
@@ -167,6 +176,10 @@ export async function POST(request: NextRequest) {
       companiesEnriched: meta.companies_enriched ?? 0,
       contactsEnriched: meta.contacts_enriched ?? 0,
       creditsUsed: meta.credits_used ?? 0,
+      icpMatchCount: meta.icp_match_count ?? 0,
+      enrichmentQuota: meta.enrichment_quota ?? 0,
+      companiesScored: meta.companies_scored ?? 0,
+      companiesDeferred: meta.companies_deferred ?? 0,
       errors: meta.errors?.length ? JSON.stringify(meta.errors) : null,
     })
     .onConflictDoUpdate({
@@ -174,14 +187,22 @@ export async function POST(request: NextRequest) {
       set: {
         listingsScraped: jobsOnly
           ? (existingRun?.listingsScraped ?? 0) + (meta.listings_scraped ?? 0)
-          : (meta.listings_scraped ?? 0),
+          : (meta.listings_scraped ?? existingRun?.listingsScraped ?? 0),
         companiesFound: jobsOnly
           ? (existingRun?.companiesFound ?? 0) + (meta.companies_found ?? 0)
-          : (meta.companies_found ?? 0),
-        companiesSkippedExisting: meta.companies_skipped_existing ?? 0,
-        companiesEnriched: meta.companies_enriched ?? 0,
-        contactsEnriched: meta.contacts_enriched ?? 0,
-        creditsUsed: meta.credits_used ?? 0,
+          : (meta.companies_found ?? existingRun?.companiesFound ?? 0),
+        companiesSkippedExisting:
+          meta.companies_skipped_existing ?? existingRun?.companiesSkippedExisting ?? 0,
+        companiesEnriched:
+          meta.companies_enriched ?? existingRun?.companiesEnriched ?? 0,
+        contactsEnriched:
+          meta.contacts_enriched ?? existingRun?.contactsEnriched ?? 0,
+        creditsUsed: meta.credits_used ?? existingRun?.creditsUsed ?? 0,
+        icpMatchCount: meta.icp_match_count ?? existingRun?.icpMatchCount ?? 0,
+        enrichmentQuota: meta.enrichment_quota ?? existingRun?.enrichmentQuota ?? 0,
+        companiesScored: meta.companies_scored ?? existingRun?.companiesScored ?? 0,
+        companiesDeferred:
+          meta.companies_deferred ?? existingRun?.companiesDeferred ?? 0,
         errors: meta.errors?.length ? JSON.stringify(meta.errors) : null,
       },
     })
@@ -190,12 +211,8 @@ export async function POST(request: NextRequest) {
   let inserted = 0;
   let updated = 0;
   let jobsInserted = 0;
-  let jobsSkipped = 0;
-
-  const allUrls = payload.companies.flatMap((c) =>
-    (c.job_listings ?? []).map((j) => j.url?.trim() || "").filter(Boolean),
-  );
-  const knownUrls = await existingJobUrls(allUrls);
+  let jobsResighted = 0;
+  const touchedCompanyIds: string[] = [];
 
   for (const item of payload.companies) {
     const existing = await findCompany(item);
@@ -216,6 +233,12 @@ export async function POST(request: NextRequest) {
               : incomingDomain && !existing.domain
                 ? "low"
                 : existing.domainConfidence,
+          estimatedEmployees:
+            item.estimated_employees ?? existing.estimatedEmployees,
+          industry: item.industry ?? existing.industry,
+          icpStatus: item.icp_status ?? existing.icpStatus,
+          enrichedAt: enrichOnly ? new Date() : existing.enrichedAt,
+          enrichRunDate: item.enrich_run_date ?? existing.enrichRunDate,
           updatedAt: new Date(),
         })
         .where(eq(companies.id, companyId));
@@ -228,9 +251,14 @@ export async function POST(request: NextRequest) {
           domain,
           domainConfidence:
             item.domain_confidence === "high" ? "high" : "low",
+          estimatedEmployees: item.estimated_employees ?? null,
+          industry: item.industry ?? null,
+          icpStatus: item.icp_status ?? "unknown",
           firstSeen: jobsOnly
             ? earliestFirstSeen(item, payload.run_date)
             : payload.run_date,
+          enrichRunDate: item.enrich_run_date ?? null,
+          enrichedAt: enrichOnly ? new Date() : null,
           dailyRunId: run.id,
         })
         .returning();
@@ -238,55 +266,74 @@ export async function POST(request: NextRequest) {
       inserted += 1;
     }
 
-    for (const c of item.contacts ?? []) {
-      if (!c.email && !c.name) continue;
+    touchedCompanyIds.push(companyId);
 
-      const existingForCompany = await db
-        .select({ apolloId: contacts.apolloId, email: contacts.email })
-        .from(contacts)
-        .where(eq(contacts.companyId, companyId));
+    if (!jobsOnly) {
+      for (const c of item.contacts ?? []) {
+        if (!c.email && !c.name) continue;
 
-      if (
-        c.apollo_id &&
-        existingForCompany.some((row) => row.apolloId === c.apollo_id)
-      ) {
-        continue;
+        const existingForCompany = await db
+          .select({ apolloId: contacts.apolloId, email: contacts.email })
+          .from(contacts)
+          .where(eq(contacts.companyId, companyId));
+
+        if (
+          c.apollo_id &&
+          existingForCompany.some((row) => row.apolloId === c.apollo_id)
+        ) {
+          continue;
+        }
+        const emailNorm = c.email?.trim().toLowerCase();
+        if (
+          emailNorm &&
+          existingForCompany.some(
+            (row) => row.email?.trim().toLowerCase() === emailNorm,
+          )
+        ) {
+          continue;
+        }
+
+        await db.insert(contacts).values({
+          companyId,
+          name: c.name,
+          title: c.title ?? null,
+          email: c.email ?? null,
+          workEmail: c.work_email ?? null,
+          personalEmail: c.personal_email ?? null,
+          phone: c.phone ?? null,
+          personalPhone: c.personal_phone ?? null,
+          companyPhone: c.company_phone ?? null,
+          phones: c.phones ?? [],
+          linkedinUrl: c.linkedin_url ?? null,
+          apolloId: c.apollo_id ?? null,
+          sourceProvider: c.source_provider ?? "apollo",
+          locationMatched: c.location_matched ?? false,
+          contactLocation: c.contact_location ?? null,
+          jobLocation: c.job_location ?? null,
+        });
       }
-      const emailNorm = c.email?.trim().toLowerCase();
-      if (
-        emailNorm &&
-        existingForCompany.some(
-          (row) => row.email?.trim().toLowerCase() === emailNorm,
-        )
-      ) {
-        continue;
-      }
-
-      await db.insert(contacts).values({
-        companyId,
-        name: c.name,
-        title: c.title ?? null,
-        email: c.email ?? null,
-        workEmail: c.work_email ?? null,
-        personalEmail: c.personal_email ?? null,
-        phone: c.phone ?? null,
-        personalPhone: c.personal_phone ?? null,
-        companyPhone: c.company_phone ?? null,
-        phones: c.phones ?? [],
-        linkedinUrl: c.linkedin_url ?? null,
-        apolloId: c.apollo_id ?? null,
-        sourceProvider: c.source_provider ?? "apollo",
-        locationMatched: c.location_matched ?? false,
-        contactLocation: c.contact_location ?? null,
-        jobLocation: c.job_location ?? null,
-      });
     }
 
     for (const jl of item.job_listings ?? []) {
       const url = jl.url?.trim() || null;
-      if (url && knownUrls.has(url)) {
-        jobsSkipped += 1;
-        continue;
+      const now = new Date();
+
+      if (url) {
+        const existingJob = await findJobByUrl(url);
+        if (existingJob) {
+          await db
+            .update(jobListings)
+            .set({
+              sightingsCount: (existingJob.sightingsCount ?? 1) + 1,
+              lastSeenAt: now,
+              lastSeenRunDate: payload.run_date,
+              location: jl.location ?? existingJob.location,
+              title: jl.title || existingJob.title,
+            })
+            .where(eq(jobListings.id, existingJob.id));
+          jobsResighted += 1;
+          continue;
+        }
       }
 
       await db.insert(jobListings).values({
@@ -297,11 +344,31 @@ export async function POST(request: NextRequest) {
         location: jl.location ?? null,
         searchName: jl.search_name ?? null,
         postedAt: jl.posted_at ? new Date(jl.posted_at) : null,
+        urlFingerprint: jobUrlFingerprint(url),
+        sightingsCount: 1,
+        firstSeenAt: now,
+        lastSeenAt: now,
+        lastSeenRunDate: payload.run_date,
       });
-
-      if (url) knownUrls.add(url);
       jobsInserted += 1;
     }
+  }
+
+  const uniqueIds = [...new Set(touchedCompanyIds)];
+  const { scored, icpMatch } = await recomputeCompanyScores(uniqueIds);
+
+  if (jobsOnly || enrichOnly) {
+    await db
+      .update(dailyRuns)
+      .set({
+        companiesScored: (existingRun?.companiesScored ?? 0) + scored,
+        icpMatchCount: Math.max(
+          meta.icp_match_count ?? 0,
+          icpMatch,
+          existingRun?.icpMatchCount ?? 0,
+        ),
+      })
+      .where(eq(dailyRuns.id, run.id));
   }
 
   return NextResponse.json({
@@ -310,6 +377,8 @@ export async function POST(request: NextRequest) {
     companies_inserted: inserted,
     companies_updated: updated,
     jobs_inserted: jobsInserted,
-    jobs_skipped: jobsSkipped,
+    jobs_resighted: jobsResighted,
+    companies_scored: scored,
+    icp_match_count: icpMatch,
   });
 }

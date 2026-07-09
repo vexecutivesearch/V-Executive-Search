@@ -1,4 +1,4 @@
-import { and, count, desc, eq, ilike, inArray, not, or } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, ne, not, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   companies,
@@ -8,7 +8,7 @@ import {
   CompanyStatus,
 } from "@/lib/db/schema";
 import { CompanyCardData } from "@/components/CompanyCard";
-import { firstSeenDatesForListQuery } from "@/lib/timezone";
+import { firstSeenDatesForListQuery, businessListDate } from "@/lib/timezone";
 import { applySharedLineFilter } from "@/lib/contact-phones";
 import { focusGeoLabel, getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
 import type { Contact } from "@/lib/db/schema";
@@ -23,11 +23,11 @@ function hasCallableContact(contact: Contact): boolean {
   );
 }
 
-/** Daily list: all in-focus companies for the business day (enriched or not). */
-export async function getDailyListCompanies(
+/** Today's enriched call sheet — top-N JIT leads with callable contacts. */
+export async function getCallSheetCompanies(
   listDateParam?: string,
 ): Promise<CompanyCardData[]> {
-  const listDates = firstSeenDatesForListQuery(listDateParam);
+  const listDate = listDateParam ?? businessListDate();
   const geoSettings = await getGeoFocusSettings();
 
   const companiesRows = await db
@@ -36,21 +36,54 @@ export async function getDailyListCompanies(
     .where(
       and(
         eq(companies.status, "new"),
-        inArray(companies.firstSeen, listDates),
+        eq(companies.enrichRunDate, listDate),
         not(ilike(companies.name, "(Listing)%")),
       ),
     )
-    .orderBy(desc(companies.createdAt));
+    .orderBy(desc(companies.leadScore), desc(companies.updatedAt));
 
-  const filtered = await enrichCompanies(companiesRows, geoSettings);
-  return filtered
-    .filter((c) => c.jobListings.length > 0)
-    .sort((a, b) => {
-      const aCallable = a.contacts.some(hasCallableContact);
-      const bCallable = b.contacts.some(hasCallableContact);
-      if (aCallable !== bCallable) return aCallable ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
+  const enriched = await enrichCompanies(companiesRows, geoSettings);
+  return enriched
+    .filter(
+      (c) =>
+        c.jobListings.length > 0 && c.contacts.some(hasCallableContact),
+    )
+    .sort((a, b) => (b.leadScore ?? 0) - (a.leadScore ?? 0));
+}
+
+/** Ranked backlog — scraped in-focus companies awaiting enrichment. */
+export async function getBacklogCompanies(): Promise<CompanyCardData[]> {
+  const geoSettings = await getGeoFocusSettings();
+
+  const companiesRows = await db
+    .select()
+    .from(companies)
+    .where(
+      and(
+        eq(companies.status, "new"),
+        ne(companies.icpStatus, "fail"),
+        not(ilike(companies.name, "(Listing)%")),
+      ),
+    )
+    .orderBy(desc(companies.leadScore), desc(companies.updatedAt))
+    .limit(200);
+
+  const enriched = await enrichCompanies(companiesRows, geoSettings);
+  return enriched
+    .filter(
+      (c) =>
+        c.jobListings.length > 0 && !c.contacts.some(hasCallableContact),
+    )
+    .sort((a, b) => (b.leadScore ?? 0) - (a.leadScore ?? 0));
+}
+
+/** @deprecated Use getCallSheetCompanies — kept for compatibility. */
+export async function getDailyListCompanies(
+  listDateParam?: string,
+): Promise<CompanyCardData[]> {
+  const callSheet = await getCallSheetCompanies(listDateParam);
+  if (callSheet.length > 0) return callSheet;
+  return getBacklogCompanies();
 }
 
 /** @deprecated Use getDailyListCompanies — kept for callers expecting callable-only. */
@@ -155,6 +188,16 @@ export async function getCompanyById(
   return enriched[0];
 }
 
+export async function getLatestRunStats(listDate?: string) {
+  const date = listDate ?? businessListDate();
+  const [run] = await db
+    .select()
+    .from(dailyRuns)
+    .where(eq(dailyRuns.runDate, date))
+    .limit(1);
+  return run ?? null;
+}
+
 export async function getRecentRuns() {
   return db
     .select()
@@ -256,6 +299,13 @@ async function enrichCompanies(
       domainConfidence: company.domainConfidence,
       status: company.status,
       firstSeen: company.firstSeen,
+      leadScore: company.leadScore ?? 0,
+      hiringSignals: company.hiringSignals ?? {},
+      reasonToCall: company.reasonToCall,
+      callOpener: company.callOpener,
+      icpStatus: company.icpStatus,
+      enrichedAt: company.enrichedAt,
+      enrichRunDate: company.enrichRunDate,
       contacts: applySharedLineFilter(companyContacts),
       jobListings: inFocusListings,
     };

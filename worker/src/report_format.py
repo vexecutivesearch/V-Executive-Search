@@ -78,68 +78,65 @@ def _kind_label(kind: str | None) -> str:
     return "Phone"
 
 
-def _format_email_cell(email: str | None) -> str:
+def score_badge_style(score: int) -> tuple[str, str]:
+    if score >= 80:
+        return "#166534", "#dcfce7"
+    if score >= 60:
+        return "#92400e", "#fef3c7"
+    return "#6b7280", "#f3f4f6"
+
+
+def _format_email_chip(email: str | None, label: str) -> str:
     if not email:
-        return '<span style="color:#9ca3af">—</span>'
+        return ""
     safe = _esc(email)
-    return f'<a href="mailto:{safe}" style="color:#2563eb">{safe}</a>'
+    return (
+        f'<span style="display:inline-block;margin:0 6px 6px 0;font-size:11px;'
+        f'padding:3px 8px;border-radius:999px;background:#eff6ff;color:#1d4ed8">'
+        f"{label}: <a href=\"mailto:{safe}\" style=\"color:#1d4ed8\">{safe}</a></span>"
+    )
 
 
-def _format_phones_cell(phones: list[dict[str, str]], row: dict[str, Any]) -> str:
+def _format_phone_chips(phones: list[dict[str, str]]) -> str:
     parts: list[str] = []
-    for phone in phones:
+    for phone in phones[:2]:
         number = parse_phone_value(phone.get("number"))
         if not number:
             continue
-        source = _source_label(str(phone.get("source") or "apollo"))
         kind = _kind_label(phone.get("kind"))
-        badge_color = "#166534" if source == "ContactOut" else "#1d4ed8"
-        badge_bg = "#dcfce7" if source == "ContactOut" else "#dbeafe"
         safe_number = _esc(number)
         parts.append(
-            f'<div style="margin:0 0 6px 0">'
-            f'<span style="font-size:10px;font-weight:600;color:{badge_color};'
-            f'background:{badge_bg};padding:2px 6px;border-radius:4px">'
-            f"{source} · {kind}</span> "
-            f'<a href="tel:{safe_number}" style="color:#111827">{safe_number}</a>'
-            f"</div>"
+            f'<span style="display:inline-block;margin:0 6px 6px 0;font-size:11px;'
+            f'padding:3px 8px;border-radius:999px;background:#f3f4f6;color:#111827">'
+            f'{kind}: <a href="tel:{safe_number}" style="color:#111827">{safe_number}</a></span>'
         )
-
-    personal = row.get("personal_email") or row.get("personalEmail")
-    has_contactout = any(p.get("source") == "contactout" for p in phones)
-    if personal and not has_contactout:
-        parts.append(
-            '<div style="margin:0 0 6px 0;color:#9ca3af;font-style:italic;font-size:12px">'
-            "ContactOut phone not on API plan</div>"
-        )
-
-    if not parts:
-        return '<span style="color:#9ca3af">—</span>'
     return "".join(parts)
 
 
-def _format_imessage_cell(row: dict[str, Any], personal_email: str | None) -> str:
+def _format_imessage_chip(row: dict[str, Any], personal_email: str | None) -> str:
     capable = row.get("imessage_capable")
     if capable is None:
         capable = row.get("imessageCapable")
 
     if capable is True:
         return (
-            '<span style="color:#166534;font-weight:600;background:#dcfce7;'
-            'padding:2px 8px;border-radius:4px">iMessage ✓</span>'
+            '<span style="display:inline-block;margin:0 6px 6px 0;font-size:11px;'
+            'padding:3px 8px;border-radius:999px;background:#dcfce7;color:#166534;'
+            'font-weight:600">iMessage ✓</span>'
         )
     if capable is False:
-        return '<span style="color:#6b7280">SMS only</span>'
+        return (
+            '<span style="display:inline-block;margin:0 6px 6px 0;font-size:11px;'
+            'padding:3px 8px;border-radius:999px;background:#f3f4f6;color:#6b7280">'
+            "SMS only</span>"
+        )
     if personal_email:
-        return '<span style="color:#9ca3af;font-style:italic">Pending</span>'
-    return '<span style="color:#9ca3af">—</span>'
-
-
-def has_contact_data(row: dict[str, Any]) -> bool:
-    work, personal = _resolve_emails(row)
-    phones = _phones_for_row(row)
-    legacy_phone = parse_phone_value(row.get("phone"))
-    return bool(work or personal or phones or legacy_phone)
+        return (
+            '<span style="display:inline-block;margin:0 6px 6px 0;font-size:11px;'
+            'padding:3px 8px;border-radius:999px;background:#f9fafb;color:#9ca3af;'
+            'font-style:italic">iMessage pending</span>'
+        )
+    return ""
 
 
 def _format_job_location(row: dict[str, Any]) -> str:
@@ -154,6 +151,13 @@ def _format_job_location(row: dict[str, Any]) -> str:
     return parts[0] if parts else str(raw)
 
 
+def has_contact_data(row: dict[str, Any]) -> bool:
+    work, personal = _resolve_emails(row)
+    phones = _phones_for_row(row)
+    legacy_phone = parse_phone_value(row.get("phone"))
+    return bool(work or personal or phones or legacy_phone)
+
+
 def format_contact_row_cells(row: dict[str, Any]) -> dict[str, str]:
     work_email, personal_email = _resolve_emails(row)
     phones = _phones_for_row(row)
@@ -162,10 +166,72 @@ def format_contact_row_cells(row: dict[str, Any]) -> dict[str, str]:
         "company": _esc(row.get("company", "")),
         "contact_name": _esc(row.get("contact_name") or row.get("contactName", "")),
         "title": _esc(row.get("title", "")),
-        "work_email": _format_email_cell(work_email),
-        "personal_email": _format_email_cell(personal_email),
-        "phones": _format_phones_cell(phones, row),
-        "imessage": _format_imessage_cell(row, personal_email),
+        "work_email": _format_email_chip(work_email, "Work"),
+        "personal_email": _format_email_chip(personal_email, "Personal"),
+        "phones": _format_phone_chips(phones),
+        "imessage": _format_imessage_chip(row, personal_email),
         "job_title": _esc(row.get("job_title") or row.get("jobTitle", "")),
         "job_location": _esc(_format_job_location(row)),
     }
+
+
+def format_call_sheet_card(lead: dict[str, Any], crm_base_url: str) -> str:
+    rank = int(lead.get("rank") or 0)
+    score = int(lead.get("score") or 0)
+    color, bg = score_badge_style(score)
+    work_email, personal_email = _resolve_emails(lead)
+    phones = _phones_for_row(lead)
+
+    company = _esc(lead.get("company", ""))
+    contact_name = _esc(lead.get("contact_name") or lead.get("contactName", ""))
+    title = _esc(lead.get("title", ""))
+    reason = lead.get("reason_to_call") or lead.get("reasonToCall")
+    job_title = _esc(lead.get("job_title") or lead.get("jobTitle", ""))
+    job_location = _esc(_format_job_location(lead))
+    company_id = lead.get("company_id") or lead.get("companyId") or ""
+    crm_link = f"{crm_base_url.rstrip('/')}/companies/{company_id}" if company_id else f"{crm_base_url.rstrip('/')}/today"
+
+    channels = (
+        _format_email_chip(personal_email, "Personal")
+        + _format_email_chip(work_email, "Work")
+        + _format_phone_chips(phones)
+        + _format_imessage_chip(lead, personal_email)
+    )
+
+    reason_html = ""
+    if reason:
+        reason_html = (
+            f'<p style="margin:6px 0 0;font-size:13px;color:#4b5563;font-style:italic">'
+            f"{_esc(reason)}</p>"
+        )
+
+    job_html = ""
+    if job_title:
+        loc = f" · {job_location}" if job_location else ""
+        job_html = (
+            f'<p style="margin:8px 0 0;font-size:12px;color:#6b7280">'
+            f"{job_title}{loc}</p>"
+        )
+
+    return f"""
+    <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:0 0 12px;background:#fff">
+      <div style="display:flex;align-items:flex-start;gap:12px">
+        <div style="min-width:36px;text-align:center">
+          <div style="font-size:11px;color:#9ca3af;font-weight:600">#{rank}</div>
+          <div style="margin-top:4px;font-size:14px;font-weight:700;color:{color};background:{bg};
+            padding:4px 8px;border-radius:8px;display:inline-block">{score}</div>
+        </div>
+        <div style="flex:1;min-width:0">
+          <p style="margin:0;font-size:16px;font-weight:600;color:#111827">
+            {contact_name}{f' · <span style="font-weight:400;color:#4b5563">{title}</span>' if title else ''}
+          </p>
+          <p style="margin:4px 0 0;font-size:14px;color:#374151">{company}</p>
+          {reason_html}
+          <div style="margin-top:10px">{channels or '<span style="color:#9ca3af;font-size:12px">No channels yet</span>'}</div>
+          {job_html}
+          <p style="margin:10px 0 0;font-size:12px">
+            <a href="{crm_link}" style="color:#2563eb">Open in CRM →</a>
+          </p>
+        </div>
+      </div>
+    </div>"""

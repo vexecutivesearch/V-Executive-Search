@@ -103,6 +103,9 @@ export function AdminDashboard({
     focus_counties: initialCounties,
     notification_email: settings.notificationEmail,
     job_boards: resolveJobBoards(settings.jobBoards),
+    daily_enrich_quota: settings.dailyEnrichQuota ?? 25,
+    min_score_for_enrich: settings.minScoreForEnrich ?? 60,
+    min_score_for_phone: settings.minScoreForPhone ?? 75,
   });
   const [profiles, setProfiles] = useState(initialProfiles);
   const [message, setMessage] = useState("");
@@ -268,9 +271,74 @@ export function AdminDashboard({
       </section>
 
       <section className="border rounded-xl p-5 space-y-4 dark:border-gray-800">
+        <h2 className="font-semibold text-lg">Enrichment quotas</h2>
+        <p className="text-sm text-gray-500">
+          Control how many companies get enriched per night. Scraping and scoring
+          are free; enrichment credits scale with the daily quota.
+        </p>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <label className="block text-sm">
+            Daily enrich quota (N)
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={form.daily_enrich_quota}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  daily_enrich_quota: Number(e.target.value) || 25,
+                })
+              }
+              className="mt-1 w-full border rounded-lg px-3 py-2 dark:bg-gray-900 dark:border-gray-700"
+            />
+          </label>
+          <label className="block text-sm">
+            Min score to enrich
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={form.min_score_for_enrich}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  min_score_for_enrich: Number(e.target.value) || 60,
+                })
+              }
+              className="mt-1 w-full border rounded-lg px-3 py-2 dark:bg-gray-900 dark:border-gray-700"
+            />
+          </label>
+          <label className="block text-sm">
+            Min score for phone reveal
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={form.min_score_for_phone}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  min_score_for_phone: Number(e.target.value) || 75,
+                })
+              }
+              className="mt-1 w-full border rounded-lg px-3 py-2 dark:bg-gray-900 dark:border-gray-700"
+            />
+          </label>
+        </div>
+        <button
+          onClick={saveSettings}
+          disabled={saving}
+          className="bg-gray-900 text-white dark:bg-white dark:text-gray-900 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+        >
+          {saving ? "Saving…" : "Save quotas"}
+        </button>
+      </section>
+
+      <section className="border rounded-xl p-5 space-y-4 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Job boards</h2>
         <p className="text-sm text-gray-500">
-          Sources scraped at 6 AM and 6 PM (via JobSpy on your home Mac). Toggle
+          Sources scraped at 2 AM ET (via JobSpy on your home Mac). Toggle
           boards to A/B which sources produce net-new companies — no deploy needed.
         </p>
         <ul className="space-y-2">
@@ -307,8 +375,8 @@ export function AdminDashboard({
       <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Job title searches</h2>
         <p className="text-sm text-gray-500">
-          Active searches run in your selected geographic area and job boards at 6 AM
-          and 6 PM daily.
+          Active searches run in your selected geographic area and job boards during
+          the nightly scrape (2 AM ET).
         </p>
         <ul className="space-y-2">
           {profiles.map((p) => (
@@ -333,10 +401,9 @@ export function AdminDashboard({
       <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Run pipeline</h2>
         <p className="text-sm text-gray-500">
-          Trigger a scrape from your phone or browser. Your home Mac worker polls
-          every 5 minutes and runs when requested. ContactOut personal email/mobile
-          enrichment runs via API during each pipeline run and from the Enrich button
-          on company cards.
+          Trigger a scrape + enrich from your phone or browser. Your home Mac worker
+          polls every 5 minutes and runs when requested. Only the top-N ranked backlog
+          companies are enriched (not all net-new).
         </p>
         <button
           onClick={triggerRun}

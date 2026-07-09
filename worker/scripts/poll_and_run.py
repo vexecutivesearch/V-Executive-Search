@@ -95,12 +95,13 @@ def main() -> int:
                         send_daily_report_for_pipeline(
                             to_email=notify,
                             pipeline_rows=result.rows,
-                            result_summary={
-                                "run_date": str(result.run_date),
-                                "listings_scraped": result.listings_scraped,
-                                "companies_enriched": result.companies_enriched,
-                                "credits_used": result.credits_used,
-                            },
+                        result_summary={
+                            "run_date": str(result.run_date),
+                            "listings_scraped": result.listings_scraped,
+                            "icp_match_count": result.icp_match_count,
+                            "companies_enriched": result.companies_enriched,
+                            "credits_used": result.credits_used,
+                        },
                             geo_label=geo_label,
                         )
                 except Exception as exc:

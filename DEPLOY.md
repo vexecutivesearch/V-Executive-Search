@@ -13,7 +13,7 @@ Use this guide when standing up a **new Vercel environment**, **new Neon databas
                              │ HTTPS + WORKER_API_KEY
 ┌────────────────────────────┴────────────────────────────────────┐
 │  Mac worker (ONE machine only — residential IP)                   │
-│  • launchd: daily pipeline (6 AM / 6 PM), 5-min poll              │
+│  • launchd: JIT pipeline (2–6 AM ET) + 5-min poll                 │
 │  • JobSpy scrape (boards from /admin)                             │
 │  • Apollo + ContactOut API enrichment                             │
 │  • worker/.env (never in git)                                     │
@@ -61,19 +61,40 @@ Use this guide when standing up a **new Vercel environment**, **new Neon databas
 
 ---
 
-## Daily pipeline (6 AM & 6 PM)
+## Daily pipeline (JIT enrichment — Eastern Time)
+
+The worker runs **five staged jobs** overnight instead of enriching every net-new company:
+
+| Time (ET) | Job | Credits |
+|-----------|-----|---------|
+| 02:00 | Scrape → `jobs_only` ingest | Free |
+| 02:30 | ICP filter + rescore full backlog | Free |
+| 03:00 | Enrich top-N call sheet (default N=25) | Paid |
+| 03:30 | iMessage checks on new contacts | Free |
+| 06:00 | Build + send ranked call sheet email | Free |
+
+Admin **Run now** (5-min poll) runs scrape → rescore → enrich top-N — not enrich-all.
+
+Configure **N** and score thresholds in `/admin` → Enrichment quotas.
+
+**Today's Call Sheet** in the CRM uses a **6 AM – 6 AM Eastern** business day. Enriched leads appear on the call sheet tab; the backlog tab shows ranked companies awaiting enrichment.
+
+Default job boards: **Indeed, Google Jobs, LinkedIn, ZipRecruiter**. Glassdoor is available but off by default. Toggle in `/admin` → Job boards.
+
+### Legacy note
+
+Older installs used a single 6 AM / 6 PM job (`com.vexecsearch.daily`). Re-run `cd worker && ./scripts/install_launchd.sh` to migrate to the JIT schedule.
+
+---
+
+## Daily pipeline (v1 — deprecated)
 
 | Step | What happens |
 |------|----------------|
 | 1 | Load config from Vercel (`/api/pipeline/config`) — geo, searches, **job boards** |
 | 2 | JobSpy scrapes each active title × geo zone on enabled boards |
-| 3 | Dedupe by company; resolve domains; **skip companies already in CRM** |
-| 4 | Apollo finds decision-makers; ContactOut API adds personal email/mobile |
-| 5 | Ingest to Neon; iMessage tags on worker Mac; daily email via Resend |
-
-**Today's List** in the CRM uses a **6 AM – 6 AM Eastern** business day (not midnight). Results from both the 6 AM and 6 PM runs stay visible until the next 6 AM run.
-
-Default job boards: **Indeed, Google Jobs, LinkedIn, ZipRecruiter**. Glassdoor is available but off by default (mostly duplicates Indeed). Toggle in `/admin` → Job boards.
+| 3 | Dedupe by company; resolve domains; enrich **all** net-new until credit cap |
+| 4 | Ingest to Neon; iMessage tags on worker Mac; daily email via Resend |
 
 ---
 

@@ -15,9 +15,13 @@ import {
 export function TodayListRow({
   company: initial,
   defaultExpanded = false,
+  rank,
+  showReasonToCall = false,
 }: {
   company: CompanyCardData;
   defaultExpanded?: boolean;
+  rank?: number;
+  showReasonToCall?: boolean;
 }) {
   const [company, setCompany] = useState(initial);
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -33,6 +37,7 @@ export function TodayListRow({
     company.contacts.find((c) => c.jobLocation)?.jobLocation ||
     null;
   const lead = scoreLead(company);
+  const displayScore = company.leadScore ?? lead.score;
 
   async function refreshCompany(updated?: CompanyCardData) {
     if (updated) {
@@ -74,9 +79,9 @@ export function TodayListRow({
           aria-expanded={expanded}
         >
           <div
-            className={`flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg text-sm font-semibold tabular-nums ${scoreBgClass(lead.score)} ${scoreTextClass(lead.score)}`}
+            className={`flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg text-sm font-semibold tabular-nums ${scoreBgClass(displayScore)} ${scoreTextClass(displayScore)}`}
           >
-            {lead.score}
+            {displayScore}
           </div>
 
           <div className="min-w-0 col-span-1 sm:col-span-1 text-left">
@@ -96,6 +101,11 @@ export function TodayListRow({
               {company.domainConfidence === "low" && (
                 <span className="shrink-0 text-[10px] text-amber-600 dark:text-amber-400">
                   unverified domain
+                </span>
+              )}
+              {showReasonToCall && company.reasonToCall && (
+                <span className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 dark:bg-blue-950/50 dark:text-blue-200 max-w-[14rem] truncate">
+                  {company.reasonToCall}
                 </span>
               )}
             </div>

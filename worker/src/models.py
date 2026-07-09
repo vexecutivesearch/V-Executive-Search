@@ -30,6 +30,9 @@ class CompanyRecord:
     domain_confidence: DomainConfidence = DomainConfidence.LOW
     listings: list[JobListing] = field(default_factory=list)
     crm_id: str | None = None
+    estimated_employees: int | None = None
+    industry: str | None = None
+    lead_score: int = 0
 
 
 @dataclass
@@ -70,5 +73,9 @@ class PipelineResult:
     companies_enriched: int
     contacts_enriched: int
     credits_used: int
+    icp_match_count: int = 0
+    companies_scored: int = 0
+    companies_deferred: int = 0
+    enrichment_quota: int = 0
     errors: list[str] = field(default_factory=list)
     rows: list[dict[str, Any]] = field(default_factory=list)

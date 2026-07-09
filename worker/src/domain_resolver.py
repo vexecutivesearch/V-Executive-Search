@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import requests
@@ -14,8 +15,15 @@ logger = logging.getLogger(__name__)
 APOLLO_BASE = "https://api.apollo.io/api/v1"
 
 
+@dataclass
+class OrgLookupResult:
+    domain: str | None
+    confidence: DomainConfidence
+    estimated_employees: int | None = None
+    industry: str | None = None
+
+
 def _guess_domain(company_name: str) -> str | None:
-    """Heuristic fallback when Apollo org search misses."""
     cleaned = re.sub(r"[^\w\s]", "", company_name.lower())
     cleaned = re.sub(
         r"\b(inc|incorporated|llc|corp|corporation|co|company|ltd|limited|plc|group|holdings)\b",
@@ -37,11 +45,11 @@ def _apollo_headers() -> dict[str, str]:
     }
 
 
-def _search_org_domain(company_name: str) -> tuple[str | None, DomainConfidence]:
+def _search_org(company_name: str) -> OrgLookupResult:
     api_key = os.environ.get("APOLLO_API_KEY")
     if not api_key:
         guess = _guess_domain(company_name)
-        return guess, DomainConfidence.LOW
+        return OrgLookupResult(guess, DomainConfidence.LOW)
 
     try:
         resp = requests.post(
@@ -58,30 +66,48 @@ def _search_org_domain(company_name: str) -> tuple[str | None, DomainConfidence]
         data = resp.json()
         orgs: list[dict[str, Any]] = data.get("organizations") or data.get("accounts") or []
         if orgs:
-            domain = orgs[0].get("primary_domain") or orgs[0].get("website_url")
+            org = orgs[0]
+            domain = org.get("primary_domain") or org.get("website_url")
             if domain:
                 domain = domain.replace("https://", "").replace("http://", "").split("/")[0]
                 if domain.startswith("www."):
                     domain = domain[4:]
-                return domain, DomainConfidence.HIGH
+            employees = org.get("estimated_num_employees")
+            if isinstance(employees, str) and employees.isdigit():
+                employees = int(employees)
+            if not isinstance(employees, int):
+                employees = None
+            industry = org.get("industry")
+            return OrgLookupResult(
+                domain,
+                DomainConfidence.HIGH if domain else DomainConfidence.LOW,
+                estimated_employees=employees,
+                industry=str(industry) if industry else None,
+            )
     except requests.RequestException as exc:
         logger.warning("Apollo org search failed for '%s': %s", company_name, exc)
 
     guess = _guess_domain(company_name)
-    return guess, DomainConfidence.LOW
+    return OrgLookupResult(guess, DomainConfidence.LOW)
 
 
 def resolve_domains(companies: list[CompanyRecord]) -> list[CompanyRecord]:
     for company in companies:
-        if company.domain:
+        if company.domain and company.estimated_employees is not None:
             continue
-        domain, confidence = _search_org_domain(company.name)
-        company.domain = domain
-        company.domain_confidence = confidence
+        lookup = _search_org(company.name)
+        if not company.domain:
+            company.domain = lookup.domain
+            company.domain_confidence = lookup.confidence
+        if lookup.estimated_employees is not None:
+            company.estimated_employees = lookup.estimated_employees
+        if lookup.industry:
+            company.industry = lookup.industry
         logger.info(
-            "Resolved '%s' -> %s (%s)",
+            "Resolved '%s' -> %s (%s, ~%s employees)",
             company.name,
-            domain or "unknown",
-            confidence.value,
+            company.domain or "unknown",
+            company.domain_confidence.value,
+            company.estimated_employees or "?",
         )
     return companies
