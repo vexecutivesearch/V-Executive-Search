@@ -14,14 +14,21 @@ Recovered and optimized ContactOut **dashboard** automation:
 | Component | Purpose |
 |-----------|---------|
 | `src/stealth_browser.py` | Patchright/Playwright launch, proxies, CDP fingerprint alignment |
-| `src/human_behavior.py` | Random 3–7s pauses, human typing |
-| `src/rate_limit.py` | 429 handling, Retry-After, exponential backoff |
-| `src/enrich/contactout_dashboard.py` | Dashboard search + reveal emails/phones |
+| `src/human_behavior.py` | Random 3–7s pauses, reading simulation, pre-reveal hesitation |
+| `src/navigation.py` | `goto_with_retry()` — 429 exponential backoff on navigation |
+| `src/rate_limit.py` | Global cooldown file, Retry-After, UI rate-limit detection |
+| `src/credit_guardian.py` | Pre-flight credit scrape — stop before empty reveals |
+| `src/linkedin_match.py` | LinkedIn slug matching + profile card scoring |
+| `src/resend_notify.py` | Resend alerts (credits depleted, 429 lockout, session dead) |
+| `src/enrich/contactout_dashboard.py` | Name search → LinkedIn verify → **scoped** reveal |
 | `src/enrich/contactout_session.py` | Self-healing login ladder (canary → Keychain → OTP) |
 | `src/enrich/contactout_hybrid.py` | API first, dashboard fallback |
 | `scripts/contactout_login.py` | One-time interactive login |
 | `scripts/contactout_keepalive.py` | Session cookie refresh |
 | `scripts/contactout_dashboard_sync.py` | Trickle CRM backfill |
+| `scripts/test_cross_match.py` | CLI: Apollo name + LinkedIn cross-match test |
+| `examples/python/cross_match_reveal.py` | Standalone Python reference script |
+| `examples/nodejs/cross_match_reveal.mjs` | Standalone Node.js reference script |
 
 ---
 
@@ -84,6 +91,53 @@ This folder implements:
 5. **Proxy rotation** — different residential IP per session when `CONTACTOUT_PROXY_LIST` is set
 
 **Do not** run more than a handful of dashboard lookups per hour on one account. Prefer the API for production volume.
+
+---
+
+## Cross-match flow (Apollo → ContactOut)
+
+Production worker uses the API. For dashboard experiments, the recommended path is:
+
+1. **Search by name** (from Apollo) on ContactOut dashboard
+2. **Verify LinkedIn URL** on each result card (slug match — ignores query strings)
+3. **Scoped reveal** — `card.locator('button:has-text("Reveal")')` on the matched card only  
+   (never a global `page.locator` — that reveals the wrong person and wastes credits)
+4. **Credit guardian** — abort if credits ≤ 0 before any reveal
+5. **Resend alert** — optional email when credits hit zero or 429 lockout persists
+
+```bash
+python scripts/test_cross_match.py \
+  --name "Ryan Cronin" \
+  --linkedin "https://www.linkedin.com/in/ryan-cronin-..."
+```
+
+Or call `ContactOutDashboardClient.enrich_contact()` / `enrich_linkedin(..., contact_name=...)`.
+
+Reference-only scripts (not imported by worker):
+
+- `examples/python/cross_match_reveal.py`
+- `examples/nodejs/cross_match_reveal.mjs`
+
+---
+
+## Resend operational alerts
+
+Set in `Playwright/.env`:
+
+```bash
+ALERT_EMAIL=you@company.com
+RESEND_API_KEY=re_...
+REPORT_FROM_EMAIL=alerts@yourdomain.com   # optional
+CONTACTOUT_ALERT_COOLDOWN_HOURS=6         # suppress duplicate alerts
+```
+
+Triggers:
+
+| Event | Function |
+|-------|----------|
+| Credits depleted | `notify_credits_depleted()` |
+| 429 lockout | `notify_rate_limit_lockout()` |
+| Session dead | `notify_session_lockout()` |
 
 ---
 

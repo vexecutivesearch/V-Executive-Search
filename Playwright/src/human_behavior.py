@@ -42,3 +42,23 @@ def between_profile_pause() -> None:
     low = float(os.environ.get("CONTACTOUT_DASHBOARD_DELAY_MIN", "60"))
     high = float(os.environ.get("CONTACTOUT_DASHBOARD_DELAY_MAX", "150"))
     time.sleep(random.uniform(min(low, high), max(low, high)))
+
+
+def simulate_reading(page: Any, *, scroll_px: int | None = None) -> None:
+    """Scroll and pause like a human scanning results."""
+    px = scroll_px if scroll_px is not None else random.randint(200, 500)
+    try:
+        page.mouse.wheel(0, px)
+    except Exception:
+        try:
+            page.evaluate(f"window.scrollBy(0, {px})")
+        except Exception:
+            pass
+    human_pause(page, label="reading-scroll")
+
+
+def pre_reveal_hesitation(page: Any) -> None:
+    """Short pause before clicking Reveal (machines click instantly)."""
+    ms = random.randint(1500, 3500)
+    page.wait_for_timeout(ms)
+

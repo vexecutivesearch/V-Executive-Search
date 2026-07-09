@@ -162,6 +162,26 @@ def open_browser_context(
     return browser, context, page
 
 
+def pick_proxy_for_lookup() -> dict[str, str] | None:
+    """Rotate residential exit node per profile lookup when pool is configured."""
+    return _proxy_config()
+
+
+def open_fresh_context(
+    playwright: Any,
+    *,
+    headless: bool,
+    load_session: bool = True,
+) -> tuple[Any, Any, Any]:
+    """New isolated context — rotate proxy + cookies per lookup."""
+    return open_browser_context(
+        playwright,
+        headless=headless,
+        load_session=load_session,
+        use_persistent_profile=False,
+    )
+
+
 def persist_session(context: Any) -> None:
     path = session_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)

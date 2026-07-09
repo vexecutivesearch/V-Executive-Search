@@ -115,7 +115,12 @@ def run_dashboard_sync(*, limit: int = 10, interactive_login: bool = False) -> i
                 continue
 
             logger.info("Dashboard lookup: %s", contact.get("name"))
-            result = client.enrich_linkedin(linkedin)
+            result = client.enrich_linkedin(
+                linkedin,
+                contact_name=contact.get("name") or contact.get("contactName"),
+                expected_title=contact.get("title"),
+                expected_company=contact.get("companyName") or contact.get("company"),
+            )
             if not result:
                 continue
 

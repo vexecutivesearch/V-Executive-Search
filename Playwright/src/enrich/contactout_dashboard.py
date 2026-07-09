@@ -13,9 +13,13 @@ from urllib.parse import quote
 from src.contact_phones import extract_contactout_phones
 from src.enrich.contactout_api import is_personal_email_str
 from src.enrich.contactout_base import ContactOutResult, normalize_linkedin
-from src.human_behavior import between_profile_pause, human_pause
+from src.credit_guardian import credits_depleted, verify_credit_balance
+from src.human_behavior import between_profile_pause, human_pause, pre_reveal_hesitation, simulate_reading
+from src.linkedin_match import linkedin_urls_match, score_profile_card
+from src.navigation import goto_with_retry
 from src.project_root import project_root
 from src.rate_limit import is_rate_limited, mark_rate_limited, page_shows_rate_limit
+from src.resend_notify import notify_credits_depleted
 from src.stealth_browser import get_sync_playwright, open_browser_context, persist_session
 
 logger = logging.getLogger(__name__)
@@ -503,17 +507,8 @@ class ContactOutDashboardClient:
             credits_used=1,
         )
 
-    def _search_profile(self, page: Any, linkedin_url: str) -> None:
-        slug = _linkedin_slug(linkedin_url)
-        queries = [
-            linkedin_url,
-            normalize_linkedin(linkedin_url),
-            slug,
-        ]
-
-        page.goto(CONTACTOUT_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
-        human_pause(page, label="search-load")
-
+    def _ensure_dashboard_ready(self, page: Any) -> Any:
+        goto_with_retry(page, CONTACTOUT_SEARCH_URL)
         if self._needs_login(page):
             from src.enrich.contactout_session import ensure_session_healthy
 
@@ -524,22 +519,179 @@ class ContactOutDashboardClient:
                 )
             self._reset_browser()
             page = self._ensure_browser()
-            page.goto(CONTACTOUT_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
-            page.wait_for_timeout(1200)
+            goto_with_retry(page, CONTACTOUT_SEARCH_URL)
             if self._needs_login(page):
-                raise RuntimeError("ContactOut login still required after ensure_contactout_session")
+                raise RuntimeError("ContactOut login still required after ensure_session_healthy")
+        return page
+
+    def _preflight_credits(self, page: Any) -> bool:
+        import os
+
+        assume = int(os.environ.get("CONTACTOUT_ASSUME_CREDITS", "999"))
+        balance = verify_credit_balance(page, assume_available=assume)
+        if balance <= 0:
+            logger.error("[Credit Guardian] Credits depleted — aborting before reveal")
+            notify_credits_depleted(balance=balance)
+            return False
+        return True
+
+    def _fill_name_search(self, page: Any, contact_name: str) -> bool:
+        """Search by person name (Apollo) — NOT LinkedIn URL in the name field."""
+        candidates: list[Any] = []
+        try:
+            candidates.append(page.get_by_label("Name", exact=False))
+        except Exception:
+            pass
+        for selector in (
+            'input[name="name"]',
+            'input[placeholder*="Name" i]',
+            'input[aria-label*="Name" i]',
+        ):
+            candidates.append(page.locator(selector).first)
+
+        for locator in candidates:
+            try:
+                if locator.count() == 0:
+                    continue
+                locator.click(timeout=2000)
+                locator.fill("")
+                human_pause(page, label="pre-type-name")
+                locator.fill(contact_name, timeout=3000)
+                locator.press("Enter")
+                human_pause(page, label="name-search-submit")
+                simulate_reading(page)
+                return True
+            except Exception:
+                continue
+        return False
+
+    def _profile_card_locators(self, page: Any) -> list[Any]:
+        selectors = (
+            "table tbody tr",
+            '[data-testid*="profile"]',
+            ".profile-card",
+            ".search-result-card",
+            '[class*="profile"]',
+        )
+        cards: list[Any] = []
+        for selector in selectors:
+            loc = page.locator(selector)
+            count = min(loc.count(), 12)
+            for i in range(count):
+                cards.append(loc.nth(i))
+            if cards:
+                break
+        return cards
+
+    def _reveal_on_card(self, card: Any, page: Any) -> bool:
+        """Scoped reveal — only buttons inside the verified card."""
+        patterns = (
+            re.compile(r"reveal", re.I),
+            re.compile(r"show\s*email", re.I),
+            re.compile(r"show\s*phone", re.I),
+            re.compile(r"view\s*(email|phone|contact)", re.I),
+            re.compile(r"get\s*(email|phone|contact)", re.I),
+        )
+        for pattern in patterns:
+            btn = card.get_by_role("button", name=pattern)
+            if btn.count() == 0:
+                btn = card.locator("button").filter(has_text=pattern)
+            count = min(btn.count(), 4)
+            for i in range(count):
+                try:
+                    if not btn.nth(i).is_visible():
+                        continue
+                    pre_reveal_hesitation(page)
+                    btn.nth(i).click(timeout=2500)
+                    human_pause(page, label="post-reveal-click")
+                    return True
+                except Exception:
+                    continue
+        return False
+
+    def _search_verify_and_reveal(
+        self,
+        page: Any,
+        *,
+        contact_name: str,
+        expected_linkedin_url: str,
+        expected_title: str | None = None,
+        expected_company: str | None = None,
+    ) -> bool:
+        """
+        Apollo flow: search name → verify LinkedIn on card → reveal only on match.
+        Uses card-scoped locators so we never reveal the wrong person.
+        """
+        page = self._ensure_dashboard_ready(page)
+        if not self._preflight_credits(page):
+            return False
+
+        if not self._fill_name_search(page, contact_name):
+            logger.warning("Name search field not found — falling back to query URL")
+            goto_with_retry(
+                page,
+                f"{CONTACTOUT_SEARCH_URL}?q={quote(contact_name)}",
+            )
+            simulate_reading(page)
+
+        cards = self._profile_card_locators(page)
+        if not cards:
+            logger.info("No profile cards for %s", contact_name)
+            return False
+
+        best_card = None
+        best_score = -1
+        for card in cards:
+            try:
+                linkedin = card.locator('a[href*="linkedin.com"]')
+                if linkedin.count() == 0:
+                    continue
+                href = linkedin.first.get_attribute("href")
+                if not linkedin_urls_match(href, expected_linkedin_url):
+                    continue
+                text = card.inner_text(timeout=2000)
+                score = score_profile_card(
+                    text,
+                    expected_title=expected_title,
+                    expected_company=expected_company,
+                )
+                if score > best_score:
+                    best_score = score
+                    best_card = card
+            except Exception:
+                continue
+
+        if not best_card:
+            logger.info(
+                "No LinkedIn match for %s (expected %s)",
+                contact_name,
+                _linkedin_slug(expected_linkedin_url),
+            )
+            return False
+
+        try:
+            best_card.click(timeout=2500)
+            human_pause(page, label="open-verified-card")
+        except Exception:
+            pass
+
+        if not self._reveal_on_card(best_card, page):
+            self._click_reveal_buttons(page)
+        return True
+
+    def _search_profile(self, page: Any, linkedin_url: str) -> None:
+        """Legacy: search by LinkedIn URL slug (prefer enrich_contact with Apollo name)."""
+        slug = _linkedin_slug(linkedin_url)
+        page = self._ensure_dashboard_ready(page)
 
         search_selectors = [
             'input[placeholder*="Search" i]',
             'input[type="search"]',
             'input[name="search"]',
-            'input[aria-label*="search" i]',
-            "textarea",
-            'input[type="text"]',
         ]
 
         filled = False
-        for query in queries:
+        for query in (linkedin_url, normalize_linkedin(linkedin_url), slug):
             for selector in search_selectors:
                 locator = page.locator(selector).first
                 try:
@@ -558,19 +710,11 @@ class ContactOutDashboardClient:
                 break
 
         if not filled:
-            page.goto(
-                f"{CONTACTOUT_SEARCH_URL}?q={quote(linkedin_url)}",
-                wait_until="domcontentloaded",
-                timeout=45000,
-            )
-            human_pause(page, label="search-fallback")
+            goto_with_retry(page, f"{CONTACTOUT_SEARCH_URL}?q={quote(linkedin_url)}")
 
-        # Open the best-matching result card if present.
         for selector in (
             f'a[href*="{slug}"]',
-            f'text="{slug}"',
             '[data-testid*="profile"]',
-            ".profile-card",
             "table tbody tr",
         ):
             locator = page.locator(selector).first
@@ -582,7 +726,69 @@ class ContactOutDashboardClient:
             except Exception:
                 continue
 
-    def enrich_linkedin(self, linkedin_url: str) -> ContactOutResult | None:
+    def enrich_contact(
+        self,
+        *,
+        contact_name: str,
+        expected_linkedin_url: str,
+        expected_title: str | None = None,
+        expected_company: str | None = None,
+    ) -> ContactOutResult | None:
+        """Search by name, verify Apollo LinkedIn URL, then scoped reveal."""
+        if not self.is_configured:
+            return None
+        if is_rate_limited():
+            logger.warning("ContactOut dashboard skipped — rate limited")
+            return None
+        if self._lookups > 0:
+            between_profile_pause()
+
+        page = self._ensure_browser()
+        try:
+            revealed = self._search_verify_and_reveal(
+                page,
+                contact_name=contact_name,
+                expected_linkedin_url=expected_linkedin_url,
+                expected_title=expected_title,
+                expected_company=expected_company,
+            )
+            if not revealed:
+                return ContactOutResult()
+            if page_shows_rate_limit(page):
+                mark_rate_limited()
+                return None
+            human_pause(page, label="post-extract")
+            result = self._extract_contacts(page)
+            self._lookups += 1
+            self.credits_used += result.credits_used
+            if result.personal_email or result.phones or result.work_emails:
+                logger.info(
+                    "ContactOut verified match: %s — %s",
+                    contact_name,
+                    result.personal_email,
+                )
+                return result
+            return ContactOutResult()
+        except Exception as exc:
+            logger.warning("ContactOut enrich_contact failed for %s: %s", contact_name, exc)
+            return None
+
+    def enrich_linkedin(
+        self,
+        linkedin_url: str,
+        *,
+        contact_name: str | None = None,
+        expected_title: str | None = None,
+        expected_company: str | None = None,
+    ) -> ContactOutResult | None:
+        if contact_name:
+            return self.enrich_contact(
+                contact_name=contact_name,
+                expected_linkedin_url=linkedin_url,
+                expected_title=expected_title,
+                expected_company=expected_company,
+            )
+
         if not self.is_configured:
             logger.warning(
                 "ContactOut dashboard not configured — set CONTACTOUT_MODE=dashboard and run contactout_login.py"
@@ -600,6 +806,8 @@ class ContactOutDashboardClient:
         url = normalize_linkedin(linkedin_url)
 
         try:
+            if not self._preflight_credits(page):
+                return None
             self._search_profile(page, url)
             if page_shows_rate_limit(page):
                 mark_rate_limited()
