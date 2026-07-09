@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { enrichCompanyContacts } from "@/lib/apollo-enrich";
 import { resolveCompanyDomain } from "@/lib/domain-resolver";
+import { syncContactPhoneFields } from "@/lib/contact-phones";
 import { refreshCompanyContactsFromContactOut } from "@/lib/refresh-company-contacts";
 import { db } from "@/lib/db";
 import { companies, contacts, jobListings } from "@/lib/db/schema";
@@ -125,12 +126,38 @@ export async function POST(
     personalUpdated = refresh.updated;
   }
 
+  // Backfill phones json from legacy phone fields (e.g. Apollo webhook async delivery).
+  const allContacts = await db
+    .select()
+    .from(contacts)
+    .where(eq(contacts.companyId, id));
+  let phonesBackfilled = 0;
+  for (const contact of allContacts) {
+    const synced = syncContactPhoneFields(contact);
+    if (
+      synced.phones.length > 0 &&
+      JSON.stringify(synced.phones) !== JSON.stringify(contact.phones ?? [])
+    ) {
+      await db
+        .update(contacts)
+        .set({
+          phones: synced.phones,
+          phone: synced.phone ?? contact.phone,
+          personalPhone: synced.personalPhone ?? contact.personalPhone,
+          companyPhone: synced.companyPhone ?? contact.companyPhone,
+        })
+        .where(eq(contacts.id, contact.id));
+      phonesBackfilled += 1;
+    }
+  }
+
   const totalContacts = existingContacts.length + contactsAdded;
 
   return NextResponse.json({
     ok: true,
     contacts_added: contactsAdded,
     personal_updated: personalUpdated,
+    phones_backfilled: phonesBackfilled,
     total_contacts: totalContacts,
     domain,
     message:

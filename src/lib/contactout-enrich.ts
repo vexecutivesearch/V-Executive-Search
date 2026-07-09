@@ -118,14 +118,7 @@ export async function enrichFromContactOut(
               headers,
               body: JSON.stringify(params),
             });
-      if (resp.status === 404) {
-        return {
-          personalEmail: null,
-          personalPhone: null,
-          workEmails: [],
-          phones: [],
-        };
-      }
+      if (resp.status === 404) continue;
       if (!resp.ok) continue;
       const data = (await resp.json()) as Record<string, unknown>;
       const parsed = parseContactOutPayload(data);

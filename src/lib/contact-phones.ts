@@ -139,24 +139,53 @@ export function pickPrimaryFromPhones(phones: SourcedPhone[]): {
   };
 }
 
+/** Normalize legacy phone fields into a sourced phones list. */
+export function syncContactPhoneFields(contact: {
+  phones?: SourcedPhone[] | null;
+  phone?: string | null;
+  personalPhone?: string | null;
+  companyPhone?: string | null;
+  sourceProvider?: string | null;
+}): {
+  phones: SourcedPhone[];
+  phone: string | null;
+  personalPhone: string | null;
+  companyPhone: string | null;
+} {
+  const phones = contactPhonesForDisplay(contact);
+  const primary = pickPrimaryFromPhones(phones);
+  return {
+    phones,
+    phone: primary.phone,
+    personalPhone: primary.personalPhone,
+    companyPhone: primary.companyPhone,
+  };
+}
+
 /** Hide shared company lines from primary dial when repeated across contacts. */
 export function applySharedLineFilter<
   T extends { phones?: SourcedPhone[] | null } & {
     phone?: string | null;
     personalPhone?: string | null;
     companyPhone?: string | null;
+    sourceProvider?: string | null;
   },
 >(contacts: T[]): T[] {
+  const normalized = contacts.map((c) => ({
+    ...c,
+    phones: contactPhonesForDisplay(c),
+  }));
+
   const counts = new Map<string, number>();
-  for (const c of contacts) {
-    for (const p of c.phones ?? []) {
+  for (const c of normalized) {
+    for (const p of c.phones) {
       const key = phoneDigits(p.number);
       if (key.length >= 10) counts.set(key, (counts.get(key) ?? 0) + 1);
     }
   }
 
-  return contacts.map((c) => {
-    const phones = (c.phones ?? []).map((p) => {
+  return normalized.map((c) => {
+    const phones = c.phones.map((p) => {
       const key = phoneDigits(p.number);
       if (p.kind === "company" || (counts.get(key) ?? 0) >= 2) {
         return { ...p, kind: "company" as PhoneKind };
@@ -188,9 +217,6 @@ export function contactPhonesForDisplay(contact: {
     return contact.phones;
   }
   const legacy: SourcedPhone[] = [];
-  const source: PhoneSource = contact.sourceProvider?.includes("contactout")
-    ? "contactout"
-    : "apollo";
   if (contact.personalPhone) {
     legacy.push({
       number: contact.personalPhone,
@@ -201,7 +227,7 @@ export function contactPhonesForDisplay(contact: {
   if (contact.phone && contact.phone !== contact.personalPhone) {
     legacy.push({
       number: contact.phone,
-      source,
+      source: "apollo",
       kind: "mobile",
     });
   }

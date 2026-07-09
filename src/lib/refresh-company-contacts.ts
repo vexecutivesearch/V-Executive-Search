@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { enrichFromContactOut } from "@/lib/contactout-enrich";
 import {
   mergeSourcedPhones,
-  pickPrimaryFromPhones,
+  syncContactPhoneFields,
   contactPhonesForDisplay,
 } from "@/lib/contact-phones";
 import { isPersonalEmail } from "@/lib/phone-utils";
@@ -35,13 +35,15 @@ export async function refreshCompanyContactsFromContactOut(
       contactPhonesForDisplay(contact),
       co.phones,
     );
-    const primary = pickPrimaryFromPhones(phones);
+    const synced = syncContactPhoneFields({ ...contact, phones });
     const primaryEmail = personalEmail ?? contact.email;
 
     const changed =
       personalEmail !== contact.personalEmail ||
       primaryEmail !== contact.email ||
-      JSON.stringify(phones) !== JSON.stringify(contact.phones ?? []);
+      JSON.stringify(synced.phones) !== JSON.stringify(contact.phones ?? []) ||
+      synced.phone !== contact.phone ||
+      synced.personalPhone !== contact.personalPhone;
 
     if (!changed) continue;
 
@@ -50,10 +52,10 @@ export async function refreshCompanyContactsFromContactOut(
       .set({
         workEmail: workEmail ?? co.workEmails[0] ?? null,
         personalEmail,
-        phones,
-        personalPhone: primary.personalPhone,
-        phone: primary.phone,
-        companyPhone: primary.companyPhone,
+        phones: synced.phones,
+        personalPhone: synced.personalPhone,
+        phone: synced.phone,
+        companyPhone: synced.companyPhone,
         email: primaryEmail,
         sourceProvider: "apollo+contactout",
       })

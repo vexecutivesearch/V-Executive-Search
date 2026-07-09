@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   extractApolloPhones,
   mergeSourcedPhones,
-  pickPrimaryFromPhones,
+  syncContactPhoneFields,
   contactPhonesForDisplay,
 } from "@/lib/contact-phones";
 import { db } from "@/lib/db";
@@ -59,15 +59,15 @@ export async function POST(request: NextRequest) {
       contactPhonesForDisplay(existing),
       apolloPhones,
     );
-    const primary = pickPrimaryFromPhones(phones);
+    const synced = syncContactPhoneFields({ ...existing, phones });
 
     await db
       .update(contacts)
       .set({
-        phones,
-        phone: primary.phone,
-        personalPhone: primary.personalPhone,
-        companyPhone: primary.companyPhone,
+        phones: synced.phones,
+        phone: synced.phone,
+        personalPhone: synced.personalPhone,
+        companyPhone: synced.companyPhone,
       })
       .where(eq(contacts.apolloId, apolloId));
 

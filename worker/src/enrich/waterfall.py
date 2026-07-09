@@ -100,8 +100,8 @@ class WaterfallProvider:
         contacts_per_company: int,
         enrich_phone: bool,
     ) -> EnrichedCompany:
-        # ContactOut supplies personal mobiles — skip expensive Apollo phone credits.
-        apollo_phone = enrich_phone and not self._contactout.is_configured
+        # ContactOut adds personal data; still request Apollo phones when enabled.
+        apollo_phone = enrich_phone
 
         result = self._apollo.enrich_company(
             company,

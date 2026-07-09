@@ -189,7 +189,7 @@ export async function enrichCompanyContacts(options: {
   } = options;
 
   const useContactOut = Boolean(contactOutApiKey);
-  const apolloPhone = ENRICH_PHONE && !useContactOut;
+  const apolloPhone = ENRICH_PHONE;
 
   const parsedLocations = collectJobLocations(jobLocations);
   const jobLocationLabel = parsedLocations[0]?.label ?? null;
