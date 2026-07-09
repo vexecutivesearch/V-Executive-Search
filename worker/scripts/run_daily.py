@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import smtplib
 import sys
 from email.mime.text import MIMEText
@@ -81,6 +82,7 @@ def main() -> int:
         result = run_pipeline(
             dry_run=args.dry_run,
             skip_crm=args.skip_crm,
+            skip_email=True,
             use_waterfall=args.waterfall,
             config_path=args.config,
             limit=args.limit,
@@ -113,6 +115,28 @@ def main() -> int:
                     logger.info("iMessage checks completed: %d contact(s)", n)
         except Exception as exc:
             logger.warning("iMessage check pass failed (non-fatal): %s", exc)
+
+        try:
+            from src.config_loader import load_config, get_notification_email
+            from src.email_report import send_daily_report_for_pipeline
+
+            config = load_config(args.config)
+            notify = get_notification_email(config) or os.environ.get("ALERT_EMAIL")
+            geo_label = (config.get("settings") or {}).get("geo_label", "Unknown")
+            if notify:
+                send_daily_report_for_pipeline(
+                    to_email=notify,
+                    pipeline_rows=result.rows,
+                    result_summary={
+                        "run_date": str(result.run_date),
+                        "listings_scraped": result.listings_scraped,
+                        "companies_enriched": result.companies_enriched,
+                        "credits_used": result.credits_used,
+                    },
+                    geo_label=geo_label,
+                )
+        except Exception as exc:
+            logger.warning("Daily email failed (non-fatal): %s", exc)
 
     logger.info("Log written to %s", log_path)
     return 0

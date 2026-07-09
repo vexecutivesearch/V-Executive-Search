@@ -134,3 +134,29 @@ def pick_primary_from_phones(phones: list[dict[str, str]]) -> dict[str, str | No
         "personal_phone": personal,
         "company_phone": (company_line or {}).get("number"),
     }
+
+
+def contact_phones_for_display(contact: dict[str, Any]) -> list[dict[str, str]]:
+    """Build display list from phones json or legacy single fields."""
+    from src.phone_utils import parse_phone_value
+
+    phones = contact.get("phones") or []
+    if phones:
+        return dedupe_sourced_phones(phones)
+
+    legacy: list[dict[str, str]] = []
+    personal_phone = parse_phone_value(contact.get("personal_phone"))
+    phone = parse_phone_value(contact.get("phone"))
+    company_phone = parse_phone_value(contact.get("company_phone"))
+
+    if personal_phone:
+        legacy.append(
+            {"number": personal_phone, "source": "contactout", "kind": "mobile"}
+        )
+    if phone and phone != personal_phone:
+        legacy.append({"number": phone, "source": "apollo", "kind": "mobile"})
+    if company_phone:
+        legacy.append(
+            {"number": company_phone, "source": "apollo", "kind": "company"}
+        )
+    return dedupe_sourced_phones(legacy)

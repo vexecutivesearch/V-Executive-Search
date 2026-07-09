@@ -17,7 +17,9 @@ from src.enrich.waterfall import WaterfallProvider
 from src.models import EnrichedCompany, PipelineResult
 from src.scrape import scrape_all
 from src.timezone import business_today
-from src.email_report import send_daily_report
+from src.contact_phones import contact_phones_for_display
+from src.email_report import send_daily_report_for_pipeline
+from src.phone_utils import is_personal_email
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,25 @@ def _rows_from_enriched(enriched: list[EnrichedCompany]) -> list[dict[str, Any]]
             continue
 
         for contact in item.contacts:
+            personal_email = contact.personal_email
+            work_email = contact.work_email
+            if not personal_email and contact.email and is_personal_email(contact.email):
+                personal_email = contact.email
+            if not work_email and contact.email and not is_personal_email(contact.email):
+                work_email = contact.email
+            if work_email and personal_email and work_email == personal_email:
+                work_email = None
+
+            phones = contact_phones_for_display(
+                {
+                    "phones": contact.phones,
+                    "phone": contact.phone,
+                    "personal_phone": contact.personal_phone,
+                    "company_phone": contact.company_phone,
+                    "source_provider": contact.source_provider,
+                }
+            )
+
             rows.append({
                 "company": company.name,
                 "domain": company.domain or "",
@@ -56,7 +77,13 @@ def _rows_from_enriched(enriched: list[EnrichedCompany]) -> list[dict[str, Any]]
                 "contact_name": contact.name,
                 "title": contact.title,
                 "email": contact.email or "",
+                "work_email": work_email or "",
+                "personal_email": personal_email or "",
                 "phone": contact.phone or "",
+                "personal_phone": contact.personal_phone or "",
+                "company_phone": contact.company_phone or "",
+                "phones": phones,
+                "imessage_capable": None,
                 "linkedin_url": contact.linkedin_url or "",
                 "source_provider": contact.source_provider,
                 "job_title": primary_listing.job_title if primary_listing else "",
@@ -145,6 +172,7 @@ def run_pipeline(
     *,
     dry_run: bool = False,
     skip_crm: bool = False,
+    skip_email: bool = False,
     use_waterfall: bool = False,
     config_path: Path | None = None,
     limit: int | None = None,
@@ -268,17 +296,17 @@ def run_pipeline(
 
     notify = get_notification_email(config) or os.environ.get("ALERT_EMAIL")
     geo_label = (config.get("settings") or {}).get("geo_label", "Unknown")
-    if notify and not dry_run:
-        send_daily_report(
-            notify,
-            result.rows,
-            {
+    if notify and not dry_run and not skip_email:
+        send_daily_report_for_pipeline(
+            to_email=notify,
+            pipeline_rows=result.rows,
+            result_summary={
                 "run_date": str(run_date),
                 "listings_scraped": result.listings_scraped,
                 "companies_enriched": result.companies_enriched,
                 "credits_used": result.credits_used,
             },
-            geo_label,
+            geo_label=geo_label,
         )
 
     logger.info(

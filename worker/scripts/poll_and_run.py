@@ -46,9 +46,32 @@ def main() -> int:
     logging.info("Run requested from admin — starting pipeline")
     exit_code = 0
     try:
-        result = run_pipeline()
+        result = run_pipeline(skip_email=True)
         if result.errors and result.listings_scraped == 0:
             exit_code = 1
+        elif not result.errors or result.listings_scraped > 0:
+            try:
+                import os
+                from src.config_loader import load_config, get_notification_email
+                from src.email_report import send_daily_report_for_pipeline
+
+                config = load_config()
+                notify = get_notification_email(config) or os.environ.get("ALERT_EMAIL")
+                geo_label = (config.get("settings") or {}).get("geo_label", "Unknown")
+                if notify:
+                    send_daily_report_for_pipeline(
+                        to_email=notify,
+                        pipeline_rows=result.rows,
+                        result_summary={
+                            "run_date": str(result.run_date),
+                            "listings_scraped": result.listings_scraped,
+                            "companies_enriched": result.companies_enriched,
+                            "credits_used": result.credits_used,
+                        },
+                        geo_label=geo_label,
+                    )
+            except Exception as exc:
+                logging.warning("Daily email failed (non-fatal): %s", exc)
     except Exception:
         logging.exception("Pipeline crashed during admin-triggered run")
         exit_code = 1
