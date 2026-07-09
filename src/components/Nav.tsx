@@ -4,6 +4,7 @@ const NAV = [
   { href: "/today", label: "Today's List" },
   { href: "/companies", label: "Companies" },
   { href: "/runs", label: "Runs" },
+  { href: "/admin", label: "Admin" },
 ];
 
 export function Nav() {

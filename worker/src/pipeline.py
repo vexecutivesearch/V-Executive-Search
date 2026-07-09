@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import csv
 import logging
+import os
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from src.config_loader import load_config
+from src.config_loader import load_config, get_notification_email
+from src.crm_config import post_pipeline_status
 from src.crm_client import CRMClient
 from src.dedupe import collapse_to_companies, filter_existing_companies
 from src.domain_resolver import resolve_domains
@@ -15,6 +17,7 @@ from src.enrich.waterfall import WaterfallProvider
 from src.models import EnrichedCompany, PipelineResult
 from src.scrape import scrape_all
 from src.timezone import business_today
+from src.email_report import send_daily_report
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +249,23 @@ def run_pipeline(
         payload = _build_ingest_payload(enriched, result)
         if not crm.ingest_batch(payload):
             result.errors.append("CRM ingest failed")
+        else:
+            post_pipeline_status("mark_run_complete")
+
+    notify = get_notification_email(config) or os.environ.get("ALERT_EMAIL")
+    geo_label = (config.get("settings") or {}).get("geo_label", "Unknown")
+    if notify and not dry_run:
+        send_daily_report(
+            notify,
+            result.rows,
+            {
+                "run_date": str(run_date),
+                "listings_scraped": result.listings_scraped,
+                "companies_enriched": result.companies_enriched,
+                "credits_used": result.credits_used,
+            },
+            geo_label,
+        )
 
     logger.info(
         "Pipeline complete — listings=%d companies=%d enriched=%d contacts=%d credits=%d errors=%d",

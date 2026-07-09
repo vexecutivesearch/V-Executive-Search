@@ -1,4 +1,5 @@
 import {
+  boolean,
   date,
   integer,
   pgEnum,
@@ -20,6 +21,41 @@ export const domainConfidenceEnum = pgEnum("domain_confidence", [
   "high",
   "low",
 ]);
+
+export const geographicScopeEnum = pgEnum("geographic_scope", [
+  "national",
+  "state",
+  "city",
+  "county",
+]);
+
+export const pipelineSettings = pgTable("pipeline_settings", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  geographicScope: geographicScopeEnum("geographic_scope")
+    .default("state")
+    .notNull(),
+  focusState: text("focus_state").default("Florida"),
+  focusCity: text("focus_city"),
+  focusCounty: text("focus_county"),
+  notificationEmail: text("notification_email")
+    .default("hello@proventheory.co")
+    .notNull(),
+  runRequestedAt: timestamp("run_requested_at"),
+  lastRunAt: timestamp("last_run_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const searchProfiles = pgTable("search_profiles", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  searchTerm: text("search_term").notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  isRemote: boolean("is_remote"),
+  resultsWanted: integer("results_wanted").default(50),
+  hoursOld: integer("hours_old").default(24),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
 
 export const dailyRuns = pgTable("daily_runs", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -81,4 +117,7 @@ export type Company = typeof companies.$inferSelect;
 export type Contact = typeof contacts.$inferSelect;
 export type JobListing = typeof jobListings.$inferSelect;
 export type DailyRun = typeof dailyRuns.$inferSelect;
+export type PipelineSettings = typeof pipelineSettings.$inferSelect;
+export type SearchProfile = typeof searchProfiles.$inferSelect;
 export type CompanyStatus = (typeof companyStatusEnum.enumValues)[number];
+export type GeographicScope = (typeof geographicScopeEnum.enumValues)[number];

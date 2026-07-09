@@ -1,31 +1,20 @@
-# Saved job search criteria — add one entry per search you run daily
+# Saved job search criteria — FALLBACK when CRM config is unavailable
+# Primary config is managed in Admin: https://your-app.vercel.app/admin
+
 searches:
-  - name: "HR Director — Remote US"
+  - name: "HR Director — Florida"
     search_term: "HR Director"
-    location: "United States"
-    google_search_term: "HR Director jobs remote United States since yesterday"
+    location: "Florida"
+    google_search_term: "HR Director jobs Florida since yesterday"
     country_indeed: "USA"
-    is_remote: true
     results_wanted: 50
     hours_old: 24
 
-  - name: "VP People — NYC"
-    search_term: "VP People"
-    location: "New York, NY"
-    google_search_term: "VP People jobs New York NY since yesterday"
-    country_indeed: "USA"
-    is_remote: false
-    results_wanted: 50
-    hours_old: 24
-
-# Job boards to scrape (linkedin is best-effort — may rate-limit)
 boards:
   - indeed
   - google
   - zip_recruiter
-  # - linkedin
 
-# Decision-maker titles to find at each company
 target_titles:
   - CEO
   - Founder
@@ -45,7 +34,6 @@ target_seniorities:
   - director
   - manager
 
-# Enrichment settings
 enrichment:
   contacts_per_company: 2
   enrich_phone: true
