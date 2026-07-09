@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   companies,
@@ -81,6 +81,15 @@ export async function getMarketJobListings(searchName?: string) {
         .innerJoin(companies, eq(jobListings.companyId, companies.id))
         .orderBy(desc(jobListings.postedAt), desc(jobListings.createdAt));
 
+  const contactCounts = await db
+    .select({ companyId: contacts.companyId, count: count() })
+    .from(contacts)
+    .groupBy(contacts.companyId);
+
+  const contactCountMap = new Map(
+    contactCounts.map((row) => [row.companyId, Number(row.count)]),
+  );
+
   return rows.map(({ listing, company }) => ({
     id: listing.id,
     title: listing.title,
@@ -92,6 +101,7 @@ export async function getMarketJobListings(searchName?: string) {
     companyId: company.id,
     companyName: company.name,
     companyDomain: company.domain,
+    contactCount: contactCountMap.get(company.id) ?? 0,
   }));
 }
 

@@ -2,6 +2,7 @@ import { Contact, JobListing } from "@/lib/db/schema";
 import { CompanyStatus } from "@/lib/db/schema";
 import Link from "next/link";
 import { StatusBadge, StatusSelect } from "./StatusBadge";
+import { EnrichButton } from "./EnrichButton";
 
 export interface CompanyCardData {
   id: string;
@@ -77,6 +78,10 @@ export function CompanyCard({ company }: { company: CompanyCardData }) {
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          <EnrichButton
+            companyId={company.id}
+            contactCount={company.contacts.length}
+          />
           <StatusBadge status={company.status} />
           <StatusSelect companyId={company.id} currentStatus={company.status} />
         </div>
