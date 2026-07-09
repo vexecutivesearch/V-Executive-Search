@@ -7,10 +7,12 @@ out/
 .env
 .env.local
 .env*.local
+!.env.example
 
 # Build
 dist/
 build/
+next-env.d.ts
 
 # Python worker
 worker/.venv/
@@ -19,7 +21,13 @@ worker/output/
 worker/logs/
 worker/*.egg-info/
 
+# Vercel
+.vercel
+
 # IDE
 .DS_Store
 .idea/
 .vscode/
+
+# Drizzle
+drizzle/
