@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install launchd agents for daily pipeline (6 AM) and admin poll (every 5 min).
+# Install launchd agents for daily pipeline (6 AM + 6 PM) and admin poll (every 5 min).
 set -euo pipefail
 
 WORKER_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -68,12 +68,20 @@ EOF
         <string>${script}</string>
     </array>
     <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>6</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>6</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>18</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+    </array>
     <key>StandardOutPath</key>
     <string>${out_log}</string>
     <key>StandardErrorPath</key>
@@ -114,7 +122,7 @@ done
 
 echo ""
 echo "Done. Scheduled:"
-echo "  • Daily pipeline at 6:00 AM local time ($DAILY_LABEL)"
+echo "  • Daily pipeline at 6:00 AM and 6:00 PM local time ($DAILY_LABEL)"
 echo "  • Admin 'Run now' poll every 5 minutes ($POLL_LABEL)"
 echo ""
 echo "Verify: launchctl list | grep vexecsearch"

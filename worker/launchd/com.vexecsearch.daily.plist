@@ -10,12 +10,20 @@
         <string>/Users/miguellozano/Documents/V Executive Search/worker/scripts/run_daily.py</string>
     </array>
     <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>6</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>6</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>18</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+    </array>
     <key>StandardOutPath</key>
     <string>/Users/miguellozano/Documents/V Executive Search/worker/logs/launchd_stdout.log</string>
     <key>StandardErrorPath</key>

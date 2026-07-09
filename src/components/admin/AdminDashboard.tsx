@@ -251,7 +251,7 @@ export function AdminDashboard({
       <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Job title searches</h2>
         <p className="text-sm text-gray-500">
-          Active searches run in your selected geographic area each morning.
+          Active searches run in your selected geographic area at 6 AM and 6 PM daily.
         </p>
         <ul className="space-y-2">
           {profiles.map((p) => (

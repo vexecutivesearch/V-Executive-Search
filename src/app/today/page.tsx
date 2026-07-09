@@ -43,7 +43,7 @@ export default async function TodayPage() {
         <div className="text-center py-16 text-gray-400">
           <p className="text-lg">No new companies today</p>
           <p className="text-sm mt-2">
-            The morning pipeline will populate this list automatically.
+            The scheduled pipeline (6 AM & 6 PM) will populate this list automatically.
           </p>
         </div>
       ) : (

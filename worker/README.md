@@ -37,7 +37,7 @@ This installs two launchd agents:
 
 | Agent | Schedule | Purpose |
 |-------|----------|---------|
-| `com.vexecsearch.daily` | 6:00 AM daily | Full scrape → enrich → CRM ingest → email |
+| `com.vexecsearch.daily` | 6:00 AM & 6:00 PM daily | Full scrape → enrich → CRM ingest → email |
 | `com.vexecsearch.poll` | Every 5 minutes | Picks up **Run now** from admin on your phone |
 
 Verify:
