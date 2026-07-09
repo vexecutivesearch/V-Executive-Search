@@ -11,6 +11,7 @@ import {
 import { isPersonalEmail } from "@/lib/phone-utils";
 import { businessDayFirstSeenDates, businessListDate } from "@/lib/timezone";
 import { getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
+import { parseJobLocation } from "@/lib/location-match";
 
 export type DailyReportPhone = SourcedPhone;
 
@@ -23,6 +24,7 @@ export type DailyReportRow = {
   phones: DailyReportPhone[];
   imessage_capable: boolean | null;
   job_title: string | null;
+  job_location: string | null;
 };
 
 function resolveEmails(contact: {
@@ -118,6 +120,10 @@ export async function getDailyReportData(): Promise<{
     if (!workEmail && !personalEmail && phones.length === 0) continue;
 
     enrichedCompanyIds.add(row.companyId);
+    const jobLocationLabel =
+      (row.jobLocation && parseJobLocation(row.jobLocation)?.label) ||
+      row.jobLocation ||
+      null;
     rows.push({
       company: row.company,
       contact_name: row.contactName,
@@ -133,6 +139,7 @@ export async function getDailyReportData(): Promise<{
       })),
       imessage_capable: row.imessageCapable,
       job_title: row.jobTitle,
+      job_location: jobLocationLabel,
     });
   }
 

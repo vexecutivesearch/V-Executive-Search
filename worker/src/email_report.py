@@ -60,11 +60,12 @@ def send_daily_report(
           <td style="padding:8px;border:1px solid #ddd;vertical-align:top">{cells["phones"]}</td>
           <td style="padding:8px;border:1px solid #ddd;vertical-align:top">{cells["imessage"]}</td>
           <td style="padding:8px;border:1px solid #ddd;vertical-align:top">{cells["job_title"]}</td>
+          <td style="padding:8px;border:1px solid #ddd;vertical-align:top">{cells["job_location"]}</td>
         </tr>"""
 
     if not html_rows:
         html_rows = (
-            '<tr><td colspan="8" style="padding:12px">No contacts enriched today.</td></tr>'
+            '<tr><td colspan="9" style="padding:12px">No contacts enriched today.</td></tr>'
         )
 
     run_date = html.escape(str(result_summary.get("run_date", "today")))
@@ -90,6 +91,7 @@ def send_daily_report(
             <th style="padding:8px;border:1px solid #ddd;text-align:left">Phones</th>
             <th style="padding:8px;border:1px solid #ddd;text-align:left">iMessage</th>
             <th style="padding:8px;border:1px solid #ddd;text-align:left">Job</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left">Location</th>
           </tr>
         </thead>
         <tbody>{html_rows}</tbody>

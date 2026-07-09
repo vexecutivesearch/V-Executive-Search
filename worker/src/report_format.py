@@ -142,6 +142,18 @@ def has_contact_data(row: dict[str, Any]) -> bool:
     return bool(work or personal or phones or legacy_phone)
 
 
+def _format_job_location(row: dict[str, Any]) -> str:
+    raw = row.get("job_location") or row.get("jobLocation") or ""
+    if not raw:
+        return ""
+    parts = [p.strip() for p in str(raw).split(",") if p.strip()]
+    if parts and parts[-1].upper() in ("US", "USA", "UNITED STATES"):
+        parts.pop()
+    if len(parts) >= 2:
+        return f"{parts[0]}, {parts[1]}"
+    return parts[0] if parts else str(raw)
+
+
 def format_contact_row_cells(row: dict[str, Any]) -> dict[str, str]:
     work_email, personal_email = _resolve_emails(row)
     phones = _phones_for_row(row)
@@ -155,4 +167,5 @@ def format_contact_row_cells(row: dict[str, Any]) -> dict[str, str]:
         "phones": _format_phones_cell(phones, row),
         "imessage": _format_imessage_cell(row, personal_email),
         "job_title": _esc(row.get("job_title") or row.get("jobTitle", "")),
+        "job_location": _esc(_format_job_location(row)),
     }
