@@ -17,7 +17,7 @@ from src.enrich.contactout import get_contactout_client
 from src.enrich.waterfall import WaterfallProvider
 from src.models import EnrichedCompany, PipelineResult
 from src.scrape import scrape_all
-from src.timezone import business_today
+from src.timezone import business_list_date
 from src.contact_phones import contact_phones_for_display
 from src.email_report import send_daily_report_for_pipeline
 from src.phone_utils import is_personal_email
@@ -179,7 +179,7 @@ def run_pipeline(
     limit: int | None = None,
     include_existing: bool = False,
 ) -> PipelineResult:
-    run_date = business_today()
+    run_date = business_list_date()
     config = load_config(config_path)
     enrichment_cfg = config.get("enrichment", {})
 

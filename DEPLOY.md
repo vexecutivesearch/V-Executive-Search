@@ -71,6 +71,8 @@ Use this guide when standing up a **new Vercel environment**, **new Neon databas
 | 4 | Apollo finds decision-makers; ContactOut API adds personal email/mobile |
 | 5 | Ingest to Neon; iMessage tags on worker Mac; daily email via Resend |
 
+**Today's List** in the CRM uses a **6 AM – 6 AM Eastern** business day (not midnight). Results from both the 6 AM and 6 PM runs stay visible until the next 6 AM run.
+
 Default job boards: **Indeed, Google Jobs, LinkedIn, ZipRecruiter**. Glassdoor is available but off by default (mostly duplicates Indeed). Toggle in `/admin` → Job boards.
 
 ---

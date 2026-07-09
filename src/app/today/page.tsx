@@ -1,15 +1,11 @@
 import { CompanyCard } from "@/components/CompanyCard";
 import { getTodayCompanies, getTodayGeoLabel } from "@/lib/queries";
+import { businessListWindowLabel } from "@/lib/timezone";
 
 export const dynamic = "force-dynamic";
 
 export default async function TodayPage() {
-  const today = new Date().toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
+  const listLabel = businessListWindowLabel();
 
   let companies;
   let geoLabel = "your focus area";
@@ -37,7 +33,7 @@ export default async function TodayPage() {
     <div className="max-w-6xl mx-auto px-4 py-8">
       <div className="mb-6">
         <h1 className="text-2xl font-bold">Today&apos;s List</h1>
-        <p className="text-gray-500 dark:text-gray-400 mt-1">{today}</p>
+        <p className="text-gray-500 dark:text-gray-400 mt-1">{listLabel}</p>
         <p className="text-sm text-gray-400 mt-1">
           {companies.length} callable{" "}
           {companies.length === 1 ? "lead" : "leads"} in {geoLabel}
@@ -46,10 +42,10 @@ export default async function TodayPage() {
 
       {companies.length === 0 ? (
         <div className="text-center py-16 text-gray-400">
-          <p className="text-lg">No callable leads today</p>
+          <p className="text-lg">No callable leads for this business day</p>
           <p className="text-sm mt-2">
-            After the 6 AM / 6 PM pipeline runs, enriched companies with phone or
-            email appear here. Browse unenriched jobs on the Jobs page.
+            The list includes companies from the 6 AM and 6 PM pipeline runs and
+            refreshes at 6 AM Eastern. Browse unenriched jobs on the Jobs page.
           </p>
         </div>
       ) : (

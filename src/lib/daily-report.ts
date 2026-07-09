@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { companies, contacts, jobListings } from "@/lib/db/schema";
 import {
@@ -9,7 +9,7 @@ import {
   type SourcedPhone,
 } from "@/lib/contact-phones";
 import { isPersonalEmail } from "@/lib/phone-utils";
-import { businessToday } from "@/lib/timezone";
+import { businessDayFirstSeenDates, businessListDate } from "@/lib/timezone";
 import { getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
 
 export type DailyReportPhone = SourcedPhone;
@@ -49,14 +49,14 @@ export async function getDailyReportData(): Promise<{
   companies_enriched: number;
   rows: DailyReportRow[];
 }> {
-  const today = businessToday();
+  const listDates = businessDayFirstSeenDates();
   const geoSettings = await getGeoFocusSettings();
 
   const allListingsToday = await db
     .select({ listing: jobListings })
     .from(jobListings)
     .innerJoin(companies, eq(jobListings.companyId, companies.id))
-    .where(eq(companies.firstSeen, today));
+    .where(inArray(companies.firstSeen, listDates));
 
   const listings_scraped = allListingsToday.filter((row) =>
     jobLocationInFocus(row.listing.location, geoSettings),
@@ -86,7 +86,7 @@ export async function getDailyReportData(): Promise<{
     .where(
       and(
         eq(companies.status, "new"),
-        eq(companies.firstSeen, today),
+        inArray(companies.firstSeen, listDates),
         or(
           isNotNull(contacts.personalPhone),
           isNotNull(contacts.phone),
@@ -137,7 +137,7 @@ export async function getDailyReportData(): Promise<{
   }
 
   return {
-    run_date: today,
+    run_date: businessListDate(),
     listings_scraped,
     companies_enriched: enrichedCompanyIds.size,
     rows,

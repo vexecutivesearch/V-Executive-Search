@@ -63,12 +63,21 @@ export function jobLocationInFocus(
     return counties.some((county) => loc.includes(normalize(county)));
   }
 
-  // city scope (default)
+  // city scope (default) — match focus cities + shared metro (e.g. Palm Beach County)
   const cities = settings.focusCities?.length
     ? settings.focusCities
     : settings.focusCity
       ? [settings.focusCity]
       : ["West Palm Beach"];
+
+  const locNorm = normalize(location);
+
+  if (
+    cities.some((city) => normalize(city).includes("palm beach")) &&
+    locNorm.includes("palm beach")
+  ) {
+    return true;
+  }
 
   return cities.some((city) => {
     const zone = buildGeoZones({

@@ -50,6 +50,8 @@ write_plist() {
     <dict>
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+        <key>TZ</key>
+        <string>America/New_York</string>
     </dict>
 </dict>
 </plist>
@@ -92,6 +94,8 @@ EOF
     <dict>
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+        <key>TZ</key>
+        <string>America/New_York</string>
     </dict>
 </dict>
 </plist>

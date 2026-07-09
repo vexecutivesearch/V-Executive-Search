@@ -1,10 +1,22 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 BUSINESS_TIMEZONE = ZoneInfo("America/New_York")
 
 
+def _now() -> datetime:
+    return datetime.now(BUSINESS_TIMEZONE)
+
+
 def business_today() -> date:
-    return datetime.now(BUSINESS_TIMEZONE).date()
+    return _now().date()
+
+
+def business_list_date() -> date:
+    """Recruiting list day rolls at 6:00 AM Eastern (not midnight)."""
+    now = _now()
+    if now.hour < 6:
+        return (now - timedelta(days=1)).date()
+    return now.date()

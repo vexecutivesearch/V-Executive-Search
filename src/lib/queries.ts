@@ -1,4 +1,4 @@
-import { and, count, desc, eq, ilike, inArray, isNotNull, or } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, isNotNull, not, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   companies,
@@ -8,15 +8,16 @@ import {
   CompanyStatus,
 } from "@/lib/db/schema";
 import { CompanyCardData } from "@/components/CompanyCard";
-import { businessToday } from "@/lib/timezone";
+import { businessDayFirstSeenDates } from "@/lib/timezone";
 import { applySharedLineFilter } from "@/lib/contact-phones";
 import { focusGeoLabel, getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
 
 export async function getTodayCompanies(): Promise<CompanyCardData[]> {
-  const today = businessToday();
+  const listDates = businessDayFirstSeenDates();
   const geoSettings = await getGeoFocusSettings();
 
-  // Callable leads only: new status, added today, in-focus job, with email or phone.
+  // Callable leads: new status, current business day (6 AM–6 AM ET), in-focus job,
+  // with at least one phone or email (matches daily email report).
   const rows = await db
     .selectDistinct({ id: companies.id })
     .from(companies)
@@ -25,9 +26,15 @@ export async function getTodayCompanies(): Promise<CompanyCardData[]> {
     .where(
       and(
         eq(companies.status, "new"),
-        eq(companies.firstSeen, today),
-        or(isNotNull(contacts.personalPhone), isNotNull(contacts.phone)),
-        or(isNotNull(contacts.personalEmail), isNotNull(contacts.email)),
+        inArray(companies.firstSeen, listDates),
+        not(ilike(companies.name, "(Listing)%")),
+        or(
+          isNotNull(contacts.personalPhone),
+          isNotNull(contacts.phone),
+          isNotNull(contacts.personalEmail),
+          isNotNull(contacts.email),
+          isNotNull(contacts.workEmail),
+        ),
       ),
     );
 
