@@ -4,6 +4,7 @@ logs/
 __pycache__/
 *.pyc
 .venv/
+.contactout-browser/
 *.egg-info/
 dist/
 build/

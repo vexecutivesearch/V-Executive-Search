@@ -13,6 +13,7 @@ from src.crm_client import CRMClient
 from src.dedupe import collapse_to_companies, filter_existing_companies
 from src.domain_resolver import resolve_domains
 from src.enrich import get_provider
+from src.enrich.contactout import get_contactout_client
 from src.enrich.waterfall import WaterfallProvider
 from src.models import EnrichedCompany, PipelineResult
 from src.scrape import scrape_all
@@ -241,7 +242,8 @@ def run_pipeline(
         return result
 
     # Stage 3: Enrich
-    use_contactout = bool(os.environ.get("CONTACTOUT_API_KEY"))
+    client = get_contactout_client()
+    use_contactout = client.is_configured or bool(os.environ.get("CONTACTOUT_API_KEY"))
     effective_provider = provider_name
     if use_waterfall or use_contactout:
         effective_provider = "apollo+contactout (waterfall)"

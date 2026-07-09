@@ -68,7 +68,34 @@ launchctl bootout gui/$(id -u)/com.vexecsearch.poll
 ## Config
 
 Primary config is the **Admin UI** at `/admin` (geo focus, job titles, email).  
-When `CONTACTOUT_API_KEY` is set, the pipeline runs **Apollo → ContactOut**: Apollo finds decision-makers and LinkedIn URLs; ContactOut adds personal email and mobile (skips Apollo phone credits).
+When `CONTACTOUT_API_KEY` is set (or `CONTACTOUT_MODE=dashboard` on Mac), the pipeline runs **Apollo → ContactOut**.
+
+### ContactOut dashboard mode (Mac mini — unlimited plan workaround)
+
+Use this when your ContactOut plan includes unlimited lookups in the **web dashboard** but not phone credits on the API.
+
+1. Install Playwright in the worker venv:
+   ```bash
+   pip install -e ".[dashboard]"
+   playwright install chrome
+   ```
+2. Log in once (saves a persistent Chrome profile):
+   ```bash
+   python scripts/contactout_login.py
+   ```
+3. In `worker/.env`:
+   ```bash
+   CONTACTOUT_MODE=dashboard
+   ```
+4. The **5-minute poll** trickles dashboard lookups (`contactout_dashboard_sync.py`, 2 contacts per poll, 60–150s apart).
+
+Apollo still runs in the daily pipeline. ContactOut dashboard lookups happen in the background on the Mac — no LinkedIn browsing, only the ContactOut search portal.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CONTACTOUT_DASHBOARD_DELAY_MIN` | 60 | Min seconds between lookups |
+| `CONTACTOUT_DASHBOARD_DELAY_MAX` | 150 | Max seconds between lookups |
+| `CONTACTOUT_HEADLESS` | true | Set `false` to debug the browser |
 
 Fallback: `config/searches.yaml` if CRM is unreachable.
 

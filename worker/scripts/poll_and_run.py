@@ -38,6 +38,20 @@ def main() -> int:
         except Exception as exc:
             logging.warning("iMessage poll pass failed (non-fatal): %s", exc)
 
+        try:
+            import importlib.util
+
+            script = WORKER_ROOT / "scripts" / "contactout_dashboard_sync.py"
+            spec = importlib.util.spec_from_file_location("contactout_dashboard_sync", script)
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                n = mod.run_dashboard_sync(limit=2)
+                if n:
+                    logging.info("ContactOut dashboard sync updated %d contact(s)", n)
+        except Exception as exc:
+            logging.warning("ContactOut dashboard sync failed (non-fatal): %s", exc)
+
     status = get_pipeline_status()
     if not status.get("run_requested_at"):
         logging.info("No run requested — exiting")

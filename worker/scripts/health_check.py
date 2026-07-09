@@ -37,12 +37,23 @@ def main() -> int:
         check(key, bool(os.environ.get(key)), "set" if os.environ.get(key) else "MISSING")
     resend = os.environ.get("RESEND_API_KEY")
     check("RESEND_API_KEY", bool(resend), "set (daily email)" if resend else "optional — email disabled")
+    co_mode = os.environ.get("CONTACTOUT_MODE", "api")
     co = os.environ.get("CONTACTOUT_API_KEY")
-    check(
-        "CONTACTOUT_API_KEY",
-        bool(co),
-        "set (personal email/mobile)" if co else "optional — Apollo-only enrichment",
-    )
+    if co_mode == "dashboard":
+        from src.enrich.contactout_dashboard import browser_profile_dir
+
+        profile = browser_profile_dir()
+        check(
+            "CONTACTOUT_MODE=dashboard",
+            profile.exists(),
+            f"profile at {profile}" if profile.exists() else "run contactout_login.py",
+        )
+    else:
+        check(
+            "CONTACTOUT_API_KEY",
+            bool(co),
+            "set (personal email/mobile)" if co else "optional — Apollo-only enrichment",
+        )
 
     base = (os.environ.get("CRM_API_URL") or "").rstrip("/")
     key = os.environ.get("CRM_API_KEY", "")
