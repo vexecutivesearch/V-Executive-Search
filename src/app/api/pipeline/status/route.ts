@@ -16,6 +16,7 @@ export async function GET(request: NextRequest) {
     contactout_sync_requested_at:
       settings.contactoutSyncRequestedAt?.toISOString() ?? null,
     last_run_at: settings.lastRunAt?.toISOString() ?? null,
+    worker_last_seen_at: settings.workerLastSeenAt?.toISOString() ?? null,
   });
 }
 
@@ -53,8 +54,17 @@ export async function POST(request: NextRequest) {
       .set({
         lastRunAt: new Date(),
         runRequestedAt: null,
+        missedRunAlertSlot: null,
         updatedAt: new Date(),
       })
+      .where(eq(pipelineSettings.id, settings.id));
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.action === "worker_heartbeat") {
+    await db
+      .update(pipelineSettings)
+      .set({ workerLastSeenAt: new Date(), updatedAt: new Date() })
       .where(eq(pipelineSettings.id, settings.id));
     return NextResponse.json({ ok: true });
   }

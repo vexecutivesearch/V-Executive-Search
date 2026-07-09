@@ -52,6 +52,8 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   runRequestedAt: timestamp("run_requested_at"),
   contactoutSyncRequestedAt: timestamp("contactout_sync_requested_at"),
   lastRunAt: timestamp("last_run_at"),
+  workerLastSeenAt: timestamp("worker_last_seen_at"),
+  missedRunAlertSlot: text("missed_run_alert_slot"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 

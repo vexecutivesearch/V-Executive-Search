@@ -1,4 +1,14 @@
 {
   "framework": "nextjs",
-  "regions": ["iad1"]
+  "regions": ["iad1"],
+  "crons": [
+    {
+      "path": "/api/cron/check-worker",
+      "schedule": "20,35,50 10-11 * * *"
+    },
+    {
+      "path": "/api/cron/check-worker",
+      "schedule": "20,35,50 22-23 * * *"
+    }
+  ]
 }

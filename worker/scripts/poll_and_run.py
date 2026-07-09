@@ -25,6 +25,11 @@ logging.basicConfig(
 def main() -> int:
     if sys.platform == "darwin":
         try:
+            post_pipeline_status("worker_heartbeat")
+        except Exception:
+            pass
+
+        try:
             import importlib.util
 
             script = WORKER_ROOT / "scripts" / "check_imessage.py"

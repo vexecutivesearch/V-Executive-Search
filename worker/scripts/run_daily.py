@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
 
+from src.crm_config import post_pipeline_status  # noqa: E402
 from src.pipeline import LOG_DIR, run_pipeline  # noqa: E402
 
 
@@ -76,6 +77,11 @@ def main() -> int:
     log_path = setup_logging(run_date_str, args.verbose)
     logger = logging.getLogger(__name__)
     logger.info("Starting pipeline (dry_run=%s)", args.dry_run)
+
+    try:
+        post_pipeline_status("worker_heartbeat")
+    except Exception:
+        pass
 
     # Rotate old logs
     rotate_script = WORKER_ROOT / "scripts" / "rotate_logs.sh"
