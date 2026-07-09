@@ -10,6 +10,8 @@ import {
   formatPersonLocation,
   personMatchesLocation,
 } from "@/lib/location-match";
+import { enrichFromContactOut, dedupeCompanyPhones } from "@/lib/contactout-enrich";
+import { isPersonalEmail, parsePhoneValue } from "@/lib/phone-utils";
 
 const APOLLO_BASE = "https://api.apollo.io/api/v1";
 
@@ -17,9 +19,14 @@ export type EnrichedContact = {
   name: string;
   title: string;
   email: string | null;
+  workEmail: string | null;
+  personalEmail: string | null;
   phone: string | null;
+  personalPhone: string | null;
+  companyPhone: string | null;
   linkedinUrl: string | null;
   apolloId: string;
+  sourceProvider: string;
   locationMatched: boolean;
   contactLocation: string | null;
   jobLocation: string | null;
@@ -90,18 +97,17 @@ function personSortKey(
 
 function extractPhone(person: Record<string, unknown>): string | null {
   const phones = (person.phone_numbers as Array<Record<string, string>>) ?? [];
-  if (phones.length) {
-    const mobile =
-      phones.find((p) => p.type_cd === "mobile" || p.type_cd === "other") ?? phones[0];
-    return mobile.sanitized_number || mobile.raw_number || mobile.number || null;
+  for (const entry of phones) {
+    const typeCd = (entry.type_cd || entry.type || "").toLowerCase();
+    if (typeCd === "mobile" || typeCd === "other" || typeCd === "cell") {
+      return (
+        entry.sanitized_number ||
+        entry.raw_number ||
+        entry.number ||
+        null
+      );
+    }
   }
-  const org = (person.organization as Record<string, unknown>) ?? {};
-  const orgPhone = org.primary_phone ?? person.phone;
-  if (orgPhone && typeof orgPhone === "object") {
-    const p = orgPhone as Record<string, string>;
-    return p.sanitized_number || p.number || p.raw_number || null;
-  }
-  if (typeof orgPhone === "string") return orgPhone;
   return null;
 }
 
@@ -180,6 +186,7 @@ export async function enrichCompanyContacts(options: {
   jobLocations: string[];
   contactsPerCompany?: number;
   existingApolloIds?: Set<string>;
+  contactOutApiKey?: string;
 }): Promise<EnrichedContact[]> {
   const {
     apiKey,
@@ -187,7 +194,11 @@ export async function enrichCompanyContacts(options: {
     jobLocations,
     contactsPerCompany = CONTACTS_PER_COMPANY,
     existingApolloIds = new Set(),
+    contactOutApiKey,
   } = options;
+
+  const useContactOut = Boolean(contactOutApiKey);
+  const apolloPhone = ENRICH_PHONE && !useContactOut;
 
   const parsedLocations = collectJobLocations(jobLocations);
   const jobLocationLabel = parsedLocations[0]?.label ?? null;
@@ -215,7 +226,7 @@ export async function enrichCompanyContacts(options: {
     const personId = String(person.id ?? "");
     if (!personId || existingApolloIds.has(personId)) continue;
 
-    const enriched = await matchPerson(apiKey, personId, ENRICH_PHONE);
+    const enriched = await matchPerson(apiKey, personId, apolloPhone);
     if (!enriched?.email) continue;
 
     const first = String(enriched.first_name ?? person.first_name ?? "");
@@ -226,13 +237,53 @@ export async function enrichCompanyContacts(options: {
       personMatchesLocation(enriched, parsedLocations) ||
       personMatchesLocation(person, parsedLocations);
 
+    const workEmail = String(enriched.email);
+    const linkedinUrl = enriched.linkedin_url
+      ? String(enriched.linkedin_url)
+      : person.linkedin_url
+        ? String(person.linkedin_url)
+        : null;
+
+    let personalEmail: string | null = null;
+    let personalPhone: string | null = null;
+    let email = workEmail;
+    let phone = extractPhone(enriched);
+    let sourceProvider = "apollo";
+
+    if (useContactOut && linkedinUrl && contactOutApiKey) {
+      const co = await enrichFromContactOut(linkedinUrl, contactOutApiKey);
+      if (co) {
+        if (co.personalEmail) {
+          personalEmail = co.personalEmail;
+          email = co.personalEmail;
+        }
+        if (co.personalPhone) {
+          personalPhone = co.personalPhone;
+          phone = co.personalPhone;
+        }
+        if (co.personalEmail || co.personalPhone) {
+          sourceProvider = "apollo+contactout";
+        }
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    if (email && isPersonalEmail(email)) {
+      personalEmail = email;
+    }
+
     results.push({
       name,
       title: String(enriched.title ?? person.title ?? ""),
-      email: String(enriched.email),
-      phone: extractPhone(enriched),
-      linkedinUrl: enriched.linkedin_url ? String(enriched.linkedin_url) : null,
+      email,
+      workEmail: personalEmail && workEmail !== personalEmail ? workEmail : null,
+      personalEmail,
+      phone: parsePhoneValue(phone),
+      personalPhone: parsePhoneValue(personalPhone),
+      companyPhone: null,
+      linkedinUrl,
       apolloId: personId,
+      sourceProvider,
       locationMatched,
       contactLocation:
         formatPersonLocation(enriched) ?? formatPersonLocation(person),
@@ -242,5 +293,5 @@ export async function enrichCompanyContacts(options: {
     await new Promise((r) => setTimeout(r, 300));
   }
 
-  return results;
+  return dedupeCompanyPhones(results);
 }

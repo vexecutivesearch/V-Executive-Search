@@ -16,6 +16,31 @@ export function EnrichButton({
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  async function handleRefreshPersonal() {
+    setLoading(true);
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/companies/${companyId}/refresh-contacts`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMessage(data.error || "ContactOut refresh failed");
+        return;
+      }
+      if (data.updated === 0) {
+        setMessage(data.message || "No personal data found");
+      } else {
+        setMessage(`Updated ${data.updated} personal`);
+      }
+      router.refresh();
+    } catch {
+      setMessage("Network error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleEnrich() {
     setLoading(true);
     setMessage(null);
@@ -46,18 +71,33 @@ export function EnrichButton({
 
   return (
     <div className="inline-flex flex-col items-start gap-0.5">
-      <button
-        type="button"
-        onClick={handleEnrich}
-        disabled={loading}
-        className={`rounded-md font-medium transition-colors disabled:opacity-50 ${
-          compact
-            ? "px-2 py-1 text-xs bg-green-700 text-white hover:bg-green-800"
-            : "px-3 py-1.5 text-sm bg-green-700 text-white hover:bg-green-800"
-        }`}
-      >
-        {loading ? "…" : label}
-      </button>
+      <div className="flex gap-1">
+        <button
+          type="button"
+          onClick={handleEnrich}
+          disabled={loading}
+          className={`rounded-md font-medium transition-colors disabled:opacity-50 ${
+            compact
+              ? "px-2 py-1 text-xs bg-green-700 text-white hover:bg-green-800"
+              : "px-3 py-1.5 text-sm bg-green-700 text-white hover:bg-green-800"
+          }`}
+        >
+          {loading ? "…" : label}
+        </button>
+        {contactCount > 0 && (
+          <button
+            type="button"
+            onClick={handleRefreshPersonal}
+            disabled={loading}
+            title="ContactOut: personal email & mobile via LinkedIn"
+            className={`rounded-md font-medium transition-colors disabled:opacity-50 border border-green-700 text-green-800 dark:text-green-300 hover:bg-green-50 dark:hover:bg-green-950 ${
+              compact ? "px-2 py-1 text-xs" : "px-2 py-1.5 text-xs"
+            }`}
+          >
+            Personal
+          </button>
+        )}
+      </div>
       {contactCount > 0 && !message && (
         <span className="text-[10px] text-gray-400">{contactCount} saved</span>
       )}

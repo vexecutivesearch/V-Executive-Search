@@ -9,6 +9,7 @@ import {
 } from "@/lib/db/schema";
 import { CompanyCardData } from "@/components/CompanyCard";
 import { businessToday } from "@/lib/timezone";
+import { applyCompanyPhoneDedupe } from "@/lib/phone-utils";
 
 export async function getTodayCompanies(): Promise<CompanyCardData[]> {
   const today = businessToday();
@@ -22,7 +23,8 @@ export async function getTodayCompanies(): Promise<CompanyCardData[]> {
       and(
         eq(companies.status, "new"),
         eq(companies.firstSeen, today),
-        or(isNotNull(contacts.email), isNotNull(contacts.phone)),
+        or(isNotNull(contacts.personalPhone), isNotNull(contacts.phone)),
+        or(isNotNull(contacts.personalEmail), isNotNull(contacts.email)),
       ),
     );
 
@@ -161,7 +163,7 @@ async function enrichCompanies(
       domainConfidence: company.domainConfidence,
       status: company.status,
       firstSeen: company.firstSeen,
-      contacts: companyContacts,
+      contacts: applyCompanyPhoneDedupe(companyContacts),
       jobListings: listings,
     });
   }

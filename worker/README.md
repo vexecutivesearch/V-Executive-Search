@@ -68,7 +68,19 @@ launchctl bootout gui/$(id -u)/com.vexecsearch.poll
 ## Config
 
 Primary config is the **Admin UI** at `/admin` (geo focus, job titles, email).  
+When `CONTACTOUT_API_KEY` is set, the pipeline runs **Apollo → ContactOut**: Apollo finds decision-makers and LinkedIn URLs; ContactOut adds personal email and mobile (skips Apollo phone credits).
+
 Fallback: `config/searches.yaml` if CRM is unreachable.
+
+### iMessage check (Mac mini only)
+
+After enrichment, optionally verify which emails/phones support iMessage:
+
+```bash
+python scripts/check_imessage.py --limit 20
+```
+
+Requires Messages app signed in on the Mac. Throttle with `--delay 2` to avoid rate limits.
 
 ## Required env vars
 
@@ -79,4 +91,6 @@ Fallback: `config/searches.yaml` if CRM is unreachable.
 | `CRM_API_KEY` | worker `.env` + Vercel | Worker ↔ CRM auth |
 | `ALERT_EMAIL` | worker `.env` | Failure alerts |
 | `RESEND_API_KEY` | worker `.env` | Daily HTML email report |
-| `APOLLO_API_KEY` | Vercel | Jobs page **Enrich** button |
+| `REPORT_FROM_EMAIL` | worker `.env` | Email sender address |
+| `APOLLO_API_KEY` | worker `.env` + Vercel | Discovery + work email (Enrich button) |
+| `CONTACTOUT_API_KEY` | worker `.env` + Vercel | Personal email/mobile via LinkedIn |

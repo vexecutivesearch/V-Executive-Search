@@ -7,7 +7,9 @@ from typing import Any
 import requests
 
 from src.enrich.apollo import ApolloProvider
+from src.enrich.contactout import ContactOutClient
 from src.enrich.provider import EnrichmentProvider
+from src.phone_utils import apply_company_phone_dedupe, is_personal_email
 from src.models import CompanyRecord, ContactRecord, EnrichedCompany
 
 logger = logging.getLogger(__name__)
@@ -43,10 +45,11 @@ class HunterFallback:
 
 
 class WaterfallProvider:
-    """Apollo search + enrich, with optional Hunter email fallback."""
+    """Apollo discovery (name, title, LinkedIn, work email) + ContactOut personal contact info."""
 
     def __init__(self) -> None:
         self._apollo = ApolloProvider()
+        self._contactout = ContactOutClient()
         self._hunter = HunterFallback()
         self._credits_used = 0
 
@@ -58,6 +61,33 @@ class WaterfallProvider:
         self._apollo.reset_credits()
         self._credits_used = 0
 
+    def _apply_contactout(self, contact: ContactRecord) -> None:
+        if not contact.linkedin_url or not self._contactout.is_configured:
+            return
+
+        result = self._contactout.enrich_linkedin(contact.linkedin_url)
+        if not result:
+            return
+
+        self._credits_used += self._contactout.credits_used
+
+        if contact.email and not is_personal_email(contact.email):
+            contact.work_email = contact.email
+
+        if result.personal_email:
+            contact.personal_email = result.personal_email
+            contact.email = result.personal_email
+        elif result.work_emails and not contact.email:
+            contact.email = result.work_emails[0]
+
+        if result.personal_phone:
+            contact.personal_phone = result.personal_phone
+            contact.phone = result.personal_phone
+
+        if contact.personal_email or contact.personal_phone:
+            contact.source_provider = "apollo+contactout"
+            contact.enriched = True
+
     def enrich_company(
         self,
         company: CompanyRecord,
@@ -66,23 +96,29 @@ class WaterfallProvider:
         contacts_per_company: int,
         enrich_phone: bool,
     ) -> EnrichedCompany:
+        # ContactOut supplies personal mobiles — skip expensive Apollo phone credits.
+        apollo_phone = enrich_phone and not self._contactout.is_configured
+
         result = self._apollo.enrich_company(
             company,
             target_titles,
             target_seniorities,
             contacts_per_company,
-            enrich_phone,
+            apollo_phone,
         )
         self._credits_used = self._apollo.credits_used
 
         domain = company.domain or ""
         for contact in result.contacts:
-            if contact.email:
-                continue
-            email = self._hunter.find_email(domain, contact.first_name, contact.last_name)
-            if email:
-                contact.email = email
-                contact.source_provider = "hunter"
-                contact.enriched = True
+            if not contact.email:
+                email = self._hunter.find_email(domain, contact.first_name, contact.last_name)
+                if email:
+                    contact.email = email
+                    contact.work_email = email
+                    contact.source_provider = "hunter"
+                    contact.enriched = True
 
+            self._apply_contactout(contact)
+
+        apply_company_phone_dedupe(result.contacts)
         return result

@@ -38,7 +38,11 @@ class ContactRecord:
     last_name: str
     title: str
     email: str | None = None
+    work_email: str | None = None
+    personal_email: str | None = None
     phone: str | None = None
+    personal_phone: str | None = None
+    company_phone: str | None = None
     linkedin_url: str | None = None
     source_provider: str = "apollo"
     apollo_id: str | None = None

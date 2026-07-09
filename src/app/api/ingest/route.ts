@@ -16,7 +16,11 @@ interface IngestContact {
   name: string;
   title?: string;
   email?: string;
+  work_email?: string;
+  personal_email?: string;
   phone?: string;
+  personal_phone?: string;
+  company_phone?: string;
   linkedin_url?: string;
   apollo_id?: string;
   source_provider?: string;
@@ -242,7 +246,11 @@ export async function POST(request: NextRequest) {
         name: c.name,
         title: c.title ?? null,
         email: c.email ?? null,
+        workEmail: c.work_email ?? null,
+        personalEmail: c.personal_email ?? null,
         phone: c.phone ?? null,
+        personalPhone: c.personal_phone ?? null,
+        companyPhone: c.company_phone ?? null,
         linkedinUrl: c.linkedin_url ?? null,
         apolloId: c.apollo_id ?? null,
         sourceProvider: c.source_provider ?? "apollo",

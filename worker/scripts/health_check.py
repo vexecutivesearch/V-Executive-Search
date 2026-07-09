@@ -37,6 +37,12 @@ def main() -> int:
         check(key, bool(os.environ.get(key)), "set" if os.environ.get(key) else "MISSING")
     resend = os.environ.get("RESEND_API_KEY")
     check("RESEND_API_KEY", bool(resend), "set (daily email)" if resend else "optional — email disabled")
+    co = os.environ.get("CONTACTOUT_API_KEY")
+    check(
+        "CONTACTOUT_API_KEY",
+        bool(co),
+        "set (personal email/mobile)" if co else "optional — Apollo-only enrichment",
+    )
 
     base = (os.environ.get("CRM_API_URL") or "").rstrip("/")
     key = os.environ.get("CRM_API_KEY", "")

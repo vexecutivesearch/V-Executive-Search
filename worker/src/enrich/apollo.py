@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 
 import requests
 
+from src.phone_utils import apply_company_phone_dedupe, extract_apollo_mobile
 from src.location import (
     apollo_location_queries,
     collect_job_locations,
@@ -291,7 +292,7 @@ class ApolloProvider:
                 last_name=last,
                 title=enriched.get("title") or person.get("title") or "",
                 email=email,
-                phone=_extract_phone(enriched),
+                phone=extract_apollo_mobile(enriched),
                 linkedin_url=enriched.get("linkedin_url"),
                 source_provider="apollo",
                 apollo_id=person_id,
@@ -303,6 +304,8 @@ class ApolloProvider:
             )
             result.contacts.append(contact)
             enriched_count += 1
+
+        apply_company_phone_dedupe(result.contacts)
 
         if job_location_label and result.contacts:
             matched = sum(1 for c in result.contacts if c.location_matched)
@@ -319,19 +322,5 @@ class ApolloProvider:
 
 
 def _extract_phone(person: dict[str, Any]) -> str | None:
-    phones = person.get("phone_numbers") or []
-    if phones:
-        mobile = next(
-            (p for p in phones if isinstance(p, dict) and p.get("type_cd") in ("mobile", "other")),
-            phones[0],
-        )
-        if isinstance(mobile, dict):
-            return mobile.get("sanitized_number") or mobile.get("raw_number") or mobile.get("number")
-
-    org = person.get("organization") or {}
-    org_phone = org.get("primary_phone") or person.get("phone")
-    if isinstance(org_phone, dict):
-        return org_phone.get("sanitized_number") or org_phone.get("number") or org_phone.get("raw_number")
-    if isinstance(org_phone, str):
-        return org_phone
-    return None
+    """Deprecated — use extract_apollo_mobile. Kept for tests."""
+    return extract_apollo_mobile(person)

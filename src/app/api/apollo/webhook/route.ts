@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { contacts } from "@/lib/db/schema";
+import { parsePhoneValue } from "@/lib/phone-utils";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,10 +24,13 @@ interface ApolloWebhookPayload {
 
 function pickBestPhone(phones: ApolloPhone[]): string | null {
   const mobile = phones.find(
-    (p) => p.type_cd === "mobile" || p.type_cd === "other",
+    (p) =>
+      p.type_cd === "mobile" ||
+      p.type_cd === "other" ||
+      p.type_cd === "cell",
   );
-  const chosen = mobile ?? phones[0];
-  return chosen?.sanitized_number ?? chosen?.raw_number ?? null;
+  if (!mobile) return null;
+  return mobile.sanitized_number ?? mobile.raw_number ?? null;
 }
 
 export async function POST(request: NextRequest) {
@@ -43,9 +47,12 @@ export async function POST(request: NextRequest) {
     const phone = pickBestPhone(person.phone_numbers ?? []);
     if (!apolloId || !phone) continue;
 
+    const normalized = parsePhoneValue(phone);
+    if (!normalized) continue;
+
     const result = await db
       .update(contacts)
-      .set({ phone })
+      .set({ phone: normalized, personalPhone: normalized })
       .where(eq(contacts.apolloId, apolloId))
       .returning({ id: contacts.id });
 

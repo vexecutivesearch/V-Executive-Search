@@ -87,6 +87,7 @@ export async function POST(
       domain,
       jobLocations,
       existingApolloIds,
+      contactOutApiKey: process.env.CONTACTOUT_API_KEY,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Enrichment failed";
@@ -108,10 +109,14 @@ export async function POST(
       name: c.name,
       title: c.title,
       email: c.email,
+      workEmail: c.workEmail,
+      personalEmail: c.personalEmail,
       phone: c.phone,
+      personalPhone: c.personalPhone,
+      companyPhone: c.companyPhone,
       linkedinUrl: c.linkedinUrl,
       apolloId: c.apolloId,
-      sourceProvider: "apollo",
+      sourceProvider: c.sourceProvider,
       locationMatched: c.locationMatched,
       contactLocation: c.contactLocation,
       jobLocation: c.jobLocation,

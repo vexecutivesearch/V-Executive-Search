@@ -98,7 +98,11 @@ def _build_ingest_payload(
                     "name": c.name,
                     "title": c.title,
                     "email": c.email,
+                    "work_email": c.work_email,
+                    "personal_email": c.personal_email,
                     "phone": c.phone,
+                    "personal_phone": c.personal_phone,
+                    "company_phone": c.company_phone,
                     "linkedin_url": c.linkedin_url,
                     "apollo_id": c.apollo_id,
                     "source_provider": c.source_provider,
@@ -208,8 +212,12 @@ def run_pipeline(
         return result
 
     # Stage 3: Enrich
-    logger.info("=== Stage 3: Enriching contacts via %s ===", provider_name)
-    if use_waterfall:
+    use_contactout = bool(os.environ.get("CONTACTOUT_API_KEY"))
+    effective_provider = provider_name
+    if use_waterfall or use_contactout:
+        effective_provider = "apollo+contactout (waterfall)"
+    logger.info("=== Stage 3: Enriching contacts via %s ===", effective_provider)
+    if use_waterfall or use_contactout:
         provider = WaterfallProvider()
     else:
         provider = get_provider(provider_name)

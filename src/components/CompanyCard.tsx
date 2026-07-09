@@ -3,6 +3,7 @@ import { CompanyStatus } from "@/lib/db/schema";
 import Link from "next/link";
 import { StatusBadge, StatusSelect } from "./StatusBadge";
 import { EnrichButton } from "./EnrichButton";
+import { ContactRow } from "./ContactRow";
 
 export interface CompanyCardData {
   id: string;
@@ -13,38 +14,6 @@ export interface CompanyCardData {
   firstSeen: string;
   contacts: Contact[];
   jobListings: JobListing[];
-}
-
-function ContactLocationNote({
-  jobLocation,
-  contact,
-}: {
-  jobLocation: string | null | undefined;
-  contact: Contact;
-}) {
-  if (contact.locationMatched) {
-    return (
-      <span className="text-xs text-green-700 dark:text-green-400">
-        Matched to job location
-        {contact.contactLocation ? ` (${contact.contactLocation})` : ""}
-      </span>
-    );
-  }
-
-  if (jobLocation) {
-    return (
-      <span className="text-xs text-amber-700 dark:text-amber-400">
-        Not verified for {jobLocation}
-        {contact.contactLocation ? ` — contact in ${contact.contactLocation}` : ""}
-      </span>
-    );
-  }
-
-  return (
-    <span className="text-xs text-amber-700 dark:text-amber-400">
-      Location not verified for this posting
-    </span>
-  );
 }
 
 export function CompanyCard({ company }: { company: CompanyCardData }) {
@@ -121,29 +90,7 @@ export function CompanyCard({ company }: { company: CompanyCardData }) {
             Contacts
           </p>
           {company.contacts.map((c) => (
-            <div key={c.id} className="space-y-1 text-sm">
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                <span className="font-medium">{c.name}</span>
-                <span className="text-gray-500">{c.title}</span>
-                {c.email && (
-                  <a
-                    href={`mailto:${c.email}`}
-                    className="text-blue-600 dark:text-blue-400 hover:underline"
-                  >
-                    {c.email}
-                  </a>
-                )}
-                {c.phone && (
-                  <a
-                    href={`tel:${c.phone}`}
-                    className="text-gray-600 dark:text-gray-300"
-                  >
-                    {c.phone}
-                  </a>
-                )}
-              </div>
-              <ContactLocationNote jobLocation={jobLocation} contact={c} />
-            </div>
+            <ContactRow key={c.id} contact={c} jobLocation={jobLocation} />
           ))}
         </div>
       ) : (
