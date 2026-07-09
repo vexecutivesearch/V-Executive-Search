@@ -76,10 +76,7 @@ def main() -> int:
         try:
             from src.enrich.contactout_dashboard import prepare_contactout_dashboard
 
-            if not prepare_contactout_dashboard():
-                logger.warning(
-                    "ContactOut dashboard not logged in — phone lookups may be skipped until you sign in"
-                )
+            prepare_contactout_dashboard(interactive=False)
         except Exception as exc:
             logger.warning("ContactOut session prep failed (non-fatal): %s", exc)
 

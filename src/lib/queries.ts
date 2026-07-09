@@ -49,6 +49,44 @@ export async function getTodayGeoLabel(): Promise<string> {
   return focusGeoLabel(settings);
 }
 
+export async function getInFocusJobListings() {
+  const settings = await getGeoFocusSettings();
+
+  const rows = await db
+    .select({
+      listing: jobListings,
+      company: companies,
+    })
+    .from(jobListings)
+    .innerJoin(companies, eq(jobListings.companyId, companies.id))
+    .orderBy(desc(jobListings.postedAt), desc(jobListings.createdAt));
+
+  const contactCounts = await db
+    .select({ companyId: contacts.companyId, count: count() })
+    .from(contacts)
+    .groupBy(contacts.companyId);
+
+  const contactCountMap = new Map(
+    contactCounts.map((row) => [row.companyId, Number(row.count)]),
+  );
+
+  return rows
+    .filter(({ listing }) => jobLocationInFocus(listing.location, settings))
+    .map(({ listing, company }) => ({
+      id: listing.id,
+      title: listing.title,
+      board: listing.board,
+      url: listing.url,
+      location: listing.location,
+      searchName: listing.searchName,
+      postedAt: listing.postedAt,
+      companyId: company.id,
+      companyName: company.name,
+      companyDomain: company.domain,
+      contactCount: contactCountMap.get(company.id) ?? 0,
+    }));
+}
+
 export async function getCompaniesByStatus(
   status?: CompanyStatus,
   search?: string,

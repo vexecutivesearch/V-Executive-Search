@@ -1,6 +1,6 @@
 import { CompanyCard } from "@/components/CompanyCard";
 import { CompanySearch } from "@/components/CompanySearch";
-import { getCompaniesByStatus } from "@/lib/queries";
+import { getCompaniesByStatus, getTodayGeoLabel } from "@/lib/queries";
 import { CompanyStatus } from "@/lib/db/schema";
 import { STATUS_LABELS } from "@/lib/utils";
 import Link from "next/link";
@@ -26,8 +26,12 @@ export default async function CompaniesPage({
   const filterStatus = FILTERS.find((f) => f.value === status)?.value;
 
   let companies;
+  let geoLabel = "your focus area";
   try {
-    companies = await getCompaniesByStatus(filterStatus, q);
+    [companies, geoLabel] = await Promise.all([
+      getCompaniesByStatus(filterStatus, q),
+      getTodayGeoLabel(),
+    ]);
   } catch {
     return (
       <div className="max-w-6xl mx-auto px-4 py-8">
@@ -39,7 +43,8 @@ export default async function CompaniesPage({
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold mb-4">Companies</h1>
+      <h1 className="text-2xl font-bold mb-1">Companies</h1>
+      <p className="text-sm text-gray-400 mb-4">Showing {geoLabel} only</p>
 
       <div className="flex flex-wrap gap-2 mb-6">
         {FILTERS.map((f) => {

@@ -70,9 +70,18 @@ def patch_contact(contact_id: str, payload: dict) -> None:
     resp.raise_for_status()
 
 
-def run_dashboard_sync(*, limit: int = 10) -> int:
+def run_dashboard_sync(*, limit: int = 10, interactive_login: bool = False) -> int:
     if not should_run_dashboard_sync():
         logger.debug("Skipping ContactOut dashboard sync (API covers lookups)")
+        return 0
+
+    from src.enrich.contactout_dashboard import (
+        ensure_contactout_session,
+        login_in_progress,
+    )
+
+    if login_in_progress():
+        logger.info("ContactOut login in progress — skipping dashboard sync this cycle")
         return 0
 
     client = ContactOutDashboardClient()
@@ -80,10 +89,10 @@ def run_dashboard_sync(*, limit: int = 10) -> int:
         logger.warning("ContactOut dashboard not configured on this host")
         return 0
 
-    from src.enrich.contactout_dashboard import ensure_contactout_session
-
-    if not ensure_contactout_session(timeout_sec=120):
-        logger.warning("ContactOut dashboard not logged in — skipping sync")
+    if not ensure_contactout_session(interactive=interactive_login, timeout_sec=600):
+        logger.warning(
+            "ContactOut dashboard not logged in — run: python scripts/contactout_login.py"
+        )
         return 0
 
     pending = fetch_pending_contacts(limit)

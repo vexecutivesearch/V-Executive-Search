@@ -197,7 +197,7 @@ def run_pipeline(
             from src.enrich.contactout_dashboard import prepare_contactout_dashboard
 
             if sys.platform == "darwin":
-                prepare_contactout_dashboard()
+                prepare_contactout_dashboard(interactive=False)
         except Exception as exc:
             logger.warning("ContactOut session prep failed (non-fatal): %s", exc)
 
