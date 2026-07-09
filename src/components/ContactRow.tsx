@@ -106,6 +106,16 @@ export function ContactRow({
               capable={contact.imessageCapable}
               personalEmail={personalEmail}
             />
+            {contact.emailDeliverable === true && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-50 text-green-800 dark:bg-green-950/50 dark:text-green-300">
+                MX ✓
+              </span>
+            )}
+            {contact.emailDeliverable === false && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-800 dark:bg-red-950/50 dark:text-red-300">
+                Email risky
+              </span>
+            )}
           </div>
         )}
 
