@@ -5,11 +5,13 @@ __pycache__/
 *.pyc
 .venv/
 .contactout-browser/
+.contactout-chrome-profile/
 .contactout-session.json
 .contactout-login.lock
 .contactout-session-degraded
 .contactout-last-keepalive
 .contactout-alert-sent
+.contactout-rate-limited
 .contactout-api-phone-locked
 *.egg-info/
 dist/

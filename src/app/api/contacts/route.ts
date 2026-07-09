@@ -7,7 +7,7 @@ import { companies, contacts } from "@/lib/db/schema";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Worker-only: list contacts for iMessage checks or ContactOut dashboard sync. */
+/** Worker-only: list contacts for iMessage checks or pending ContactOut API enrichment. */
 export async function GET(request: NextRequest) {
   if (!verifyWorkerAuth(request)) {
     return unauthorized();

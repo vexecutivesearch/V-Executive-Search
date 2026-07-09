@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { pipelineSettings } from "@/lib/db/schema";
+import { resolveJobBoards } from "@/lib/job-boards";
 import { getOrCreateSettings } from "@/lib/pipeline-config";
 import { eq } from "drizzle-orm";
 
@@ -31,6 +32,7 @@ export async function PUT(request: NextRequest) {
     focus_cities?: string[];
     focus_counties?: string[];
     notification_email?: string;
+    job_boards?: string[];
   };
   try {
     body = await request.json();
@@ -45,6 +47,9 @@ export async function PUT(request: NextRequest) {
   const focusCounties = body.focus_counties
     ? normalizeList(body.focus_counties)
     : normalizeList(current.focusCounties);
+  const jobBoards = body.job_boards
+    ? resolveJobBoards(body.job_boards)
+    : resolveJobBoards(current.jobBoards);
 
   const [updated] = await db
     .update(pipelineSettings)
@@ -58,6 +63,7 @@ export async function PUT(request: NextRequest) {
       focusCities,
       focusCounties,
       notificationEmail: body.notification_email ?? current.notificationEmail,
+      jobBoards,
       updatedAt: new Date(),
     })
     .where(eq(pipelineSettings.id, current.id))

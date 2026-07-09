@@ -10,6 +10,8 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { JobBoardId } from "@/lib/job-boards";
+import { DEFAULT_JOB_BOARDS } from "@/lib/job-boards";
 
 export const companyStatusEnum = pgEnum("company_status", [
   "new",
@@ -44,6 +46,9 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   notificationEmail: text("notification_email")
     .default("hello@proventheory.co")
     .notNull(),
+  jobBoards: jsonb("job_boards")
+    .$type<JobBoardId[]>()
+    .default([...DEFAULT_JOB_BOARDS]),
   runRequestedAt: timestamp("run_requested_at"),
   contactoutSyncRequestedAt: timestamp("contactout_sync_requested_at"),
   lastRunAt: timestamp("last_run_at"),

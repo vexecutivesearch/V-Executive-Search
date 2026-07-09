@@ -60,6 +60,11 @@ def main() -> int:
     parser.add_argument("--waterfall", action="store_true", help="Use Apollo + Hunter email fallback")
     parser.add_argument("--config", type=Path, default=None, help="Path to searches.yaml")
     parser.add_argument("--limit", type=int, default=None, help="Max companies to enrich (for testing)")
+    parser.add_argument(
+        "--include-existing",
+        action="store_true",
+        help="Enrich all scraped companies, including those already in CRM",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -71,14 +76,6 @@ def main() -> int:
     log_path = setup_logging(run_date_str, args.verbose)
     logger = logging.getLogger(__name__)
     logger.info("Starting pipeline (dry_run=%s)", args.dry_run)
-
-    if sys.platform == "darwin" and not args.dry_run:
-        try:
-            from src.enrich.contactout_dashboard import prepare_contactout_dashboard
-
-            prepare_contactout_dashboard(interactive=False)
-        except Exception as exc:
-            logger.warning("ContactOut session prep failed (non-fatal): %s", exc)
 
     # Rotate old logs
     rotate_script = WORKER_ROOT / "scripts" / "rotate_logs.sh"
@@ -94,6 +91,7 @@ def main() -> int:
             use_waterfall=args.waterfall,
             config_path=args.config,
             limit=args.limit,
+            include_existing=args.include_existing,
         )
     except Exception as exc:
         logger.exception("Pipeline crashed: %s", exc)

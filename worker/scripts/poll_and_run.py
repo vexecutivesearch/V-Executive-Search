@@ -25,13 +25,6 @@ logging.basicConfig(
 def main() -> int:
     if sys.platform == "darwin":
         try:
-            from src.enrich.contactout_session import run_keepalive
-
-            run_keepalive()
-        except Exception as exc:
-            logging.debug("ContactOut keepalive skipped: %s", exc)
-
-        try:
             import importlib.util
 
             script = WORKER_ROOT / "scripts" / "check_imessage.py"
@@ -45,44 +38,12 @@ def main() -> int:
         except Exception as exc:
             logging.warning("iMessage poll pass failed (non-fatal): %s", exc)
 
-        try:
-            import importlib.util
-
-            script = WORKER_ROOT / "scripts" / "contactout_dashboard_sync.py"
-            spec = importlib.util.spec_from_file_location("contactout_dashboard_sync", script)
-            if spec and spec.loader:
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                n = mod.run_dashboard_sync(limit=2)
-                if n:
-                    logging.info("ContactOut dashboard sync updated %d contact(s)", n)
-        except Exception as exc:
-            logging.warning("ContactOut dashboard sync failed (non-fatal): %s", exc)
-
     status = get_pipeline_status()
     if status.get("contactout_sync_requested_at"):
-        logging.info("ContactOut sync requested from admin")
-        try:
-            from src.enrich.contactout_session import ensure_session_healthy
-
-            ensure_session_healthy(
-                allow_interactive=True,
-                allow_auto_login=True,
-                alert_on_failure=True,
-            )
-            import importlib.util
-
-            script = WORKER_ROOT / "scripts" / "contactout_dashboard_sync.py"
-            spec = importlib.util.spec_from_file_location("contactout_dashboard_sync", script)
-            if spec and spec.loader:
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                n = mod.run_dashboard_sync(limit=10, interactive_login=True)
-                logging.info("Admin ContactOut sync updated %d contact(s)", n)
-        except Exception as exc:
-            logging.warning("Admin ContactOut sync failed: %s", exc)
-        finally:
-            post_pipeline_status("clear_contactout_sync_request")
+        logging.info(
+            "ContactOut sync flag cleared — enrichment uses API only (no Mac browser worker)"
+        )
+        post_pipeline_status("clear_contactout_sync_request")
 
     if not status.get("run_requested_at"):
         logging.info("No run requested — exiting")

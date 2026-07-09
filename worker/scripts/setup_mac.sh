@@ -63,11 +63,10 @@ echo "IMPORTANT: Only ONE Mac should run the scheduled worker."
 echo "If another machine already has launchd loaded, unload it there first:"
 echo "  launchctl bootout gui/\$(id -u)/com.vexecsearch.daily"
 echo "  launchctl bootout gui/\$(id -u)/com.vexecsearch.poll"
-echo "  launchctl bootout gui/\$(id -u)/com.vexecsearch.contactout-keepalive"
 echo ""
 echo "See DEPLOY.md for MacBook vs Mac mini and new-machine setup."
 echo ""
-read -r -p "Install launchd schedule (6 AM + 6 PM daily, poll every 5 min, keepalive every 5h)? [y/N] " REPLY
+read -r -p "Install launchd schedule (6 AM + 6 PM daily, poll every 5 min)? [y/N] " REPLY
 if [[ "${REPLY,,}" == "y" || "${REPLY,,}" == "yes" ]]; then
   chmod +x scripts/install_launchd.sh
   ./scripts/install_launchd.sh

@@ -1,6 +1,7 @@
 import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { pipelineSettings, searchProfiles } from "@/lib/db/schema";
+import { DEFAULT_JOB_BOARDS, resolveJobBoards } from "@/lib/job-boards";
 
 const DEFAULT_SEARCHES = [
   { name: "HR Director", searchTerm: "HR Director", sortOrder: 0 },
@@ -57,6 +58,7 @@ export async function getOrCreateSettings() {
         focusCity: "West Palm Beach",
         focusCities: ["West Palm Beach"],
         notificationEmail: "hello@proventheory.co",
+        jobBoards: [...DEFAULT_JOB_BOARDS],
       })
       .returning();
   }
@@ -74,6 +76,15 @@ export async function getOrCreateSettings() {
   }
 
   await dedupeSearchProfiles();
+
+  const boards = resolveJobBoards(settings.jobBoards);
+  if (!settings.jobBoards?.length) {
+    [settings] = await db
+      .update(pipelineSettings)
+      .set({ jobBoards: boards, updatedAt: new Date() })
+      .where(eq(pipelineSettings.id, settings.id))
+      .returning();
+  }
 
   return settings;
 }
@@ -196,9 +207,10 @@ export async function buildPipelineConfig() {
       focus_counties: normalizeList(settings.focusCounties),
       notification_email: settings.notificationEmail,
       geo_label: zones.map((z) => z.label).join("; "),
+      job_boards: resolveJobBoards(settings.jobBoards),
     },
     searches,
-    boards: ["indeed", "google"],
+    boards: resolveJobBoards(settings.jobBoards),
     target_titles: targetTitles,
     target_seniorities: targetSeniorities,
     enrichment: {

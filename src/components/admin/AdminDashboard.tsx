@@ -4,6 +4,11 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { GeographicScope, PipelineSettings, SearchProfile } from "@/lib/db/schema";
 import {
+  JOB_BOARD_OPTIONS,
+  resolveJobBoards,
+  type JobBoardId,
+} from "@/lib/job-boards";
+import {
   getCitiesForState,
   getCountiesForState,
   US_STATES,
@@ -97,6 +102,7 @@ export function AdminDashboard({
     focus_cities: initialCities,
     focus_counties: initialCounties,
     notification_email: settings.notificationEmail,
+    job_boards: resolveJobBoards(settings.jobBoards),
   });
   const [profiles, setProfiles] = useState(initialProfiles);
   const [message, setMessage] = useState("");
@@ -112,6 +118,10 @@ export function AdminDashboard({
   );
 
   async function saveSettings() {
+    if (form.job_boards.length === 0) {
+      setMessage("Select at least one job board.");
+      return;
+    }
     setSaving(true);
     const res = await fetch("/api/admin/settings", {
       method: "PUT",
@@ -129,12 +139,6 @@ export function AdminDashboard({
     setMessage(data.message || (res.ok ? "Run requested." : "Failed."));
   }
 
-  async function triggerContactOut() {
-    const res = await fetch("/api/admin/trigger-contactout", { method: "POST" });
-    const data = await res.json();
-    setMessage(data.message || (res.ok ? "ContactOut sync requested." : "Failed."));
-  }
-
   async function toggleProfile(id: string, isActive: boolean) {
     await fetch("/api/admin/search-profiles", {
       method: "PUT",
@@ -144,6 +148,15 @@ export function AdminDashboard({
     setProfiles((p) =>
       p.map((x) => (x.id === id ? { ...x, isActive } : x)),
     );
+  }
+
+  function toggleJobBoard(id: JobBoardId) {
+    setForm((prev) => {
+      const selected = prev.job_boards.includes(id)
+        ? prev.job_boards.filter((b) => b !== id)
+        : [...prev.job_boards, id];
+      return { ...prev, job_boards: selected };
+    });
   }
 
   async function logout() {
@@ -254,10 +267,48 @@ export function AdminDashboard({
         </button>
       </section>
 
+      <section className="border rounded-xl p-5 space-y-4 dark:border-gray-800">
+        <h2 className="font-semibold text-lg">Job boards</h2>
+        <p className="text-sm text-gray-500">
+          Sources scraped at 6 AM and 6 PM (via JobSpy on your home Mac). Toggle
+          boards to A/B which sources produce net-new companies — no deploy needed.
+        </p>
+        <ul className="space-y-2">
+          {JOB_BOARD_OPTIONS.map((board) => (
+            <li
+              key={board.id}
+              className="flex items-start gap-3 text-sm border rounded-lg px-3 py-2 dark:border-gray-800"
+            >
+              <input
+                id={`board-${board.id}`}
+                type="checkbox"
+                className="mt-1"
+                checked={form.job_boards.includes(board.id)}
+                onChange={() => toggleJobBoard(board.id)}
+              />
+              <label htmlFor={`board-${board.id}`} className="cursor-pointer">
+                <span className="font-medium">{board.label}</span>
+                <span className="block text-xs text-gray-500 mt-0.5">
+                  {board.description}
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+        <button
+          onClick={saveSettings}
+          disabled={saving}
+          className="bg-gray-900 text-white dark:bg-white dark:text-gray-900 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+        >
+          {saving ? "Saving…" : "Save job boards"}
+        </button>
+      </section>
+
       <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Job title searches</h2>
         <p className="text-sm text-gray-500">
-          Active searches run in your selected geographic area at 6 AM and 6 PM daily.
+          Active searches run in your selected geographic area and job boards at 6 AM
+          and 6 PM daily.
         </p>
         <ul className="space-y-2">
           {profiles.map((p) => (
@@ -283,19 +334,15 @@ export function AdminDashboard({
         <h2 className="font-semibold text-lg">Run pipeline</h2>
         <p className="text-sm text-gray-500">
           Trigger a scrape from your phone or browser. Your home Mac worker polls
-          every 5 minutes and runs when requested.
+          every 5 minutes and runs when requested. ContactOut personal email/mobile
+          enrichment runs via API during each pipeline run and from the Enrich button
+          on company cards.
         </p>
         <button
           onClick={triggerRun}
           className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800"
         >
           Run now
-        </button>
-        <button
-          onClick={triggerContactOut}
-          className="bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-800 ml-2"
-        >
-          Sync ContactOut phones
         </button>
         {settings.lastRunAt && (
           <p className="text-xs text-gray-400">

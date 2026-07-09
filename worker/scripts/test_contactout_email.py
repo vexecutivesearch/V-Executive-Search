@@ -21,7 +21,6 @@ from src.contact_phones import contact_phones_for_display, merge_sourced_phones,
 from src.crm_config import fetch_pipeline_config  # noqa: E402
 from src.email_report import send_daily_report  # noqa: E402
 from src.enrich.contactout import get_contactout_client
-from src.enrich.contactout_hybrid import api_phone_credits_exhausted, mark_api_phone_locked
 
 logger = logging.getLogger(__name__)
 
@@ -80,14 +79,8 @@ def main() -> int:
 
     client = get_contactout_client()
     if not client.is_configured:
-        logger.error(
-            "ContactOut not configured — set CONTACTOUT_API_KEY and/or run contactout_login.py"
-        )
+        logger.error("ContactOut not configured — set CONTACTOUT_API_KEY in worker/.env")
         return 1
-
-    # API phone credits are exhausted on this key; ensure dashboard fallback is active.
-    if os.environ.get("CONTACTOUT_API_KEY"):
-        mark_api_phone_locked()
 
     contacts = fetch_contacts(args.names)
     if not contacts:

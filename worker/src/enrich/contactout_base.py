@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 
@@ -21,16 +20,11 @@ def normalize_linkedin(url: str) -> str:
     return url
 
 
-def get_contactout_mode() -> str:
-    return os.environ.get("CONTACTOUT_MODE", "auto").strip().lower()
-
-
 def get_contactout_client():
-    """Hybrid client: API when available, dashboard fallback on Mac when not."""
-    from src.enrich.contactout_hybrid import ContactOutHybridClient
+    """ContactOut API client (LinkedIn URL lookup only — no browser automation)."""
+    from src.enrich.contactout_api import ContactOutApiClient
 
-    return ContactOutHybridClient()
+    return ContactOutApiClient()
 
 
-# Backward-compatible alias used across the worker.
 ContactOutClient = get_contactout_client

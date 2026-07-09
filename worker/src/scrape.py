@@ -11,6 +11,22 @@ from src.models import JobListing
 
 logger = logging.getLogger(__name__)
 
+ALLOWED_BOARDS = frozenset(
+    {"indeed", "google", "linkedin", "zip_recruiter", "glassdoor"}
+)
+DEFAULT_BOARDS = ["indeed", "google", "linkedin", "zip_recruiter"]
+
+
+def normalize_boards(boards: list[str] | None) -> list[str]:
+    if not boards:
+        return list(DEFAULT_BOARDS)
+    out: list[str] = []
+    for raw in boards:
+        board = str(raw).strip().lower()
+        if board in ALLOWED_BOARDS and board not in out:
+            out.append(board)
+    return out or list(DEFAULT_BOARDS)
+
 
 def _parse_date(value: Any) -> datetime | None:
     if value is None or (isinstance(value, float) and pd.isna(value)):
@@ -47,7 +63,8 @@ def _normalize_listing(row: pd.Series, search_name: str, board: str) -> JobListi
 
 def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
     name = search.get("name", "unnamed")
-    logger.info("Scraping search: %s", name)
+    boards = normalize_boards(boards)
+    logger.info("Scraping search: %s (boards=%s)", name, ",".join(boards))
 
     kwargs: dict[str, Any] = {
         "site_name": boards,
@@ -56,6 +73,7 @@ def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
         "results_wanted": search.get("results_wanted", 50),
         "hours_old": search.get("hours_old", 24),
         "country_indeed": search.get("country_indeed", "USA"),
+        "linkedin_fetch_description": False,
     }
 
     if search.get("google_search_term"):
@@ -87,7 +105,8 @@ def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
 
 
 def scrape_all(config: dict[str, Any]) -> list[JobListing]:
-    boards = config.get("boards", ["indeed", "google", "zip_recruiter"])
+    boards = normalize_boards(config.get("boards"))
+    logger.info("Job boards enabled: %s", ", ".join(boards))
     all_listings: list[JobListing] = []
 
     for search in config.get("searches", []):

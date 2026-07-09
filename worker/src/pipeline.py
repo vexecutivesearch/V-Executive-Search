@@ -177,6 +177,7 @@ def run_pipeline(
     use_waterfall: bool = False,
     config_path: Path | None = None,
     limit: int | None = None,
+    include_existing: bool = False,
 ) -> PipelineResult:
     run_date = business_today()
     config = load_config(config_path)
@@ -190,21 +191,6 @@ def run_pipeline(
     enrich_phone = enrichment_cfg.get("enrich_phone", False)
     daily_credit_cap = enrichment_cfg.get("daily_credit_cap", 100)
     provider_name = enrichment_cfg.get("provider", "apollo")
-
-    if not dry_run:
-        try:
-            import sys
-            from src.enrich.contactout_session import prepare_for_pipeline
-
-            if sys.platform == "darwin":
-                co_status = prepare_for_pipeline()
-                if co_status.value == "degraded":
-                    logger.warning(
-                        "ContactOut unavailable — continuing with Apollo-only; "
-                        "phones will backfill when session is restored"
-                    )
-        except Exception as exc:
-            logger.warning("ContactOut session prep failed (non-fatal): %s", exc)
 
     result = PipelineResult(
         run_date=run_date,
@@ -235,13 +221,16 @@ def run_pipeline(
 
     crm = CRMClient()
     existing_domains: set[str] = set()
-    if crm.is_configured and not skip_crm:
+    if crm.is_configured and not skip_crm and not include_existing:
         domains_to_check = [c.domain for c in companies if c.domain]
         existing_domains = crm.get_existing_domains(domains_to_check)
 
     companies, skipped = filter_existing_companies(companies, existing_domains)
     result.companies_skipped_existing = skipped
-    logger.info("Net-new companies after CRM skip: %d (skipped %d)", len(companies), skipped)
+    if include_existing:
+        logger.info("Including all %d companies (CRM skip disabled)", len(companies))
+    else:
+        logger.info("Net-new companies after CRM skip: %d (skipped %d)", len(companies), skipped)
 
     if limit is not None:
         companies = companies[:limit]
@@ -261,7 +250,7 @@ def run_pipeline(
     use_contactout = client.is_configured
     effective_provider = provider_name
     if use_waterfall or use_contactout:
-        effective_provider = "apollo+contactout (waterfall)"
+        effective_provider = "apollo+contactout (API)"
     logger.info("=== Stage 3: Enriching contacts via %s ===", effective_provider)
     if use_waterfall or use_contactout:
         provider = WaterfallProvider()

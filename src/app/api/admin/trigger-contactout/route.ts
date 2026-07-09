@@ -22,6 +22,6 @@ export async function POST() {
   return NextResponse.json({
     ok: true,
     message:
-      "ContactOut sync requested. Your home Mac worker will open Chrome for login if needed and sync phones within 5 minutes.",
+      "ContactOut sync requested. Contacts are enriched via the ContactOut API during the daily pipeline and the Enrich button in the CRM.",
   });
 }

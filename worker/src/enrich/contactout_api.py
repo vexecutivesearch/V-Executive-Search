@@ -9,6 +9,7 @@ import requests
 
 from src.contact_phones import extract_contactout_phones
 from src.enrich.contactout_base import ContactOutResult, normalize_linkedin
+from src.enrich.contactout_rate_limit import is_rate_limited, mark_rate_limited
 from src.enrich.contactout_samples import is_contactout_sample_response
 
 logger = logging.getLogger(__name__)
@@ -138,8 +139,11 @@ class ContactOutApiClient:
     def is_configured(self) -> bool:
         return bool(self._api_key)
 
-    def enrich_linkedin(self, linkedin_url: str) -> ContactOutResult | None:
+    def enrich_linkedin(self, linkedin_url: str, **_kwargs: Any) -> ContactOutResult | None:
         if not self._api_key:
+            return None
+        if is_rate_limited():
+            logger.warning("ContactOut API skipped — rate limited")
             return None
 
         url = normalize_linkedin(linkedin_url)
@@ -149,42 +153,43 @@ class ContactOutApiClient:
             email_resp = requests.get(
                 CONTACTOUT_LINKEDIN_URL,
                 headers=headers,
-                params={
-                    "profile": url,
-                    "email_type": "personal,work",
-                },
+                params={"profile": url, "email_type": "personal,work"},
                 timeout=30,
             )
             if email_resp.status_code == 404:
                 logger.info("ContactOut API: no match for %s", url)
                 return ContactOutResult()
+            if email_resp.status_code == 429:
+                mark_rate_limited()
+                logger.warning("ContactOut API 429 for %s", url)
+                return None
             email_resp.raise_for_status()
             base = _parse_payload(email_resp.json())
             if base.phone_api_locked:
-                logger.warning("ContactOut API sample response for %s", url)
+                logger.warning(
+                    "ContactOut API placeholder response for %s — check plan/credits",
+                    url,
+                )
                 return None
 
             phone_resp = requests.get(
                 CONTACTOUT_LINKEDIN_URL,
                 headers=headers,
-                params={
-                    "profile": url,
-                    "include_phone": "true",
-                    "email_type": "none",
-                },
+                params={"profile": url, "include_phone": "true", "email_type": "none"},
                 timeout=30,
             )
             if phone_resp.status_code == 404:
+                self.credits_used += base.credits_used
+                return base if (base.personal_email or base.work_emails) else None
+            if phone_resp.status_code == 429:
+                mark_rate_limited()
                 self.credits_used += base.credits_used
                 return base if (base.personal_email or base.work_emails) else None
 
             phone_resp.raise_for_status()
             phone_result = _parse_payload(phone_resp.json())
             if phone_result.phone_api_locked:
-                logger.info(
-                    "ContactOut API phone credits unavailable for %s — emails only",
-                    url,
-                )
+                logger.info("ContactOut API phone credits unavailable for %s — emails only", url)
                 self.credits_used += base.credits_used
                 return base if (base.personal_email or base.work_emails) else None
 
@@ -196,6 +201,11 @@ class ContactOutApiClient:
             detail = ""
             if hasattr(exc, "response") and exc.response is not None:
                 detail = exc.response.text[:200]
+                if exc.response.status_code == 429:
+                    mark_rate_limited()
             logger.warning("ContactOut API failed for %s: %s %s", url, exc, detail)
 
         return None
+
+    def close(self) -> None:
+        pass

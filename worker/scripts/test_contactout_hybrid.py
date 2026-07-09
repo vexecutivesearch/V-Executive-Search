@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test ContactOut hybrid enrichment on specific contacts (API → dashboard fallback)."""
+"""Test ContactOut API enrichment on specific LinkedIn profiles."""
 from __future__ import annotations
 
 import logging
@@ -13,8 +13,6 @@ sys.path.insert(0, str(WORKER_ROOT))
 load_dotenv(WORKER_ROOT / ".env")
 
 from src.enrich.contactout import get_contactout_client  # noqa: E402
-from src.enrich.contactout_dashboard import has_saved_session, session_file_path  # noqa: E402
-from src.enrich.contactout_hybrid import mark_api_phone_locked  # noqa: E402
 
 PROFILES = [
     ("Ryan Cronin", "http://www.linkedin.com/in/ryan-cronin-3b422a32"),
@@ -26,34 +24,24 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     logger = logging.getLogger(__name__)
 
-    session = session_file_path()
-    logger.info("ContactOut session: %s (ready=%s)", session, has_saved_session())
-    if not has_saved_session():
-        logger.warning("Run once: python scripts/contactout_login.py")
-
-    mark_api_phone_locked()
     client = get_contactout_client()
     if not client.is_configured:
-        logger.error("ContactOut not configured (API key and/or dashboard login required)")
+        logger.error("Set CONTACTOUT_API_KEY in worker/.env")
         return 1
 
     ok = 0
-    try:
-        for name, url in PROFILES:
-            logger.info("--- %s ---", name)
-            result = client.enrich_linkedin(url)
-            if not result:
-                logger.warning("  No data returned")
-                continue
-            ok += 1
-            logger.info("  personal_email: %s", result.personal_email)
-            logger.info("  work_emails: %s", result.work_emails)
-            logger.info("  phones: %s", result.phones)
-    finally:
-        if hasattr(client, "close"):
-            client.close()
+    for name, url in PROFILES:
+        logger.info("--- %s ---", name)
+        result = client.enrich_linkedin(url)
+        if not result:
+            logger.warning("  No data returned")
+            continue
+        ok += 1
+        logger.info("  personal_email: %s", result.personal_email)
+        logger.info("  work_emails: %s", result.work_emails)
+        logger.info("  phones: %s", result.phones)
 
-    logger.info("Done — %d/%d profiles enriched", ok, len(PROFILES))
+    logger.info("Done — %d/%d profiles enriched via API", ok, len(PROFILES))
     return 0 if ok else 1
 
 
