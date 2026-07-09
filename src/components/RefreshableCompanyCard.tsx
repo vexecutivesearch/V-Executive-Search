@@ -6,8 +6,10 @@ import { CompanyCard, CompanyCardData } from "./CompanyCard";
 
 export function RefreshableCompanyCard({
   company: initial,
+  showLocationDisclaimer = false,
 }: {
   company: CompanyCardData;
+  showLocationDisclaimer?: boolean;
 }) {
   const router = useRouter();
   const [company, setCompany] = useState(initial);
@@ -32,6 +34,10 @@ export function RefreshableCompanyCard({
   }
 
   return (
-    <CompanyCard company={company} onEnrichComplete={handleEnrichComplete} />
+    <CompanyCard
+      company={company}
+      onEnrichComplete={handleEnrichComplete}
+      showLocationDisclaimer={showLocationDisclaimer}
+    />
   );
 }

@@ -22,7 +22,7 @@ export default async function CompanyDetailPage({
       >
         ← Back to companies
       </Link>
-      <RefreshableCompanyCard company={company} />
+      <RefreshableCompanyCard company={company} showLocationDisclaimer />
 
       {company.jobListings.length > 1 && (
         <section className="mt-6">

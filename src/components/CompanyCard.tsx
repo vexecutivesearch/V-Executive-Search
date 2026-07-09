@@ -19,9 +19,12 @@ export interface CompanyCardData {
 export function CompanyCard({
   company,
   onEnrichComplete,
+  showLocationDisclaimer = false,
 }: {
   company: CompanyCardData;
   onEnrichComplete?: (company?: CompanyCardData) => void | Promise<void>;
+  /** Shown on detail pages only — Today's List uses a one-time top notice instead. */
+  showLocationDisclaimer?: boolean;
 }) {
   const primaryJob = company.jobListings[0];
   const jobLocation =
@@ -83,7 +86,7 @@ export function CompanyCard({
         </div>
       )}
 
-      {hasContacts && anyUnverified && jobLocation && (
+      {showLocationDisclaimer && hasContacts && anyUnverified && jobLocation && (
         <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
           Contacts are matched by company and title, not guaranteed to be the
           hiring manager for <strong>{jobLocation}</strong>. Verify before
