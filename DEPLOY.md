@@ -7,18 +7,36 @@
 - [x] Database schema pushed
 - [x] Next.js app at **repo root** (no subdirectory config needed)
 
-## Vercel deploy
+## Vercel deploy (start fresh if you see 404)
 
-1. Go to [vercel.com/dashboard](https://vercel.com/dashboard) → your project
-2. **Settings → General → Root Directory** → leave **empty** (repo root)
-3. **Framework Preset** → **Next.js**
-4. **Output Directory** → leave **empty**
-5. **Settings → Environment Variables** (Production):
-   - `DATABASE_URL` = Neon connection string
-   - `WORKER_API_KEY` = shared secret (same as `worker/.env` `CRM_API_KEY`)
-6. **Deployments → Redeploy**
+The 404 means **no successful deployment exists** on that domain yet. Do this:
 
-If you previously set Root Directory to `crm`, **clear it** — the app now lives at repo root.
+### Option A — New project (recommended)
+
+1. [vercel.com/new](https://vercel.com/new) → Import **proventheory/V-Executive-Search**
+2. **Root Directory** → leave **empty** (app is at repo root, NOT `crm`)
+3. **Framework** → Next.js (auto-detected)
+4. **Environment Variables** → add before first deploy:
+   - `DATABASE_URL`
+   - `WORKER_API_KEY`
+5. Click **Deploy**
+6. Use the URL Vercel gives you (e.g. `https://v-executive-search-xxxx.vercel.app`)
+
+### Option B — Fix existing project
+
+1. [vercel.com/dashboard](https://vercel.com/dashboard) → your project → **Settings → General**
+2. **Root Directory** → **clear it** (must be empty, not `crm`)
+3. **Framework Preset** → Next.js
+4. **Output Directory** → empty
+5. **Settings → Environment Variables** → confirm `DATABASE_URL` and `WORKER_API_KEY`
+6. **Deployments** → **Redeploy**
+
+### Verify
+
+After a successful deploy, these should return **200** (not 404):
+
+- `https://YOUR-URL.vercel.app/today`
+- `https://YOUR-URL.vercel.app/companies`
 
 ## Local env
 
