@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "V Executive Search CRM",
+  title: "allthejobs",
   description: "Daily recruiter outreach list",
 };
 

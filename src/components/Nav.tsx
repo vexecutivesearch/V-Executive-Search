@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 
 const NAV = [
@@ -12,8 +13,19 @@ export function Nav() {
   return (
     <header className="border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-950/80 backdrop-blur sticky top-0 z-10">
       <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3 flex flex-wrap items-center justify-between gap-2">
-        <Link href="/today" className="font-semibold text-base sm:text-lg tracking-tight shrink-0">
-          V Executive Search
+        <Link
+          href="/today"
+          className="shrink-0 rounded-md overflow-hidden bg-black leading-none"
+          aria-label="allthejobs home"
+        >
+          <Image
+            src="/allthejobs-logo.png"
+            alt="allthejobs"
+            width={160}
+            height={32}
+            className="h-8 w-auto"
+            priority
+          />
         </Link>
         <nav className="flex flex-wrap justify-end gap-0.5 sm:gap-1">
           {NAV.map((item) => (
