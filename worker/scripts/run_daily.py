@@ -58,6 +58,7 @@ def main() -> int:
     parser.add_argument("--skip-crm", action="store_true", help="Skip CRM API calls")
     parser.add_argument("--waterfall", action="store_true", help="Use Apollo + Hunter email fallback")
     parser.add_argument("--config", type=Path, default=None, help="Path to searches.yaml")
+    parser.add_argument("--limit", type=int, default=None, help="Max companies to enrich (for testing)")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -82,6 +83,7 @@ def main() -> int:
             skip_crm=args.skip_crm,
             use_waterfall=args.waterfall,
             config_path=args.config,
+            limit=args.limit,
         )
     except Exception as exc:
         logger.exception("Pipeline crashed: %s", exc)

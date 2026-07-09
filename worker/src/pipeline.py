@@ -14,6 +14,7 @@ from src.enrich import get_provider
 from src.enrich.waterfall import WaterfallProvider
 from src.models import EnrichedCompany, PipelineResult
 from src.scrape import scrape_all
+from src.timezone import business_today
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +135,9 @@ def run_pipeline(
     skip_crm: bool = False,
     use_waterfall: bool = False,
     config_path: Path | None = None,
+    limit: int | None = None,
 ) -> PipelineResult:
-    run_date = date.today()
+    run_date = business_today()
     config = load_config(config_path)
     enrichment_cfg = config.get("enrichment", {})
 
@@ -182,6 +184,10 @@ def run_pipeline(
     companies, skipped = filter_existing_companies(companies, existing_domains)
     result.companies_skipped_existing = skipped
     logger.info("Net-new companies after CRM skip: %d (skipped %d)", len(companies), skipped)
+
+    if limit is not None:
+        companies = companies[:limit]
+        logger.info("Limited to %d companies for this run", len(companies))
 
     if dry_run:
         logger.info("Dry run — stopping before enrichment")

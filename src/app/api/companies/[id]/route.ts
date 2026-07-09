@@ -4,6 +4,9 @@ import { db } from "@/lib/db";
 import { companies } from "@/lib/db/schema";
 import { CompanyStatus } from "@/lib/db/schema";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 const VALID_STATUSES = new Set<string>([
   "new",
   "contacted",

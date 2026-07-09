@@ -4,6 +4,9 @@ import { verifyWorkerAuth, unauthorized } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { companies } from "@/lib/db/schema";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
   if (!verifyWorkerAuth(request)) {
     return unauthorized();

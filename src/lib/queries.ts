@@ -8,9 +8,10 @@ import {
   CompanyStatus,
 } from "@/lib/db/schema";
 import { CompanyCardData } from "@/components/CompanyCard";
+import { businessToday } from "@/lib/timezone";
 
 export async function getTodayCompanies(): Promise<CompanyCardData[]> {
-  const today = new Date().toISOString().split("T")[0];
+  const today = businessToday();
 
   const rows = await db
     .select()

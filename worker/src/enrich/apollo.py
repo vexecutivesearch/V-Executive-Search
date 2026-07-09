@@ -91,7 +91,16 @@ class ApolloProvider:
                     self._credits_used += PHONE_CREDIT_COST - EMAIL_CREDIT_COST
             return person
         except requests.RequestException as exc:
-            logger.error("Apollo enrich failed for %s: %s", person_id, exc)
+            detail = ""
+            if hasattr(exc, "response") and exc.response is not None:
+                try:
+                    detail = exc.response.text[:200]
+                except Exception:
+                    pass
+            if "insufficient credits" in detail.lower():
+                logger.error("Apollo out of credits — upgrade plan or add credits")
+            else:
+                logger.error("Apollo enrich failed for %s: %s %s", person_id, exc, detail)
             return None
 
     def enrich_company(

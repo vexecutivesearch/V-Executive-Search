@@ -9,6 +9,9 @@ import {
   jobListings,
 } from "@/lib/db/schema";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 interface IngestContact {
   name: string;
   title?: string;
