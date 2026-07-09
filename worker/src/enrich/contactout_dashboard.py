@@ -58,9 +58,11 @@ class ContactOutDashboardClient:
     def is_configured(self) -> bool:
         if sys.platform != "darwin":
             return False
-        if os.environ.get("CONTACTOUT_MODE", "").strip().lower() != "dashboard":
+        mode = os.environ.get("CONTACTOUT_MODE", "auto").strip().lower()
+        if mode == "api":
             return False
-        return browser_profile_dir().exists()
+        # Profile is created on first launch; login is saved after contactout_login.py
+        return True
 
     def close(self) -> None:
         if self._context:

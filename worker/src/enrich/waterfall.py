@@ -7,7 +7,7 @@ from typing import Any
 import requests
 
 from src.enrich.apollo import ApolloProvider
-from src.enrich.contactout import get_contactout_client, get_contactout_mode, get_contactout_mode
+from src.enrich.contactout import get_contactout_client
 from src.enrich.provider import EnrichmentProvider
 from src.contact_phones import merge_sourced_phones, pick_primary_from_phones
 from src.phone_utils import apply_company_phone_dedupe, is_personal_email
@@ -63,10 +63,6 @@ class WaterfallProvider:
         self._credits_used = 0
 
     def _apply_contactout(self, contact: ContactRecord) -> None:
-        if get_contactout_mode() == "dashboard":
-            # Dashboard lookups are throttled on the Mac via contactout_dashboard_sync.py
-            return
-
         if not contact.linkedin_url or not self._contactout.is_configured:
             return
 
@@ -74,7 +70,7 @@ class WaterfallProvider:
         if not result:
             return
 
-        self._credits_used += self._contactout.credits_used
+        self._credits_used += result.credits_used
 
         if contact.email and not is_personal_email(contact.email):
             contact.work_email = contact.email

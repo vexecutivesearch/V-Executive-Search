@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 .venv/
 .contactout-browser/
+.contactout-api-phone-locked
 *.egg-info/
 dist/
 build/

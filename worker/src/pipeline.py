@@ -243,7 +243,7 @@ def run_pipeline(
 
     # Stage 3: Enrich
     client = get_contactout_client()
-    use_contactout = client.is_configured or bool(os.environ.get("CONTACTOUT_API_KEY"))
+    use_contactout = client.is_configured
     effective_provider = provider_name
     if use_waterfall or use_contactout:
         effective_provider = "apollo+contactout (waterfall)"

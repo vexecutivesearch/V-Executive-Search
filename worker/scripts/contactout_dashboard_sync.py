@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mac-only: enrich CRM contacts via ContactOut dashboard (unlimited plan workaround)."""
+"""Mac-only: fill ContactOut phones via dashboard when API key missing or phone credits exhausted."""
 from __future__ import annotations
 
 import logging
@@ -19,7 +19,9 @@ from src.contact_phones import (  # noqa: E402
     merge_sourced_phones,
     pick_primary_from_phones,
 )
-from src.enrich.contactout import get_contactout_client  # noqa: E402
+from src.enrich.contactout_api import ContactOutApiClient  # noqa: E402
+from src.enrich.contactout_dashboard import ContactOutDashboardClient  # noqa: E402
+from src.enrich.contactout_hybrid import api_phone_credits_exhausted  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,18 @@ def _crm_headers() -> dict[str, str]:
 
 def _crm_base() -> str:
     return (os.environ.get("CRM_API_URL") or "").rstrip("/")
+
+
+def should_run_dashboard_sync() -> bool:
+    dashboard = ContactOutDashboardClient()
+    if not dashboard.is_configured:
+        return False
+    if not browser_profile_dir().exists():
+        return False
+    api = ContactOutApiClient()
+    if not api.is_configured:
+        return True
+    return api_phone_credits_exhausted()
 
 
 def fetch_pending_contacts(limit: int) -> list[dict]:
@@ -57,11 +71,11 @@ def patch_contact(contact_id: str, payload: dict) -> None:
 
 
 def run_dashboard_sync(*, limit: int = 10) -> int:
-    if os.environ.get("CONTACTOUT_MODE", "").lower() != "dashboard":
-        logger.info("Skipping ContactOut dashboard sync (CONTACTOUT_MODE != dashboard)")
+    if not should_run_dashboard_sync():
+        logger.debug("Skipping ContactOut dashboard sync (API covers lookups)")
         return 0
 
-    client = get_contactout_client()
+    client = ContactOutDashboardClient()
     if not client.is_configured:
         logger.warning(
             "ContactOut dashboard not ready — run: python scripts/contactout_login.py"
@@ -116,8 +130,7 @@ def run_dashboard_sync(*, limit: int = 10) -> int:
             )
             updated += 1
     finally:
-        if hasattr(client, "close"):
-            client.close()
+        client.close()
 
     logger.info("ContactOut dashboard sync updated %d contact(s)", updated)
     return updated

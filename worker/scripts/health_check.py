@@ -39,14 +39,14 @@ def main() -> int:
     check("RESEND_API_KEY", bool(resend), "set (daily email)" if resend else "optional — email disabled")
     co_mode = os.environ.get("CONTACTOUT_MODE", "api")
     co = os.environ.get("CONTACTOUT_API_KEY")
-    if co_mode == "dashboard":
+    if co_mode == "dashboard" or co_mode == "auto":
         from src.enrich.contactout_dashboard import browser_profile_dir
 
         profile = browser_profile_dir()
         check(
-            "CONTACTOUT_MODE=dashboard",
+            "ContactOut dashboard profile",
             profile.exists(),
-            f"profile at {profile}" if profile.exists() else "run contactout_login.py",
+            f"ready at {profile}" if profile.exists() else "run: python scripts/contactout_login.py",
         )
     else:
         check(

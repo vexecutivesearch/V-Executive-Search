@@ -22,19 +22,14 @@ def normalize_linkedin(url: str) -> str:
 
 
 def get_contactout_mode() -> str:
-    return os.environ.get("CONTACTOUT_MODE", "api").strip().lower()
+    return os.environ.get("CONTACTOUT_MODE", "auto").strip().lower()
 
 
 def get_contactout_client():
-    """API client on Vercel; dashboard scraper on Mac mini when CONTACTOUT_MODE=dashboard."""
-    if get_contactout_mode() == "dashboard":
-        from src.enrich.contactout_dashboard import ContactOutDashboardClient
+    """Hybrid client: API when available, dashboard fallback on Mac when not."""
+    from src.enrich.contactout_hybrid import ContactOutHybridClient
 
-        return ContactOutDashboardClient()
-
-    from src.enrich.contactout_api import ContactOutApiClient
-
-    return ContactOutApiClient()
+    return ContactOutHybridClient()
 
 
 # Backward-compatible alias used across the worker.
