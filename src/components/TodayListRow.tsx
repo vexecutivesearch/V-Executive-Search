@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import type { CompanyCardData } from "./CompanyCard";
 import { ContactRow } from "./ContactRow";
 import { EnrichButton } from "./EnrichButton";
@@ -20,7 +19,6 @@ export function TodayListRow({
   company: CompanyCardData;
   defaultExpanded?: boolean;
 }) {
-  const router = useRouter();
   const [company, setCompany] = useState(initial);
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [enrichNotice, setEnrichNotice] = useState<string | null>(null);
@@ -57,7 +55,6 @@ export function TodayListRow({
     await refreshCompany(updated);
     setExpanded(true);
     if (summary) setEnrichNotice(summary);
-    router.refresh();
   }
 
   return (
@@ -196,7 +193,13 @@ export function TodayListRow({
         <div className="px-4 pb-4 pt-1 bg-gray-50/80 dark:bg-gray-900/40 border-t border-gray-100 dark:border-gray-800">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3 sm:hidden">
             <StatusBadge status={company.status} />
-            <StatusSelect companyId={company.id} currentStatus={company.status} />
+            <StatusSelect
+              companyId={company.id}
+              currentStatus={company.status}
+              onStatusChange={(status) =>
+                setCompany((c) => ({ ...c, status }))
+              }
+            />
           </div>
 
           {primaryJob && (
@@ -239,7 +242,13 @@ export function TodayListRow({
           )}
 
           <div className="hidden sm:flex items-center gap-2 mt-3">
-            <StatusSelect companyId={company.id} currentStatus={company.status} />
+            <StatusSelect
+              companyId={company.id}
+              currentStatus={company.status}
+              onStatusChange={(status) =>
+                setCompany((c) => ({ ...c, status }))
+              }
+            />
           </div>
         </div>
       )}

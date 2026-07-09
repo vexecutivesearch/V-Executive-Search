@@ -26,9 +26,11 @@ export function StatusBadge({ status }: { status: CompanyStatus }) {
 export function StatusSelect({
   companyId,
   currentStatus,
+  onStatusChange,
 }: {
   companyId: string;
   currentStatus: CompanyStatus;
+  onStatusChange?: (status: CompanyStatus) => void;
 }) {
   const router = useRouter();
   const [status, setStatus] = useState(currentStatus);
@@ -48,7 +50,8 @@ export function StatusSelect({
         setStatus(prev);
         return;
       }
-      router.refresh();
+      onStatusChange?.(newStatus);
+      if (!onStatusChange) router.refresh();
     } catch {
       setStatus(prev);
     } finally {

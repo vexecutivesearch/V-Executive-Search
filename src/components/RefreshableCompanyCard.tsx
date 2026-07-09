@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { CompanyCard, CompanyCardData } from "./CompanyCard";
 
 export function RefreshableCompanyCard({
@@ -11,7 +10,6 @@ export function RefreshableCompanyCard({
   company: CompanyCardData;
   showLocationDisclaimer?: boolean;
 }) {
-  const router = useRouter();
   const [company, setCompany] = useState(initial);
 
   useEffect(() => {
@@ -30,13 +28,13 @@ export function RefreshableCompanyCard({
         setCompany(data.company);
       }
     }
-    router.refresh();
   }
 
   return (
     <CompanyCard
       company={company}
       onEnrichComplete={handleEnrichComplete}
+      onStatusChange={(status) => setCompany((c) => ({ ...c, status }))}
       showLocationDisclaimer={showLocationDisclaimer}
     />
   );

@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { formatDate } from "@/lib/utils";
 import Link from "next/link";
 import { EnrichButton } from "./EnrichButton";
@@ -18,8 +17,6 @@ export type JobRow = {
 };
 
 export function JobsTable({ jobs }: { jobs: JobRow[] }) {
-  const router = useRouter();
-
   return (
     <div className="overflow-x-auto border border-gray-200 dark:border-gray-800 rounded-xl">
       <table className="min-w-full text-sm">
@@ -70,9 +67,6 @@ export function JobsTable({ jobs }: { jobs: JobRow[] }) {
                   companyId={job.companyId}
                   contactCount={job.contactCount}
                   compact
-                  onEnrichComplete={async () => {
-                    router.refresh();
-                  }}
                 />
               </td>
             </tr>

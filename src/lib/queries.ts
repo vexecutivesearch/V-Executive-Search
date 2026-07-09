@@ -211,26 +211,45 @@ async function enrichCompanies(
   rows: (typeof companies.$inferSelect)[],
   geoSettings?: Awaited<ReturnType<typeof getGeoFocusSettings>>,
 ): Promise<CompanyCardData[]> {
+  if (rows.length === 0) return [];
+
   const settings = geoSettings ?? (await getGeoFocusSettings());
-  const result: CompanyCardData[] = [];
+  const companyIds = rows.map((c) => c.id);
 
-  for (const company of rows) {
-    const companyContacts = await db
-      .select()
-      .from(contacts)
-      .where(eq(contacts.companyId, company.id));
-
-    const listings = await db
+  const [allContacts, allListings] = await Promise.all([
+    db.select().from(contacts).where(inArray(contacts.companyId, companyIds)),
+    db
       .select()
       .from(jobListings)
-      .where(eq(jobListings.companyId, company.id))
-      .orderBy(desc(jobListings.createdAt));
+      .where(inArray(jobListings.companyId, companyIds))
+      .orderBy(desc(jobListings.createdAt)),
+  ]);
 
+  const contactsByCompany = new Map<string, Contact[]>();
+  for (const contact of allContacts) {
+    const list = contactsByCompany.get(contact.companyId) ?? [];
+    list.push(contact);
+    contactsByCompany.set(contact.companyId, list);
+  }
+
+  const listingsByCompany = new Map<
+    string,
+    (typeof jobListings.$inferSelect)[]
+  >();
+  for (const listing of allListings) {
+    const list = listingsByCompany.get(listing.companyId) ?? [];
+    list.push(listing);
+    listingsByCompany.set(listing.companyId, list);
+  }
+
+  return rows.map((company) => {
+    const companyContacts = contactsByCompany.get(company.id) ?? [];
+    const listings = listingsByCompany.get(company.id) ?? [];
     const inFocusListings = listings.filter((listing) =>
       jobLocationInFocus(listing.location, settings),
     );
 
-    result.push({
+    return {
       id: company.id,
       name: company.name,
       domain: company.domain,
@@ -239,8 +258,6 @@ async function enrichCompanies(
       firstSeen: company.firstSeen,
       contacts: applySharedLineFilter(companyContacts),
       jobListings: inFocusListings,
-    });
-  }
-
-  return result;
+    };
+  });
 }

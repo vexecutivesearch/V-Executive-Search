@@ -19,10 +19,12 @@ export interface CompanyCardData {
 export function CompanyCard({
   company,
   onEnrichComplete,
+  onStatusChange,
   showLocationDisclaimer = false,
 }: {
   company: CompanyCardData;
   onEnrichComplete?: (company?: CompanyCardData) => void | Promise<void>;
+  onStatusChange?: (status: CompanyStatus) => void;
   /** Shown on detail pages only — Today's List uses a one-time top notice instead. */
   showLocationDisclaimer?: boolean;
 }) {
@@ -62,7 +64,11 @@ export function CompanyCard({
             onEnrichComplete={onEnrichComplete}
           />
           <StatusBadge status={company.status} />
-          <StatusSelect companyId={company.id} currentStatus={company.status} />
+          <StatusSelect
+            companyId={company.id}
+            currentStatus={company.status}
+            onStatusChange={onStatusChange}
+          />
         </div>
       </div>
 

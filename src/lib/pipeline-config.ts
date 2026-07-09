@@ -73,9 +73,8 @@ export async function getOrCreateSettings() {
         sortOrder: s.sortOrder,
       })),
     );
+    await dedupeSearchProfiles();
   }
-
-  await dedupeSearchProfiles();
 
   const boards = resolveJobBoards(settings.jobBoards);
   if (!settings.jobBoards?.length) {

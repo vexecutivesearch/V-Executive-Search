@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useTransition } from "react";
 
 export function TodayDatePicker({
   selectedDate,
@@ -12,6 +13,7 @@ export function TodayDatePicker({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const [, startTransition] = useTransition();
   const isToday = selectedDate === currentBusinessDate;
 
   function navigate(date: string | null) {
@@ -22,7 +24,9 @@ export function TodayDatePicker({
       params.delete("date");
     }
     const qs = params.toString();
-    router.push(qs ? `${pathname}?${qs}` : pathname);
+    startTransition(() => {
+      router.push(qs ? `${pathname}?${qs}` : pathname);
+    });
   }
 
   return (

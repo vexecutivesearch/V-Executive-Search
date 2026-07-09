@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { parseJobLocation } from "@/lib/location-match";
 import {
   buildGeoZones,
@@ -104,7 +105,7 @@ export function focusGeoLabel(
     .join("; ");
 }
 
-export async function getGeoFocusSettings() {
+export const getGeoFocusSettings = cache(async () => {
   const { getOrCreateSettings } = await import("@/lib/pipeline-config");
   return getOrCreateSettings();
-}
+});

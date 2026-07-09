@@ -153,8 +153,9 @@ export function EnrichButton({
 
       if (onEnrichComplete) {
         await onEnrichComplete(company, summary);
+      } else {
+        router.refresh();
       }
-      router.refresh();
     } catch {
       const err = "Network error — could not reach enrich API";
       setMessage(err);

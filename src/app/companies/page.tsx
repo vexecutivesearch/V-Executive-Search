@@ -35,14 +35,17 @@ export default async function CompaniesPage({
   const filterStatus = FILTERS.find((f) => f.value === status)?.value;
 
   let companies;
-  let jobs;
+  let jobs: Awaited<ReturnType<typeof getInFocusJobListings>> = [];
   let geoLabel = "your focus area";
   try {
-    [companies, jobs, geoLabel] = await Promise.all([
+    const [companiesResult, geoLabelResult, jobsResult] = await Promise.all([
       getCompaniesByStatus(filterStatus, q),
-      getInFocusJobListings(),
       getTodayGeoLabel(),
+      view === "jobs" ? getInFocusJobListings() : Promise.resolve([]),
     ]);
+    companies = companiesResult;
+    geoLabel = geoLabelResult;
+    jobs = jobsResult;
   } catch {
     return (
       <div className="max-w-6xl mx-auto px-4 py-8">
@@ -65,8 +68,13 @@ export default async function CompaniesPage({
       <h1 className="text-2xl font-bold mb-1">Companies</h1>
       <p className="text-sm text-gray-400 mb-4">
         {geoLabel} · {companies.length}{" "}
-        {companies.length === 1 ? "company" : "companies"} · {jobs.length} job
-        {jobs.length === 1 ? "" : "s"}
+        {companies.length === 1 ? "company" : "companies"}
+        {view === "jobs" && (
+          <>
+            {" "}
+            · {jobs.length} job{jobs.length === 1 ? "" : "s"}
+          </>
+        )}
       </p>
 
       <div className="flex flex-wrap gap-2 mb-6">
