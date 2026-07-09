@@ -61,6 +61,40 @@ export async function getRecentRuns() {
     .limit(30);
 }
 
+export async function getMarketJobListings(searchName?: string) {
+  const rows = searchName
+    ? await db
+        .select({
+          listing: jobListings,
+          company: companies,
+        })
+        .from(jobListings)
+        .innerJoin(companies, eq(jobListings.companyId, companies.id))
+        .where(eq(jobListings.searchName, searchName))
+        .orderBy(desc(jobListings.postedAt), desc(jobListings.createdAt))
+    : await db
+        .select({
+          listing: jobListings,
+          company: companies,
+        })
+        .from(jobListings)
+        .innerJoin(companies, eq(jobListings.companyId, companies.id))
+        .orderBy(desc(jobListings.postedAt), desc(jobListings.createdAt));
+
+  return rows.map(({ listing, company }) => ({
+    id: listing.id,
+    title: listing.title,
+    board: listing.board,
+    url: listing.url,
+    location: listing.location,
+    searchName: listing.searchName,
+    postedAt: listing.postedAt,
+    companyId: company.id,
+    companyName: company.name,
+    companyDomain: company.domain,
+  }));
+}
+
 async function enrichCompanies(
   rows: (typeof companies.$inferSelect)[],
 ): Promise<CompanyCardData[]> {

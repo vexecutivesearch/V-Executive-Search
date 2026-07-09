@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { unauthorized, verifyWorkerAuth } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -44,6 +44,7 @@ interface IngestCompany {
 
 interface IngestPayload {
   run_date: string;
+  import_mode?: "pipeline" | "jobs_only";
   metadata?: {
     listings_scraped?: number;
     companies_found?: number;
@@ -54,6 +55,55 @@ interface IngestPayload {
     errors?: string[];
   };
   companies: IngestCompany[];
+}
+
+function normalizeCompanyKey(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .replace(
+      /\b(inc|incorporated|llc|l l c|corp|corporation|co|company|ltd|limited|plc|group|holdings)\b/gi,
+      "",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function findCompany(item: IngestCompany) {
+  const domain = item.domain?.toLowerCase().trim() || null;
+  if (domain) {
+    const [byDomain] = await db
+      .select()
+      .from(companies)
+      .where(eq(companies.domain, domain))
+      .limit(1);
+    if (byDomain) return byDomain;
+  }
+
+  const nameKey = normalizeCompanyKey(item.name);
+  if (!nameKey) return null;
+
+  const rows = await db
+    .select()
+    .from(companies)
+    .where(sql`lower(trim(${companies.name})) = ${item.name.trim().toLowerCase()}`)
+    .limit(1);
+  if (rows[0]) return rows[0];
+
+  const all = await db.select().from(companies);
+  return all.find((row) => normalizeCompanyKey(row.name) === nameKey) ?? null;
+}
+
+async function existingJobUrls(urls: string[]): Promise<Set<string>> {
+  const cleaned = urls.map((u) => u.trim()).filter(Boolean);
+  if (!cleaned.length) return new Set();
+
+  const rows = await db
+    .select({ url: jobListings.url })
+    .from(jobListings)
+    .where(inArray(jobListings.url, cleaned));
+
+  return new Set(rows.map((r) => r.url).filter(Boolean) as string[]);
 }
 
 export async function POST(request: NextRequest) {
@@ -69,6 +119,13 @@ export async function POST(request: NextRequest) {
   }
 
   const meta = payload.metadata ?? {};
+  const jobsOnly = payload.import_mode === "jobs_only";
+
+  const [existingRun] = await db
+    .select()
+    .from(dailyRuns)
+    .where(eq(dailyRuns.runDate, payload.run_date))
+    .limit(1);
 
   const [run] = await db
     .insert(dailyRuns)
@@ -85,8 +142,12 @@ export async function POST(request: NextRequest) {
     .onConflictDoUpdate({
       target: dailyRuns.runDate,
       set: {
-        listingsScraped: meta.listings_scraped ?? 0,
-        companiesFound: meta.companies_found ?? 0,
+        listingsScraped: jobsOnly
+          ? (existingRun?.listingsScraped ?? 0) + (meta.listings_scraped ?? 0)
+          : (meta.listings_scraped ?? 0),
+        companiesFound: jobsOnly
+          ? (existingRun?.companiesFound ?? 0) + (meta.companies_found ?? 0)
+          : (meta.companies_found ?? 0),
         companiesSkippedExisting: meta.companies_skipped_existing ?? 0,
         companiesEnriched: meta.companies_enriched ?? 0,
         contactsEnriched: meta.contacts_enriched ?? 0,
@@ -98,32 +159,32 @@ export async function POST(request: NextRequest) {
 
   let inserted = 0;
   let updated = 0;
+  let jobsInserted = 0;
+  let jobsSkipped = 0;
+
+  const allUrls = payload.companies.flatMap((c) =>
+    (c.job_listings ?? []).map((j) => j.url?.trim() || "").filter(Boolean),
+  );
+  const knownUrls = await existingJobUrls(allUrls);
 
   for (const item of payload.companies) {
-    const domain = item.domain?.toLowerCase().trim() || null;
-
+    const existing = await findCompany(item);
     let companyId: string;
-    const existing = domain
-      ? await db
-          .select()
-          .from(companies)
-          .where(eq(companies.domain, domain))
-          .limit(1)
-      : [];
 
-    if (existing.length > 0) {
-      companyId = existing[0].id;
+    if (existing) {
+      companyId = existing.id;
       updated += 1;
       await db
         .update(companies)
         .set({
           name: item.name,
           domainConfidence:
-            item.domain_confidence === "high" ? "high" : "low",
+            item.domain_confidence === "high" ? "high" : existing.domainConfidence,
           updatedAt: new Date(),
         })
         .where(eq(companies.id, companyId));
     } else {
+      const domain = item.domain?.toLowerCase().trim() || null;
       const [created] = await db
         .insert(companies)
         .values({
@@ -157,15 +218,24 @@ export async function POST(request: NextRequest) {
     }
 
     for (const jl of item.job_listings ?? []) {
+      const url = jl.url?.trim() || null;
+      if (url && knownUrls.has(url)) {
+        jobsSkipped += 1;
+        continue;
+      }
+
       await db.insert(jobListings).values({
         companyId,
         title: jl.title,
         board: jl.board ?? null,
-        url: jl.url ?? null,
+        url,
         location: jl.location ?? null,
         searchName: jl.search_name ?? null,
         postedAt: jl.posted_at ? new Date(jl.posted_at) : null,
       });
+
+      if (url) knownUrls.add(url);
+      jobsInserted += 1;
     }
   }
 
@@ -174,5 +244,7 @@ export async function POST(request: NextRequest) {
     run_id: run.id,
     companies_inserted: inserted,
     companies_updated: updated,
+    jobs_inserted: jobsInserted,
+    jobs_skipped: jobsSkipped,
   });
 }
