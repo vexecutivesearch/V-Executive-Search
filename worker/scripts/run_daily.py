@@ -247,8 +247,6 @@ def main() -> int:
 
         if args.hygiene_only:
             logger.info("Hygiene-only run")
-            from src.crm_client import CRMClient
-
             crm = CRMClient()
             archived = crm.archive_stale_jobs()
             logger.info("Archived %s stale listings", archived.get("archived"))
