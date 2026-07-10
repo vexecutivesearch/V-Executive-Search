@@ -82,7 +82,7 @@ Configure **N** and score thresholds in `/admin` → Enrichment quotas.
 
 **Today's Call Sheet** in the CRM uses a **6 AM – 6 AM Eastern** business day. Enriched leads appear on the call sheet tab; the backlog tab shows ranked companies awaiting enrichment.
 
-Default job boards: **Indeed, Google Jobs, LinkedIn, ZipRecruiter**. Glassdoor is available but off by default. Toggle in `/admin` → Job boards.
+Default job boards: **Indeed, LinkedIn, ZipRecruiter**. **Google Jobs** is off by default — JobSpy’s Google scraper returns empty HTML; use **SerpApi** (`SERPAPI_API_KEY` on the Mac worker) for a reliable Google Jobs feed. Glassdoor is available but off. Toggle in `/admin` → Job boards.
 
 ### Legacy note
 
@@ -112,6 +112,7 @@ Older installs used a single 6 AM / 6 PM job (`com.vexecsearch.daily`). Re-run `
 | `ADMIN_PASSWORD` | Recommended | Admin login (defaults to `WORKER_API_KEY` if unset) |
 | `APOLLO_API_KEY` | Yes | Enrich button + Apollo on company cards |
 | `CONTACTOUT_API_KEY` | Recommended | Personal email/mobile on Enrich button |
+| `SERPAPI_API_KEY` | Optional | Google Jobs via SerpApi (when wiring API path; JobSpy Google is broken) |
 | `RESEND_API_KEY` | Optional | Daily email if sent from Vercel routes |
 | `NEXT_PUBLIC_APP_URL` | Optional | Public URL (Vercel sets `VERCEL_URL` automatically) |
 
@@ -133,6 +134,7 @@ npm run dev
 | `RESEND_API_KEY` | Yes | Daily HTML report from worker |
 | `REPORT_FROM_EMAIL` | Yes | Resend-verified sender |
 | `CONTACTOUT_API_KEY` | Recommended | Personal email/mobile via LinkedIn URL |
+| `SERPAPI_API_KEY` | Optional | Reliable Google Jobs API — JobSpy Google returns empty HTML |
 
 See `worker/.env.example` for the full list.
 

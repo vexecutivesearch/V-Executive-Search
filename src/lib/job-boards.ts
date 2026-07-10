@@ -27,7 +27,7 @@ export const JOB_BOARD_OPTIONS: JobBoardOption[] = [
     id: "google",
     label: "Google Jobs",
     description:
-      "Disabled by default — JobSpy Google scraper returns empty HTML (needs SerpApi). Re-enable only to test.",
+      "Off by default — JobSpy Google returns empty HTML. Use SerpApi (SERPAPI_API_KEY) for a reliable Google Jobs feed.",
     defaultEnabled: false,
   },
   {

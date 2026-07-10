@@ -14,7 +14,7 @@ Automated recruiter list pipeline: scrape job postings from multiple boards, fin
 
 On a **home Mac worker** (launchd), twice daily at **6 AM and 6 PM**:
 
-1. **Scrape** — JobSpy pulls jobs from boards enabled in `/admin` (default: Indeed, Google Jobs, LinkedIn, ZipRecruiter)
+1. **Scrape** — JobSpy pulls jobs from boards enabled in `/admin` (default: Indeed, LinkedIn, ZipRecruiter; Google Jobs off — use SerpApi)
 2. **Dedupe** — collapse listings to companies; skip domains already in CRM
 3. **Enrich** — Apollo (contacts + work email) → ContactOut API (personal email/mobile via LinkedIn URL)
 4. **Sync** — push to Neon via Vercel `/api/ingest`

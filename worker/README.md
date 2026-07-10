@@ -83,14 +83,14 @@ Fallback if CRM is unreachable: `config/searches.yaml`.
 
 ### Job boards (JobSpy)
 
-Enabled in `/admin` → **Job boards**. Default: `indeed`, `google`, `linkedin`, `zip_recruiter`.
+Enabled in `/admin` → **Job boards**. Default: `indeed`, `linkedin`, `zip_recruiter` (Google off).
 
 | Board | Notes |
 |-------|-------|
-| **Indeed** | Reliable baseline |
-| **Google Jobs** | Aggregator reach |
+| **Indeed** | Reliable baseline / workhorse |
+| **Google Jobs** | JobSpy scraper returns empty HTML — leave off. Wire **SerpApi** (`SERPAPI_API_KEY`) for a reliable Google Jobs API feed (~$50/mo). |
 | **LinkedIn Jobs** | Senior/corporate roles; higher block risk — watch logs |
-| **ZipRecruiter** | SMB/mid-market; low block risk |
+| **ZipRecruiter** | Often Cloudflare 403 — keep on for loud `board_failure`; overlaps Indeed |
 | **Glassdoor** | Off by default; overlaps Indeed |
 
 JobSpy also supports Bayt, Naukri, BDJobs (international) — not exposed in admin UI.
