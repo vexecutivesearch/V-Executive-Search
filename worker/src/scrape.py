@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+import random
+import time
 from datetime import datetime
 from typing import Any
 
@@ -20,6 +22,9 @@ DEFAULT_BOARDS = ["linkedin", "indeed", "google", "zip_recruiter"]
 
 # LinkedIn guest API returns different subsets per call — union multiple draws.
 LINKEDIN_DRAW_COUNT = max(1, int(os.getenv("LINKEDIN_DRAW_COUNT", "3")))
+# Pause between draws (seconds) — avoid back-to-back hits on residential IP.
+LINKEDIN_DRAW_JITTER_MIN = float(os.getenv("LINKEDIN_DRAW_JITTER_MIN", "4"))
+LINKEDIN_DRAW_JITTER_MAX = float(os.getenv("LINKEDIN_DRAW_JITTER_MAX", "12"))
 
 # Scrape LinkedIn first — smaller result sets + hiring-team fetch is LinkedIn-only.
 BOARD_PRIORITY = {
@@ -208,6 +213,16 @@ def _scrape_linkedin_union(
             LINKEDIN_DRAW_COUNT,
             len(batch),
         )
+
+        if draw < LINKEDIN_DRAW_COUNT:
+            delay = random.uniform(LINKEDIN_DRAW_JITTER_MIN, LINKEDIN_DRAW_JITTER_MAX)
+            logger.info(
+                "Search '%s' LinkedIn draw pause %.1fs before draw %d",
+                name,
+                delay,
+                draw + 1,
+            )
+            time.sleep(delay)
 
     unioned = _dedupe_listings(merged)
     stats = {

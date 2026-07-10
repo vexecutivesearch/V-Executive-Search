@@ -118,10 +118,18 @@ function matchesCountyFocus(
 
   const fromString = countyFromLocationString(location);
   if (fromString && countyInFocus(fromString, accepted)) return true;
+  if (fromString && !countyInFocus(fromString, accepted)) return false;
 
   const county = resolveFloridaCounty(parsed.city, location);
   if (!county) return null;
   return countyInFocus(county, accepted);
+}
+
+/** True when county-based geo is active for this market. */
+export function isCountyGeoActive(
+  settings: typeof pipelineSettings.$inferSelect,
+): boolean {
+  return getAcceptedCounties(settings).length > 0;
 }
 
 function matchesMetroCityOrAlias(
@@ -154,8 +162,13 @@ export function classifyJobLocation(
   if (countyMatch === true) return "in_metro";
   if (countyMatch === false) return "out_of_metro";
 
+  if (matchesMetroCityOrAlias(normalized, settings)) return "in_metro";
+
+  // County geo active but city not in map — review bucket, not legacy pass/reject.
+  if (isCountyGeoActive(settings)) return "location_unknown";
+
   if (jobLocationInFocus(normalized, settings)) return "in_metro";
-  return countyMatch === null ? "location_unknown" : "out_of_metro";
+  return "out_of_metro";
 }
 
 /** True when a scraped job listing location falls inside admin geo focus. */
@@ -195,14 +208,14 @@ export function jobLocationInFocus(
     return false;
   }
 
-  // city scope (default) — county map + aliases for WPB metro; legacy city list as fallback
+  // city scope (default) — county map when configured; legacy city list only without county geo
   const countyMatch = matchesCountyFocus(normalized, parsed, settings);
   if (countyMatch === true) return true;
   if (countyMatch === false) return false;
 
-  if (matchesMetroCityOrAlias(normalized, settings)) {
-    return true;
-  }
+  if (matchesMetroCityOrAlias(normalized, settings)) return true;
+
+  if (isCountyGeoActive(settings)) return false;
 
   const cities = settings.focusCities?.length
     ? settings.focusCities

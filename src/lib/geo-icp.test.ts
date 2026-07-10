@@ -115,6 +115,14 @@ describe("geo normalization", () => {
     expect(jobLocationInFocus("Boca Raton, FL", settings)).toBe(true);
     expect(jobLocationInFocus("Fort Lauderdale, FL", settings)).toBe(false);
   });
+
+  it("routes unmapped FL cities to location_unknown, not silent reject", () => {
+    const settings = wpbSettings();
+    expect(classifyJobLocation("Fictitious Village, FL", settings)).toBe(
+      "location_unknown",
+    );
+    expect(jobLocationInFocus("Fictitious Village, FL", settings)).toBe(false);
+  });
 });
 
 describe("ICP filter", () => {

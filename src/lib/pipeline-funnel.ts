@@ -112,14 +112,11 @@ export async function measureDbFunnel(
   };
 }
 
-/** This run only — scrape yield + posters. No DB snapshot fields. */
+/** This run only — scrape yield + posters. Union counts only; raw_sum is overlap, not coverage. */
 export function formatRunFunnelLine(f: PipelineFunnel): string {
   const parts = [
     f.scrape_total != null && `scraped ${f.scrape_total}`,
-    f.scrape_linkedin_deduped != null &&
-      `LI ${f.scrape_linkedin_deduped}${
-        f.scrape_linkedin_raw != null ? ` (raw ${f.scrape_linkedin_raw})` : ""
-      }`,
+    f.scrape_linkedin_deduped != null && `LI union ${f.scrape_linkedin_deduped}`,
     f.poster_parsed != null && `posters ${f.poster_parsed}`,
   ].filter(Boolean);
 
@@ -128,7 +125,10 @@ export function formatRunFunnelLine(f: PipelineFunnel): string {
     const brief = perSearch
       .map((s) => {
         const name = (s.search ?? "?").split(" — ")[0];
-        return `${name} ${s.linkedin_union ?? "?"}`;
+        const draws = s.linkedin_draws?.length
+          ? `[${s.linkedin_draws.join("+")}]`
+          : "";
+        return `${name} ${s.linkedin_union ?? "?"}${draws}`;
       })
       .join(", ");
     parts.push(`by title: ${brief}`);
