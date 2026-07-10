@@ -10,7 +10,12 @@ export type LinkedInPerSearchFunnel = {
   search?: string;
   linkedin_draws?: number[];
   linkedin_raw_sum?: number;
+  /** URL-deduped count from JobSpy union at scrape time (pre-geo). */
   linkedin_union?: number;
+  /** Unique LinkedIn URLs ingested for this search this run (sanity check). */
+  linkedin_union_payload?: number;
+  /** Jobs passing county geo filter for this search this run. */
+  linkedin_in_focus?: number;
   linkedin_distance?: number | null;
 };
 
@@ -112,7 +117,64 @@ export async function measureDbFunnel(
   };
 }
 
-/** This run only — scrape yield + posters. Union counts only; raw_sum is overlap, not coverage. */
+type RunListingGeo = {
+  searchName?: string | null;
+  board?: string | null;
+  location?: string | null;
+  url?: string | null;
+};
+
+/**
+ * Attach per-search in-focus counts from this run's ingested listings.
+ * Keeps scrape union (worker) separate from geo deliverable (CRM).
+ */
+export function augmentScrapeFunnelWithGeo(
+  funnel: PipelineFunnel,
+  runListings: RunListingGeo[],
+  settings: typeof pipelineSettings.$inferSelect,
+): PipelineFunnel {
+  if (!funnel.linkedin_per_search?.length) return funnel;
+
+  const linkedin = runListings.filter((j) =>
+    j.board?.toLowerCase().includes("linkedin"),
+  );
+
+  const bySearch = new Map<string, RunListingGeo[]>();
+  for (const job of linkedin) {
+    const key = job.searchName?.trim() ?? "";
+    const bucket = bySearch.get(key) ?? [];
+    bucket.push(job);
+    bySearch.set(key, bucket);
+  }
+
+  const linkedin_per_search = funnel.linkedin_per_search.map((entry) => {
+    const jobs = bySearch.get(entry.search?.trim() ?? "") ?? [];
+    const urls = new Set(jobs.map((j) => j.url).filter(Boolean));
+    const inFocus = jobs.filter((j) =>
+      jobLocationInFocus(j.location, settings),
+    ).length;
+    return {
+      ...entry,
+      linkedin_in_focus: inFocus,
+      linkedin_union_payload: urls.size,
+    };
+  });
+
+  return { ...funnel, linkedin_per_search };
+}
+
+export function formatPerSearchFunnelLine(entry: LinkedInPerSearchFunnel): string {
+  const name = (entry.search ?? "?").split(" — ")[0];
+  const draws =
+    entry.linkedin_draws?.length != null
+      ? `[${entry.linkedin_draws.join(",")}]`
+      : "[]";
+  const union = entry.linkedin_union ?? "?";
+  const inFocus = entry.linkedin_in_focus ?? "?";
+  return `${name}: ${draws} → union ${union} → in-focus ${inFocus}`;
+}
+
+/** This run only — scrape yield + posters. Per title: draws → union → in-focus. */
 export function formatRunFunnelLine(f: PipelineFunnel): string {
   const parts = [
     f.scrape_total != null && `scraped ${f.scrape_total}`,
@@ -122,16 +184,9 @@ export function formatRunFunnelLine(f: PipelineFunnel): string {
 
   const perSearch = f.linkedin_per_search;
   if (perSearch?.length) {
-    const brief = perSearch
-      .map((s) => {
-        const name = (s.search ?? "?").split(" — ")[0];
-        const draws = s.linkedin_draws?.length
-          ? `[${s.linkedin_draws.join("+")}]`
-          : "";
-        return `${name} ${s.linkedin_union ?? "?"}${draws}`;
-      })
-      .join(", ");
-    parts.push(`by title: ${brief}`);
+    parts.push(
+      `by title: ${perSearch.map(formatPerSearchFunnelLine).join("; ")}`,
+    );
   }
 
   return parts.join(" → ");

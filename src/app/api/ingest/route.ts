@@ -9,7 +9,13 @@ import {
   jobListings,
 } from "@/lib/db/schema";
 import { jobUrlFingerprint } from "@/lib/hiring-signals";
-import { mergeFunnel, measureDbFunnel } from "@/lib/pipeline-funnel";
+import {
+  augmentScrapeFunnelWithGeo,
+  mergeFunnel,
+  measureDbFunnel,
+  type PipelineFunnel,
+} from "@/lib/pipeline-funnel";
+import { getGeoFocusSettings } from "@/lib/geo-focus";
 import { recomputeCompanyScores } from "@/lib/recompute-company-scores";
 import type { IcpStatus } from "@/lib/db/schema";
 
@@ -403,7 +409,20 @@ export async function POST(request: NextRequest) {
   const { scored } = await recomputeCompanyScores(uniqueIds);
 
   const dbFunnel = await measureDbFunnel();
-  const scrapeFunnel = meta.funnel ?? {};
+  const geoSettings = await getGeoFocusSettings();
+  const runListings = payload.companies.flatMap((c) =>
+    (c.job_listings ?? []).map((jl) => ({
+      searchName: jl.search_name,
+      board: jl.board,
+      location: jl.location,
+      url: jl.url,
+    })),
+  );
+  const scrapeFunnel = augmentScrapeFunnelWithGeo(
+    (meta.funnel ?? {}) as PipelineFunnel,
+    runListings,
+    geoSettings,
+  );
   const mergedFunnel = mergeFunnel(
     (existingRun?.funnelJson as Record<string, unknown> | null) ?? undefined,
     { ...scrapeFunnel, ...dbFunnel },

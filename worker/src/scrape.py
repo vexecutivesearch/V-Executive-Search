@@ -225,11 +225,20 @@ def _scrape_linkedin_union(
             time.sleep(delay)
 
     unioned = _dedupe_listings(merged)
+    max_draw = max(draw_counts) if draw_counts else 0
+    union_n = len(unioned)
+    if max_draw and union_n < max_draw:
+        logger.warning(
+            "Search '%s' union %d < max draw %d — check dedupe logic",
+            name,
+            union_n,
+            max_draw,
+        )
     stats = {
         "search": name,
         "linkedin_draws": draw_counts,
         "linkedin_raw_sum": sum(draw_counts),
-        "linkedin_union": len(unioned),
+        "linkedin_union": union_n,
         "linkedin_distance": search.get("linkedin_distance"),
     }
     logger.info(
