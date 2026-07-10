@@ -601,15 +601,24 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
             />
 
             {filterOptions.dataAvailability.industryFilterReady ? (
-              <MultiSelect
-                label="Sectors (rolled up from company industry)"
-                options={filterOptions.industries}
-                selected={emailPrefs.industryFilters ?? []}
-                onChange={(industryFilters) =>
-                  setEmailPrefs((p) => ({ ...p, industryFilters }))
-                }
-                emptyHint="No industries in the database yet."
-              />
+              <>
+                <MultiSelect
+                  label="Sectors (rolled up from company industry)"
+                  options={filterOptions.industries}
+                  selected={emailPrefs.industryFilters ?? []}
+                  onChange={(industryFilters) =>
+                    setEmailPrefs((p) => ({ ...p, industryFilters }))
+                  }
+                  emptyHint="No industries in the database yet."
+                />
+                {(filterOptions.otherIndustryLabels?.length ?? 0) > 0 ? (
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    Other ({filterOptions.otherIndustryLabels.length}):{" "}
+                    {filterOptions.otherIndustryLabels.join(", ")}. Add these to{" "}
+                    <code className="text-[11px]">src/lib/industry-sectors.ts</code>.
+                  </p>
+                ) : null}
+              </>
             ) : (
               <p className="text-xs text-gray-500">
                 Sector filter locked until backlog industry fill ≥ 40% (currently{" "}

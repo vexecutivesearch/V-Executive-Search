@@ -9,6 +9,7 @@ import {
 import {
   OTHER_SECTOR,
   allSectorFilterOptions,
+  normalizeIndustryKey,
   sectorFromIndustry,
 } from "@/lib/industry-sectors";
 
@@ -18,6 +19,11 @@ export type TodayFilterOptions = {
   /** Broad sector buckets for filtering (raw industry stays on the company). */
   industries: string[];
   dataAvailability: FilterDataAvailability;
+  /**
+   * Distinct raw Apollo industries currently landing in Other.
+   * Visible cue to extend industry-sectors.ts — never silently grow.
+   */
+  otherIndustryLabels: string[];
 };
 
 /** Distinct filter values — scrape buckets + sector rollups present in the DB. */
@@ -37,12 +43,19 @@ export async function getTodayFilterOptions(): Promise<TodayFilterOptions> {
   ].sort((a, b) => a.localeCompare(b));
 
   const sectorsPresent = new Set<string>();
+  const otherByKey = new Map<string, string>();
   for (const row of industryRows) {
-    const sector = sectorFromIndustry(row.industry);
-    if (sector) sectorsPresent.add(sector);
+    const raw = row.industry?.trim();
+    if (!raw) continue;
+    const sector = sectorFromIndustry(raw);
+    if (!sector) continue;
+    sectorsPresent.add(sector);
+    if (sector === OTHER_SECTOR) {
+      const key = normalizeIndustryKey(raw);
+      if (!otherByKey.has(key)) otherByKey.set(key, raw);
+    }
   }
 
-  // Stable order from config; only include sectors that appear (plus Other if needed).
   const industries = allSectorFilterOptions().filter((s) =>
     sectorsPresent.has(s),
   );
@@ -50,5 +63,14 @@ export async function getTodayFilterOptions(): Promise<TodayFilterOptions> {
     industries.push(OTHER_SECTOR);
   }
 
-  return { jobTitles, industries, dataAvailability };
+  const otherIndustryLabels = [...otherByKey.values()].sort((a, b) =>
+    a.localeCompare(b),
+  );
+
+  return {
+    jobTitles,
+    industries,
+    dataAvailability,
+    otherIndustryLabels,
+  };
 }

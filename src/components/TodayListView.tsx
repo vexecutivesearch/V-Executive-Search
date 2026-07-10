@@ -164,6 +164,12 @@ export function TodayListView({
       ? `⚠ Board gaps: ${funnelJson.board_failures.join("; ")}`
       : null;
 
+  const otherIndustryCount = filterOptions?.otherIndustryLabels?.length ?? 0;
+  const otherIndustryLabel =
+    otherIndustryCount > 0
+      ? `⚠ Industry map: Other (${otherIndustryCount}) — add to industry-sectors.ts`
+      : null;
+
   const posterCoverageLabel = (() => {
     const f = runStats?.funnelJson as
       | {
@@ -185,6 +191,7 @@ export function TodayListView({
           : `Pipeline run ${listRange?.snapshotDate ?? ""}: ${runStats.listingsScraped ?? 0} listings · ${runStats.companiesFound ?? 0} new companies`,
         boardMixLabel,
         boardFailureLabel,
+        otherIndustryLabel,
         posterCoverageLabel,
         `Enriched ${runStats.companiesEnriched ?? 0} · ${runStats.contactsEnriched ?? 0} contacts · ${runStats.creditsUsed ?? 0} credits`,
         backlogCount != null && listRange
@@ -330,11 +337,16 @@ export function TodayListView({
                 aria-label="Filter by sector"
               >
                 <option value="">All sectors</option>
-                {(filterOptions?.industries ?? []).map((ind) => (
-                  <option key={ind} value={ind}>
-                    {ind}
-                  </option>
-                ))}
+                {(filterOptions?.industries ?? []).map((ind) => {
+                  const otherN = filterOptions?.otherIndustryLabels?.length ?? 0;
+                  const label =
+                    ind === "Other" && otherN > 0 ? `Other (${otherN})` : ind;
+                  return (
+                    <option key={ind} value={ind}>
+                      {label}
+                    </option>
+                  );
+                })}
               </select>
             )}
 
