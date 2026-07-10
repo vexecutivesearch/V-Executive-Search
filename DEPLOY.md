@@ -63,15 +63,18 @@ Use this guide when standing up a **new Vercel environment**, **new Neon databas
 
 ## Daily pipeline (JIT enrichment — Eastern Time)
 
-The worker runs **five staged jobs** overnight instead of enriching every net-new company:
+The worker runs **staged jobs twice daily** (6 AM and 6 PM scrape) instead of enriching every net-new company:
 
 | Time (ET) | Job | Credits |
 |-----------|-----|---------|
-| 02:00 | Scrape → `jobs_only` ingest | Free |
-| 02:30 | ICP filter + rescore full backlog | Free |
-| 03:00 | Enrich top-N call sheet (default N=25) | Paid |
-| 03:30 | iMessage checks on new contacts | Free |
-| 06:00 | Build + send ranked call sheet email | Free |
+| 06:00 | Scrape → `jobs_only` ingest (+ LinkedIn posters) | Free |
+| 06:15 | Archive stale listings | Free |
+| 06:30 | Rescore backlog | Free |
+| 07:00 | Enrich top-N call sheet (default N=25) | Paid |
+| 07:30 | iMessage + email MX presence checks | Free |
+| 07:45 | Build + send ranked call sheet email | Free |
+| 18:00 | Evening scrape → `jobs_only` ingest (+ LinkedIn posters) | Free |
+| 18:30 | Evening rescore backlog | Free |
 
 Admin **Run now** (5-min poll) runs scrape → rescore → enrich top-N — not enrich-all.
 

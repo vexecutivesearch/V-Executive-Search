@@ -118,44 +118,43 @@ EOF
   echo "Wrote $plist_path"
 }
 
-# JIT pipeline schedule (Eastern Time via TZ=America/New_York)
+# Daily pipeline (America/New_York) — scrape at 6 AM and 6 PM as documented.
+write_calendar_plist "com.vexecsearch.scrape" \
+  "scripts/run_daily.py --scrape-only" \
+  6 0 \
+  "$WORKER_ROOT/logs/scrape_am_stdout.log" \
+  "$WORKER_ROOT/logs/scrape_am_stderr.log"
+
 write_calendar_plist "com.vexecsearch.hygiene" \
   "scripts/run_daily.py --hygiene-only" \
-  2 15 \
+  6 15 \
   "$WORKER_ROOT/logs/hygiene_stdout.log" \
   "$WORKER_ROOT/logs/hygiene_stderr.log"
 
-write_calendar_plist "com.vexecsearch.scrape" \
-  "scripts/run_daily.py --scrape-only" \
-  2 0 \
-  "$WORKER_ROOT/logs/scrape_stdout.log" \
-  "$WORKER_ROOT/logs/scrape_stderr.log"
-
 write_calendar_plist "com.vexecsearch.rescore" \
   "scripts/run_daily.py --rescore-only" \
-  2 30 \
-  "$WORKER_ROOT/logs/rescore_stdout.log" \
-  "$WORKER_ROOT/logs/rescore_stderr.log"
+  6 30 \
+  "$WORKER_ROOT/logs/rescore_am_stdout.log" \
+  "$WORKER_ROOT/logs/rescore_am_stderr.log"
 
 write_calendar_plist "com.vexecsearch.enrich" \
   "scripts/run_daily.py --enrich-only" \
-  3 0 \
+  7 0 \
   "$WORKER_ROOT/logs/enrich_stdout.log" \
   "$WORKER_ROOT/logs/enrich_stderr.log"
 
 write_calendar_plist "com.vexecsearch.presence" \
   "scripts/check_presence.py" \
-  3 30 \
+  7 30 \
   "$WORKER_ROOT/logs/presence_stdout.log" \
   "$WORKER_ROOT/logs/presence_stderr.log"
 
 write_calendar_plist "com.vexecsearch.email" \
   "scripts/run_daily.py --email-only" \
-  6 0 \
+  7 45 \
   "$WORKER_ROOT/logs/email_stdout.log" \
   "$WORKER_ROOT/logs/email_stderr.log"
 
-# Evening refresh — catch jobs posted during the day (free: scrape + rescore only)
 write_calendar_plist "com.vexecsearch.scrape-pm" \
   "scripts/run_daily.py --scrape-only" \
   18 0 \
@@ -187,13 +186,13 @@ done
 
 echo ""
 echo "Done. Scheduled (America/New_York):"
-echo "  • 02:00 Scrape + jobs_only ingest (free)"
-echo "  • 02:15 Archive stale listings (free)"
-echo "  • 02:30 ICP filter + rescore backlog (free)"
-echo "  • 03:00 Enrich top-N call sheet (paid)"
-echo "  • 03:30 Presence checks — iMessage + email MX (free)"
-echo "  • 06:00 Call sheet email (free)"
-echo "  • 18:00 Evening scrape + jobs_only ingest (free)"
+echo "  • 06:00 Morning scrape + jobs_only ingest + LinkedIn posters (free)"
+echo "  • 06:15 Archive stale listings (free)"
+echo "  • 06:30 Rescore backlog (free)"
+echo "  • 07:00 Enrich top-N call sheet (paid)"
+echo "  • 07:30 Presence checks — iMessage + email MX (free)"
+echo "  • 07:45 Call sheet email (free)"
+echo "  • 18:00 Evening scrape + jobs_only ingest + LinkedIn posters (free)"
 echo "  • 18:30 Evening rescore backlog (free)"
 echo "  • Every 5 min Admin 'Run now' poll (com.vexecsearch.poll)"
 echo ""
