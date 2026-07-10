@@ -10,7 +10,7 @@ from typing import Any
 import pandas as pd
 from jobspy import scrape_jobs
 
-from src.funnel import ScrapeFunnel
+from src.funnel import ScrapeFunnel, check_linkedin_per_search_invariants
 from src.models import JobListing
 
 logger = logging.getLogger(__name__)
@@ -227,13 +227,6 @@ def _scrape_linkedin_union(
     unioned = _dedupe_listings(merged)
     max_draw = max(draw_counts) if draw_counts else 0
     union_n = len(unioned)
-    if max_draw and union_n < max_draw:
-        logger.warning(
-            "Search '%s' union %d < max draw %d — check dedupe logic",
-            name,
-            union_n,
-            max_draw,
-        )
     stats = {
         "search": name,
         "linkedin_draws": draw_counts,
@@ -241,6 +234,10 @@ def _scrape_linkedin_union(
         "linkedin_union": union_n,
         "linkedin_distance": search.get("linkedin_distance"),
     }
+    violations = check_linkedin_per_search_invariants(stats)
+    if violations:
+        for msg in violations:
+            logger.error("Funnel invariant: %s", msg)
     logger.info(
         "Search '%s' LinkedIn union: draws=%s raw_sum=%d union=%d",
         name,
@@ -297,6 +294,9 @@ def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
             li_union, stats = _scrape_linkedin_union(search)
             linkedin_raw_sum += stats["linkedin_raw_sum"]
             funnel.linkedin_per_search.append(stats)
+            funnel.funnel_invariant_violations.extend(
+                check_linkedin_per_search_invariants(stats),
+            )
             # Non-LinkedIn boards via run_search would re-scrape LinkedIn — build manually.
             merged = list(li_union)
             for board in boards:

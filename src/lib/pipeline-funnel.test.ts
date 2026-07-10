@@ -3,6 +3,7 @@ import {
   augmentScrapeFunnelWithGeo,
   formatPerSearchFunnelLine,
   formatRunFunnelLine,
+  validateFunnelInvariants,
 } from "@/lib/pipeline-funnel";
 import { DEFAULT_WPB_METRO_CITIES } from "@/lib/metro-defaults";
 import type { pipelineSettings } from "@/lib/db/schema";
@@ -95,6 +96,39 @@ describe("per-search funnel", () => {
     });
     expect(line).toContain(
       "Head of Talent: [18,20,22] → union 25 → in-focus 24",
+    );
+  });
+
+  it("flags union < max(draw) invariant violations", () => {
+    const funnel = validateFunnelInvariants({
+      linkedin_per_search: [
+        {
+          search: "HR Director — West Palm Beach, Florida",
+          linkedin_draws: [20, 18, 15],
+          linkedin_union: 7,
+          linkedin_in_focus: 7,
+        },
+      ],
+    });
+    expect(funnel.funnel_invariant_violations).toEqual([
+      "HR Director: union 7 < max(draw) 20",
+    ]);
+    expect(formatRunFunnelLine(funnel)).toContain("⚠");
+  });
+
+  it("flags in-focus > union invariant violations", () => {
+    const funnel = validateFunnelInvariants({
+      linkedin_per_search: [
+        {
+          search: "Head of Talent — West Palm Beach, Florida",
+          linkedin_draws: [10, 10, 10],
+          linkedin_union: 12,
+          linkedin_in_focus: 15,
+        },
+      ],
+    });
+    expect(funnel.funnel_invariant_violations).toContain(
+      "Head of Talent: in-focus 15 > union 12",
     );
   });
 });

@@ -39,6 +39,8 @@ export type PipelineFunnel = {
   db_backlog_linkedin?: number;
   db_jobs_with_poster?: number;
   measured_at?: string;
+  /** Set when union/max(draw) or in-focus/union math breaks — never silent. */
+  funnel_invariant_violations?: string[];
 };
 
 export function mergeFunnel(
@@ -133,7 +135,9 @@ export function augmentScrapeFunnelWithGeo(
   runListings: RunListingGeo[],
   settings: typeof pipelineSettings.$inferSelect,
 ): PipelineFunnel {
-  if (!funnel.linkedin_per_search?.length) return funnel;
+  if (!funnel.linkedin_per_search?.length) {
+    return validateFunnelInvariants(funnel);
+  }
 
   const linkedin = runListings.filter((j) =>
     j.board?.toLowerCase().includes("linkedin"),
@@ -160,7 +164,44 @@ export function augmentScrapeFunnelWithGeo(
     };
   });
 
-  return { ...funnel, linkedin_per_search };
+  return validateFunnelInvariants({ ...funnel, linkedin_per_search });
+}
+
+/** Per-search funnel invariants: union ≥ max(draws); in-focus ≤ union. */
+export function checkPerSearchFunnelInvariants(
+  entry: LinkedInPerSearchFunnel,
+): string[] {
+  const violations: string[] = [];
+  const name = (entry.search ?? "?").split(" — ")[0];
+  const draws = entry.linkedin_draws ?? [];
+  const union = entry.linkedin_union;
+  const inFocus = entry.linkedin_in_focus;
+
+  if (draws.length && union != null) {
+    const maxDraw = Math.max(...draws);
+    if (union < maxDraw) {
+      violations.push(`${name}: union ${union} < max(draw) ${maxDraw}`);
+    }
+  }
+  if (union != null && inFocus != null && inFocus > union) {
+    violations.push(`${name}: in-focus ${inFocus} > union ${union}`);
+  }
+  return violations;
+}
+
+export function validateFunnelInvariants(funnel: PipelineFunnel): PipelineFunnel {
+  const violations = [
+    ...(funnel.funnel_invariant_violations ?? []),
+    ...(funnel.linkedin_per_search ?? []).flatMap(checkPerSearchFunnelInvariants),
+  ];
+  const unique = [...new Set(violations)];
+  if (unique.length) {
+    console.error("[funnel] invariant violations:", unique);
+  }
+  return {
+    ...funnel,
+    funnel_invariant_violations: unique.length ? unique : undefined,
+  };
 }
 
 export function formatPerSearchFunnelLine(entry: LinkedInPerSearchFunnel): string {
@@ -187,6 +228,10 @@ export function formatRunFunnelLine(f: PipelineFunnel): string {
     parts.push(
       `by title: ${perSearch.map(formatPerSearchFunnelLine).join("; ")}`,
     );
+  }
+
+  if (f.funnel_invariant_violations?.length) {
+    parts.push(`⚠ ${f.funnel_invariant_violations.join("; ")}`);
   }
 
   return parts.join(" → ");
