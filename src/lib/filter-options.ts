@@ -2,15 +2,17 @@ import { and, isNotNull, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { companies, jobListings } from "@/lib/db/schema";
 import { getActiveSearchProfiles } from "@/lib/pipeline-config";
+import { getFilterDataAvailability, type FilterDataAvailability } from "@/lib/filter-data-availability";
 
 export type TodayFilterOptions = {
   jobTitles: string[];
   industries: string[];
+  dataAvailability: FilterDataAvailability;
 };
 
 /** Distinct filter values from active backlog + search profiles. */
 export async function getTodayFilterOptions(): Promise<TodayFilterOptions> {
-  const [profiles, industryRows, searchRows] = await Promise.all([
+  const [profiles, industryRows, searchRows, dataAvailability] = await Promise.all([
     getActiveSearchProfiles(),
     db
       .selectDistinct({ industry: companies.industry })
@@ -22,6 +24,7 @@ export async function getTodayFilterOptions(): Promise<TodayFilterOptions> {
       .from(jobListings)
       .where(and(isNotNull(jobListings.searchName), ne(jobListings.searchName, "")))
       .orderBy(jobListings.searchName),
+    getFilterDataAvailability(),
   ]);
 
   const profileNames = profiles.map((p) => p.name);
@@ -37,5 +40,5 @@ export async function getTodayFilterOptions(): Promise<TodayFilterOptions> {
     .map((r) => r.industry?.trim())
     .filter(Boolean) as string[];
 
-  return { jobTitles, industries };
+  return { jobTitles, industries, dataAvailability };
 }

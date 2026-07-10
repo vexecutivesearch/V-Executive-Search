@@ -262,7 +262,7 @@ export async function POST(request: NextRequest) {
                 : existing.domainConfidence,
           estimatedEmployees:
             item.estimated_employees ?? existing.estimatedEmployees,
-          industry: item.industry ?? existing.industry,
+          industry: item.industry?.trim() || existing.industry,
           icpStatus: item.icp_status ?? existing.icpStatus,
           enrichedAt: enrichOnly ? new Date() : existing.enrichedAt,
           enrichRunDate: item.enrich_run_date ?? existing.enrichRunDate,

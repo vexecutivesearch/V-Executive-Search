@@ -528,6 +528,14 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
           Leave unchecked for all. Call sheet leads are unchanged.
         </p>
 
+        {!filterOptions.dataAvailability.industryFilterReady && (
+          <p className="text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 rounded-lg px-3 py-2">
+            Industry filters are hidden in Today until backlog industry fill reaches
+            40% (currently {filterOptions.dataAvailability.industryPct}%).
+            Run industry backfill after the Apollo lookup fix.
+          </p>
+        )}
+
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
@@ -559,39 +567,54 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
           onChange={(industryFilters) =>
             setEmailPrefs((p) => ({ ...p, industryFilters }))
           }
-          emptyHint="Industries appear after domain enrichment."
+          emptyHint="Industries appear after org lookup backfill."
         />
+
+        {filterOptions.dataAvailability.industryFilterReady ? null : (
+          <p className="text-xs text-gray-500">
+            Industry checkboxes will populate after backlog industry backfill.
+          </p>
+        )}
 
         <div className="flex flex-wrap items-center gap-3 text-sm">
           <span className="font-medium">Salary filter</span>
-          <select
-            value={emailPrefs.salaryFilter ?? "any"}
-            onChange={(e) =>
-              setEmailPrefs((p) => ({
-                ...p,
-                salaryFilter: e.target.value as EmailReportPreferences["salaryFilter"],
-              }))
-            }
-            className="border rounded-md px-2 py-1 dark:border-gray-700 dark:bg-gray-900"
-          >
-            <option value="any">Any</option>
-            <option value="has_salary">Has salary posted</option>
-            <option value="min_salary">Minimum salary</option>
-          </select>
-          {(emailPrefs.salaryFilter ?? "any") === "min_salary" && (
-            <input
-              type="number"
-              min={0}
-              step={5000}
-              value={emailPrefs.salaryMinUsd ?? 80000}
-              onChange={(e) =>
-                setEmailPrefs((p) => ({
-                  ...p,
-                  salaryMinUsd: parseInt(e.target.value, 10) || 0,
-                }))
-              }
-              className="w-28 border rounded-md px-2 py-1 dark:border-gray-700 dark:bg-gray-900"
-            />
+          {filterOptions.dataAvailability.salaryFilterReady ? (
+            <>
+              <select
+                value={emailPrefs.salaryFilter ?? "any"}
+                onChange={(e) =>
+                  setEmailPrefs((p) => ({
+                    ...p,
+                    salaryFilter: e.target.value as EmailReportPreferences["salaryFilter"],
+                  }))
+                }
+                className="border rounded-md px-2 py-1 dark:border-gray-700 dark:bg-gray-900"
+              >
+                <option value="any">Any</option>
+                <option value="has_salary">Has salary posted</option>
+                <option value="min_salary">Minimum salary</option>
+              </select>
+              {(emailPrefs.salaryFilter ?? "any") === "min_salary" && (
+                <input
+                  type="number"
+                  min={0}
+                  step={5000}
+                  value={emailPrefs.salaryMinUsd ?? 80000}
+                  onChange={(e) =>
+                    setEmailPrefs((p) => ({
+                      ...p,
+                      salaryMinUsd: parseInt(e.target.value, 10) || 0,
+                    }))
+                  }
+                  className="w-28 border rounded-md px-2 py-1 dark:border-gray-700 dark:bg-gray-900"
+                />
+              )}
+            </>
+          ) : (
+            <span className="text-gray-500">
+              Hidden until salary fill ≥ 40% (currently{" "}
+              {filterOptions.dataAvailability.salaryAnyPct}%)
+            </span>
           )}
           <label className="flex items-center gap-2">
             Max backlog rows

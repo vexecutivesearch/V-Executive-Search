@@ -58,6 +58,8 @@ describe("companyMatchesLeadFilters", () => {
         industry: "",
         salaryFilter: "any",
         salaryMinUsd: 80000,
+        includeUnknownIndustry: true,
+        includeUnknownSalary: true,
       }),
     ).toBe(true);
     expect(
@@ -77,7 +79,25 @@ describe("companyMatchesLeadFilters", () => {
         industry: "health",
         salaryFilter: "any",
         salaryMinUsd: 80000,
+        includeUnknownIndustry: false,
+        includeUnknownSalary: true,
       }),
+    ).toBe(true);
+  });
+
+  it("includes unknown industry by default when filtering", () => {
+    expect(
+      companyMatchesLeadFilters(
+        { industry: null, jobListings: company.jobListings },
+        {
+          jobTitle: "",
+          industry: "health",
+          salaryFilter: "any",
+          salaryMinUsd: 80000,
+          includeUnknownIndustry: true,
+          includeUnknownSalary: true,
+        },
+      ),
     ).toBe(true);
   });
 
@@ -88,6 +108,8 @@ describe("companyMatchesLeadFilters", () => {
         industry: "",
         salaryFilter: "min_salary",
         salaryMinUsd: 100000,
+        includeUnknownIndustry: true,
+        includeUnknownSalary: false,
       }),
     ).toBe(false);
     expect(
@@ -96,6 +118,8 @@ describe("companyMatchesLeadFilters", () => {
         industry: "",
         salaryFilter: "min_salary",
         salaryMinUsd: 90000,
+        includeUnknownIndustry: true,
+        includeUnknownSalary: false,
       }),
     ).toBe(true);
   });

@@ -45,6 +45,32 @@ def _apollo_headers() -> dict[str, str]:
     }
 
 
+def _parse_employees(value: Any) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value)
+    return None
+
+
+def _parse_org(org: dict[str, Any]) -> OrgLookupResult:
+    domain = org.get("primary_domain") or org.get("website_url")
+    if domain:
+        domain = domain.replace("https://", "").replace("http://", "").split("/")[0]
+        if domain.startswith("www."):
+            domain = domain[4:]
+    employees = _parse_employees(org.get("estimated_num_employees"))
+    industry_raw = org.get("industry")
+    industry = str(industry_raw).strip() if industry_raw else None
+    confidence = DomainConfidence.HIGH if domain else DomainConfidence.LOW
+    return OrgLookupResult(
+        domain,
+        confidence,
+        estimated_employees=employees,
+        industry=industry or None,
+    )
+
+
 def _search_org(company_name: str) -> OrgLookupResult:
     api_key = os.environ.get("APOLLO_API_KEY")
     if not api_key:
@@ -52,8 +78,9 @@ def _search_org(company_name: str) -> OrgLookupResult:
         return OrgLookupResult(guess, DomainConfidence.LOW)
 
     try:
+        # organizations/search returns industry; mixed_companies/search does not.
         resp = requests.post(
-            f"{APOLLO_BASE}/mixed_companies/search",
+            f"{APOLLO_BASE}/organizations/search",
             headers=_apollo_headers(),
             json={
                 "q_organization_name": company_name,
@@ -64,26 +91,11 @@ def _search_org(company_name: str) -> OrgLookupResult:
         )
         resp.raise_for_status()
         data = resp.json()
-        orgs: list[dict[str, Any]] = data.get("organizations") or data.get("accounts") or []
+        orgs: list[dict[str, Any]] = data.get("organizations") or []
         if orgs:
-            org = orgs[0]
-            domain = org.get("primary_domain") or org.get("website_url")
-            if domain:
-                domain = domain.replace("https://", "").replace("http://", "").split("/")[0]
-                if domain.startswith("www."):
-                    domain = domain[4:]
-            employees = org.get("estimated_num_employees")
-            if isinstance(employees, str) and employees.isdigit():
-                employees = int(employees)
-            if not isinstance(employees, int):
-                employees = None
-            industry = org.get("industry")
-            return OrgLookupResult(
-                domain,
-                DomainConfidence.HIGH if domain else DomainConfidence.LOW,
-                estimated_employees=employees,
-                industry=str(industry) if industry else None,
-            )
+            parsed = _parse_org(orgs[0])
+            if parsed.domain or parsed.industry:
+                return parsed
     except requests.RequestException as exc:
         logger.warning("Apollo org search failed for '%s': %s", company_name, exc)
 
@@ -93,21 +105,26 @@ def _search_org(company_name: str) -> OrgLookupResult:
 
 def resolve_domains(companies: list[CompanyRecord]) -> list[CompanyRecord]:
     for company in companies:
-        if company.domain and company.estimated_employees is not None:
+        has_domain = bool(company.domain)
+        has_employees = company.estimated_employees is not None
+        has_industry = bool(company.industry)
+        if has_domain and has_employees and has_industry:
             continue
+
         lookup = _search_org(company.name)
-        if not company.domain:
+        if not company.domain and lookup.domain:
             company.domain = lookup.domain
             company.domain_confidence = lookup.confidence
         if lookup.estimated_employees is not None:
             company.estimated_employees = lookup.estimated_employees
-        if lookup.industry:
+        if lookup.industry and not company.industry:
             company.industry = lookup.industry
         logger.info(
-            "Resolved '%s' -> %s (%s, ~%s employees)",
+            "Resolved '%s' -> %s (%s, industry=%s, ~%s employees)",
             company.name,
             company.domain or "unknown",
             company.domain_confidence.value,
+            company.industry or "?",
             company.estimated_employees or "?",
         )
     return companies

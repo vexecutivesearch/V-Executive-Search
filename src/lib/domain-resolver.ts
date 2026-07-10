@@ -2,6 +2,13 @@ const APOLLO_BASE = "https://api.apollo.io/api/v1";
 
 export type DomainConfidence = "high" | "low";
 
+export type OrgLookupResult = {
+  domain: string | null;
+  confidence: DomainConfidence;
+  industry: string | null;
+  estimatedEmployees: number | null;
+};
+
 function apolloHeaders(apiKey: string): HeadersInit {
   return {
     "Content-Type": "application/json",
@@ -30,17 +37,51 @@ function normalizeDomain(raw: string): string {
   return domain.toLowerCase();
 }
 
-export async function resolveCompanyDomain(
+function parseEmployees(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() && !Number.isNaN(Number(value))) {
+    return parseInt(value, 10);
+  }
+  return null;
+}
+
+type ApolloOrg = {
+  primary_domain?: string;
+  website_url?: string;
+  industry?: string;
+  estimated_num_employees?: number | string;
+};
+
+function parseApolloOrg(org: ApolloOrg): OrgLookupResult {
+  const raw = org.primary_domain ?? org.website_url;
+  const domain = raw ? normalizeDomain(raw) : null;
+  const industry = org.industry?.trim() || null;
+  const estimatedEmployees = parseEmployees(org.estimated_num_employees);
+  return {
+    domain,
+    confidence: domain ? "high" : industry ? "low" : "low",
+    industry,
+    estimatedEmployees,
+  };
+}
+
+/** Free org lookup — organizations/search returns domain, industry, and headcount. */
+export async function resolveCompanyOrg(
   companyName: string,
   apiKey: string,
-): Promise<{ domain: string | null; confidence: DomainConfidence }> {
+): Promise<OrgLookupResult> {
   if (!apiKey) {
     const guess = guessDomain(companyName);
-    return { domain: guess, confidence: "low" };
+    return {
+      domain: guess,
+      confidence: "low",
+      industry: null,
+      estimatedEmployees: null,
+    };
   }
 
   try {
-    const resp = await fetch(`${APOLLO_BASE}/mixed_companies/search`, {
+    const resp = await fetch(`${APOLLO_BASE}/organizations/search`, {
       method: "POST",
       headers: apolloHeaders(apiKey),
       body: JSON.stringify({
@@ -51,19 +92,30 @@ export async function resolveCompanyDomain(
     });
     if (!resp.ok) throw new Error(await resp.text());
 
-    const data = (await resp.json()) as {
-      organizations?: Array<{ primary_domain?: string; website_url?: string }>;
-      accounts?: Array<{ primary_domain?: string; website_url?: string }>;
-    };
-    const orgs = data.organizations ?? data.accounts ?? [];
-    const raw = orgs[0]?.primary_domain ?? orgs[0]?.website_url;
-    if (raw) {
-      return { domain: normalizeDomain(raw), confidence: "high" };
+    const data = (await resp.json()) as { organizations?: ApolloOrg[] };
+    const org = data.organizations?.[0];
+    if (org) {
+      const parsed = parseApolloOrg(org);
+      if (parsed.domain || parsed.industry) return parsed;
     }
   } catch {
-    // fall through to guess
+    // fall through
   }
 
   const guess = guessDomain(companyName);
-  return { domain: guess, confidence: "low" };
+  return {
+    domain: guess,
+    confidence: "low",
+    industry: null,
+    estimatedEmployees: null,
+  };
+}
+
+/** @deprecated Prefer resolveCompanyOrg — kept for callers that only need domain. */
+export async function resolveCompanyDomain(
+  companyName: string,
+  apiKey: string,
+): Promise<{ domain: string | null; confidence: DomainConfidence }> {
+  const lookup = await resolveCompanyOrg(companyName, apiKey);
+  return { domain: lookup.domain, confidence: lookup.confidence };
 }

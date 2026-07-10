@@ -250,54 +250,62 @@ export function TodayListView({
             ))}
           </select>
 
-          <select
-            value={leadFilters.industry}
-            onChange={(e) =>
-              setLeadFilters((f) => ({ ...f, industry: e.target.value }))
-            }
-            className="text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900 max-w-[10rem]"
-            aria-label="Filter by industry"
-          >
-            <option value="">All industries</option>
-            {(filterOptions?.industries ?? []).map((ind) => (
-              <option key={ind} value={ind}>
-                {ind}
-              </option>
-            ))}
-          </select>
+          {listMode === "backlog" &&
+            filterOptions?.dataAvailability.industryFilterReady && (
+              <select
+                value={leadFilters.industry}
+                onChange={(e) =>
+                  setLeadFilters((f) => ({ ...f, industry: e.target.value }))
+                }
+                className="text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900 max-w-[10rem]"
+                aria-label="Filter by industry"
+              >
+                <option value="">All industries</option>
+                {(filterOptions?.industries ?? []).map((ind) => (
+                  <option key={ind} value={ind}>
+                    {ind}
+                  </option>
+                ))}
+              </select>
+            )}
 
-          <select
-            value={leadFilters.salaryFilter}
-            onChange={(e) =>
-              setLeadFilters((f) => ({
-                ...f,
-                salaryFilter: e.target.value as LeadFilterState["salaryFilter"],
-              }))
-            }
-            className="text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900"
-            aria-label="Filter by salary"
-          >
-            <option value="any">Any salary</option>
-            <option value="has_salary">Has salary posted</option>
-            <option value="min_salary">Min salary ≥</option>
-          </select>
+          {listMode === "backlog" &&
+            filterOptions?.dataAvailability.salaryFilterReady && (
+              <>
+                <select
+                  value={leadFilters.salaryFilter}
+                  onChange={(e) =>
+                    setLeadFilters((f) => ({
+                      ...f,
+                      salaryFilter: e.target.value as LeadFilterState["salaryFilter"],
+                    }))
+                  }
+                  className="text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900"
+                  aria-label="Filter by salary"
+                >
+                  <option value="any">Any salary</option>
+                  <option value="has_salary">Has salary posted</option>
+                  <option value="min_salary">Min salary ≥</option>
+                </select>
 
-          {leadFilters.salaryFilter === "min_salary" && (
-            <input
-              type="number"
-              min={0}
-              step={5000}
-              value={leadFilters.salaryMinUsd}
-              onChange={(e) =>
-                setLeadFilters((f) => ({
-                  ...f,
-                  salaryMinUsd: parseInt(e.target.value, 10) || 0,
-                }))
-              }
-              className="w-24 text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900"
-              aria-label="Minimum salary USD"
-            />
-          )}
+                {leadFilters.salaryFilter === "min_salary" && (
+                  <input
+                    type="number"
+                    min={0}
+                    step={5000}
+                    value={leadFilters.salaryMinUsd}
+                    onChange={(e) =>
+                      setLeadFilters((f) => ({
+                        ...f,
+                        salaryMinUsd: parseInt(e.target.value, 10) || 0,
+                      }))
+                    }
+                    className="w-24 text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900"
+                    aria-label="Minimum salary USD"
+                  />
+                )}
+              </>
+            )}
         </div>
 
         <p className="text-xs text-gray-500 mt-2">

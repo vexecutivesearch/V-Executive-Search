@@ -6,6 +6,10 @@ export type LeadFilterState = {
   industry: string;
   salaryFilter: "any" | "has_salary" | "min_salary";
   salaryMinUsd: number;
+  /** When true, rows with null industry still pass an industry filter */
+  includeUnknownIndustry: boolean;
+  /** When true, rows with no salary still pass min_salary filter */
+  includeUnknownSalary: boolean;
 };
 
 export const DEFAULT_LEAD_FILTER: LeadFilterState = {
@@ -13,6 +17,8 @@ export const DEFAULT_LEAD_FILTER: LeadFilterState = {
   industry: "",
   salaryFilter: "any",
   salaryMinUsd: 80000,
+  includeUnknownIndustry: true,
+  includeUnknownSalary: true,
 };
 
 export function listingSalaryMax(listing: {
@@ -58,6 +64,7 @@ export function companyMatchesSalaryFilter(
   >[],
   salaryFilter: LeadFilterState["salaryFilter"],
   salaryMinUsd: number,
+  includeUnknownSalary = true,
 ): boolean {
   if (salaryFilter === "any") return true;
   if (!listings.length) return false;
@@ -66,10 +73,19 @@ export function companyMatchesSalaryFilter(
     return listings.some(listingHasSalary);
   }
 
-  return listings.some((l) => {
+  const hasNumericMatch = listings.some((l) => {
     const max = listingSalaryMax(l);
     return max != null && max >= salaryMinUsd;
   });
+  if (hasNumericMatch) return true;
+
+  if (includeUnknownSalary) {
+    return listings.some(
+      (l) => listingSalaryMax(l) == null && !listingHasSalary(l),
+    );
+  }
+
+  return false;
 }
 
 export function companyMatchesLeadFilters(
@@ -95,10 +111,21 @@ export function companyMatchesLeadFilters(
     "salaryMinUsd" in filters && filters.salaryMinUsd != null
       ? filters.salaryMinUsd
       : 80000;
+  const includeUnknownIndustry =
+    "includeUnknownIndustry" in filters
+      ? filters.includeUnknownIndustry !== false
+      : true;
+  const includeUnknownSalary =
+    "includeUnknownSalary" in filters
+      ? filters.includeUnknownSalary !== false
+      : true;
 
   if (industry.trim()) {
     const ind = (company.industry ?? "").toLowerCase();
-    if (!ind.includes(industry.trim().toLowerCase())) return false;
+    const needle = industry.trim().toLowerCase();
+    if (!ind.includes(needle)) {
+      if (!(includeUnknownIndustry && !ind)) return false;
+    }
   }
 
   const listings = company.jobListings;
@@ -119,6 +146,7 @@ export function companyMatchesLeadFilters(
       listings,
       salaryFilter as LeadFilterState["salaryFilter"],
       salaryMinUsd,
+      includeUnknownSalary,
     )
   ) {
     return false;
@@ -157,5 +185,6 @@ export function companyMatchesEmailReportFilters(
     company.jobListings,
     prefs.salaryFilter ?? "any",
     prefs.salaryMinUsd ?? 80000,
+    false,
   );
 }
