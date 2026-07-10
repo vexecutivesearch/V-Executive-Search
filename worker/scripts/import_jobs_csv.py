@@ -90,6 +90,7 @@ def post_batches(
         job_count = sum(len(c.get("job_listings", [])) for c in chunk)
         payload = {
             "run_date": run_date,
+            "run_slot": "am",
             "import_mode": "jobs_only",
             "metadata": {
                 "listings_scraped": job_count,

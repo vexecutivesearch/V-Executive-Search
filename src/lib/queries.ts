@@ -314,6 +314,7 @@ export async function getLatestRunStats(listDate?: string) {
     .select()
     .from(dailyRuns)
     .where(eq(dailyRuns.runDate, date))
+    .orderBy(desc(dailyRuns.createdAt))
     .limit(1);
   return run ?? null;
 }
@@ -322,8 +323,8 @@ export async function getRecentRuns() {
   return db
     .select()
     .from(dailyRuns)
-    .orderBy(desc(dailyRuns.runDate))
-    .limit(30);
+    .orderBy(desc(dailyRuns.runDate), desc(dailyRuns.createdAt))
+    .limit(60);
 }
 
 export async function getMarketJobListings(searchName?: string) {

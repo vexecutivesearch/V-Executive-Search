@@ -20,3 +20,8 @@ def business_list_date() -> date:
     if now.hour < 6:
         return (now - timedelta(days=1)).date()
     return now.date()
+
+
+def business_run_slot() -> str:
+    """am before noon ET (6 AM scrape), pm otherwise (6 PM scrape)."""
+    return "am" if _now().hour < 12 else "pm"

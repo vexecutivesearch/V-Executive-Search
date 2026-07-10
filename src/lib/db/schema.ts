@@ -105,23 +105,31 @@ export const searchProfiles = pgTable(
   (table) => [uniqueIndex("search_profiles_term_unique").on(table.searchTerm)],
 );
 
-export const dailyRuns = pgTable("daily_runs", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  runDate: date("run_date").notNull().unique(),
-  listingsScraped: integer("listings_scraped").default(0),
-  companiesFound: integer("companies_found").default(0),
-  companiesSkippedExisting: integer("companies_skipped_existing").default(0),
-  companiesEnriched: integer("companies_enriched").default(0),
-  contactsEnriched: integer("contacts_enriched").default(0),
-  creditsUsed: integer("credits_used").default(0),
-  icpMatchCount: integer("icp_match_count").default(0),
-  enrichmentQuota: integer("enrichment_quota").default(0),
-  companiesScored: integer("companies_scored").default(0),
-  companiesDeferred: integer("companies_deferred").default(0),
-  errors: text("errors"),
-  funnelJson: jsonb("funnel_json").$type<Record<string, unknown>>(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+export const dailyRuns = pgTable(
+  "daily_runs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    runDate: date("run_date").notNull(),
+    /** Scheduled batch: am (6 AM ET), pm (6 PM ET), or manual. */
+    runSlot: text("run_slot").notNull().default("am"),
+    listingsScraped: integer("listings_scraped").default(0),
+    companiesFound: integer("companies_found").default(0),
+    companiesSkippedExisting: integer("companies_skipped_existing").default(0),
+    companiesEnriched: integer("companies_enriched").default(0),
+    contactsEnriched: integer("contacts_enriched").default(0),
+    creditsUsed: integer("credits_used").default(0),
+    icpMatchCount: integer("icp_match_count").default(0),
+    enrichmentQuota: integer("enrichment_quota").default(0),
+    companiesScored: integer("companies_scored").default(0),
+    companiesDeferred: integer("companies_deferred").default(0),
+    errors: text("errors"),
+    funnelJson: jsonb("funnel_json").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("daily_runs_date_slot_uq").on(table.runDate, table.runSlot),
+  ],
+);
 
 export const companies = pgTable("companies", {
   id: uuid("id").defaultRandom().primaryKey(),

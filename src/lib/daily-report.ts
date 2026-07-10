@@ -86,6 +86,7 @@ export async function getDailyCallSheet(): Promise<DailyCallSheet> {
     .select()
     .from(dailyRuns)
     .where(eq(dailyRuns.runDate, runDate))
+    .orderBy(desc(dailyRuns.createdAt))
     .limit(1);
 
   const companyRows = await db

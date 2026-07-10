@@ -1,7 +1,7 @@
 import { getBacklogCompanies, getRecentRuns } from "@/lib/queries";
 import { categorizeRunErrors } from "@/lib/run-errors";
 import { formatDbFunnelLine, formatRunFunnelLine, type PipelineFunnel } from "@/lib/pipeline-funnel";
-import { businessListDate } from "@/lib/timezone";
+import { businessListDate, formatRunSlot } from "@/lib/timezone";
 import { formatDate } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -30,10 +30,11 @@ export default async function RunsPage() {
     <div className="max-w-6xl mx-auto px-4 py-8">
       <h1 className="text-2xl font-bold mb-2">Pipeline Runs</h1>
       <p className="text-sm text-gray-500 dark:text-gray-400 mb-6 max-w-3xl">
-        Each row is <strong>today&apos;s nightly batch</strong> — listings scraped,
+        Each row is a <strong>6 AM or 6 PM ET batch</strong> — listings scraped,
         new companies ingested, and how many were enriched with paid credits.
-        The ranked backlog ({backlogCount} companies) is cumulative across all
-        days and is not the same as &quot;Companies&quot; in this table.
+        Same job URLs seen again are resighted (not duplicated). The ranked
+        backlog ({backlogCount} companies) is cumulative across all days and is
+        not the same as &quot;Companies&quot; in this table.
       </p>
 
       {runs.length === 0 ? (
@@ -70,6 +71,9 @@ export default async function RunsPage() {
                   >
                     <td className="py-3 pr-4 font-medium">
                       {formatDate(run.runDate)}
+                      <span className="ml-2 text-xs font-normal text-gray-500">
+                        {formatRunSlot(run.runSlot)}
+                      </span>
                       {isToday && (
                         <span className="ml-2 text-xs font-normal text-gray-400">
                           backlog {backlogCount}

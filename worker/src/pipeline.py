@@ -17,7 +17,7 @@ from src.enrich.contactout import get_contactout_client
 from src.enrich.waterfall import WaterfallProvider
 from src.models import CompanyRecord, DomainConfidence, EnrichedCompany, JobListing, PipelineResult
 from src.scrape import scrape_all
-from src.timezone import business_list_date
+from src.timezone import business_list_date, business_run_slot
 from src.contact_phones import contact_phones_for_display
 from src.caffeinate_guard import prevent_sleep
 from src.email_report import send_daily_report_for_pipeline
@@ -138,9 +138,13 @@ def _rows_from_enriched(enriched: list[EnrichedCompany]) -> list[dict[str, Any]]
     return rows
 
 
-def _write_csv(rows: list[dict[str, Any]], run_date: date) -> Path:
+def _write_csv(
+    rows: list[dict[str, Any]],
+    run_date: date,
+    run_slot: str = "am",
+) -> Path:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUTPUT_DIR / f"daily_{run_date.isoformat()}.csv"
+    path = OUTPUT_DIR / f"daily_{run_date.isoformat()}_{run_slot}.csv"
     if not rows:
         path.write_text("", encoding="utf-8")
         return path
@@ -227,6 +231,7 @@ def _build_jobs_only_payload(
 
     return {
         "run_date": result.run_date.isoformat(),
+        "run_slot": result.run_slot,
         "import_mode": "jobs_only",
         "metadata": {
             "listings_scraped": result.listings_scraped,
@@ -285,6 +290,7 @@ def _build_enrich_payload(
 
     return {
         "run_date": result.run_date.isoformat(),
+        "run_slot": result.run_slot,
         "import_mode": "enrich_only",
         "metadata": {
             "companies_enriched": result.companies_enriched,
@@ -337,6 +343,7 @@ def _run_pipeline_impl(
     enrich_only: bool = False,
 ) -> PipelineResult:
     run_date = business_list_date()
+    run_slot = business_run_slot()
     config = load_config(config_path)
     enrichment_cfg = config.get("enrichment", {})
 
@@ -352,6 +359,7 @@ def _run_pipeline_impl(
 
     result = PipelineResult(
         run_date=run_date,
+        run_slot=run_slot,
         listings_scraped=0,
         companies_found=0,
         companies_skipped_existing=0,
@@ -542,7 +550,7 @@ def _enrich_call_sheet(
     result.credits_used = provider.credits_used
     result.rows = _rows_from_enriched(enriched)
 
-    csv_path = _write_csv(result.rows, result.run_date)
+    csv_path = _write_csv(result.rows, result.run_date, result.run_slot)
     logger.info("CSV written to %s (%d rows)", csv_path, len(result.rows))
 
     if crm.is_configured and not skip_crm:
@@ -590,6 +598,7 @@ def _enrich_call_sheet(
             pipeline_rows=result.rows,
             result_summary={
                 "run_date": str(result.run_date),
+                "run_slot": result.run_slot,
                 "listings_scraped": result.listings_scraped,
                 "icp_match_count": result.icp_match_count,
                 "companies_enriched": result.companies_enriched,

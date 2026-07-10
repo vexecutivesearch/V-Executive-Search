@@ -68,6 +68,28 @@ export function resolveListDate(listDateParam?: string): string {
   return parseListDateParam(listDateParam) ?? businessListDate();
 }
 
+/** am = morning scrape (~6 AM ET), pm = evening (~6 PM ET). */
+export type RunSlot = "am" | "pm" | "manual";
+
+export function normalizeRunSlot(slot?: string | null): RunSlot {
+  if (slot === "pm" || slot === "manual") return slot;
+  return "am";
+}
+
+/** Display label for a scheduled run slot. */
+export function formatRunSlot(slot?: string | null): string {
+  const s = normalizeRunSlot(slot);
+  if (s === "pm") return "6 PM ET";
+  if (s === "manual") return "manual";
+  return "6 AM ET";
+}
+
+/** Infer slot from Eastern hour (matches worker schedule). */
+export function businessRunSlot(hour = businessHour()): RunSlot {
+  if (hour < 12) return "am";
+  return "pm";
+}
+
 /**
  * first_seen dates for the daily list query.
  * Explicit date → that day only; default → current business day (+ straddle before 6 AM).

@@ -87,6 +87,7 @@ class PipelineResult:
     companies_enriched: int
     contacts_enriched: int
     credits_used: int
+    run_slot: str = "am"
     icp_match_count: int = 0
     companies_scored: int = 0
     companies_deferred: int = 0

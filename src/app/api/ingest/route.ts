@@ -1,4 +1,4 @@
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { unauthorized, verifyWorkerAuth } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -18,6 +18,7 @@ import {
 import { getGeoFocusSettings } from "@/lib/geo-focus";
 import { recomputeCompanyScores } from "@/lib/recompute-company-scores";
 import type { IcpStatus } from "@/lib/db/schema";
+import { normalizeRunSlot } from "@/lib/timezone";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -85,6 +86,8 @@ interface IngestCompany {
 
 interface IngestPayload {
   run_date: string;
+  /** am | pm | manual — defaults to am when omitted (legacy workers). */
+  run_slot?: string;
   import_mode?: "pipeline" | "jobs_only" | "enrich_only";
   metadata?: {
     listings_scraped?: number;
@@ -184,17 +187,21 @@ export async function POST(request: NextRequest) {
   const meta = payload.metadata ?? {};
   const jobsOnly = payload.import_mode === "jobs_only";
   const enrichOnly = payload.import_mode === "enrich_only";
+  const runSlot = normalizeRunSlot(payload.run_slot);
 
   const [existingRun] = await db
     .select()
     .from(dailyRuns)
-    .where(eq(dailyRuns.runDate, payload.run_date))
+    .where(
+      and(eq(dailyRuns.runDate, payload.run_date), eq(dailyRuns.runSlot, runSlot)),
+    )
     .limit(1);
 
   const [run] = await db
     .insert(dailyRuns)
     .values({
       runDate: payload.run_date,
+      runSlot,
       listingsScraped: meta.listings_scraped ?? 0,
       companiesFound: meta.companies_found ?? 0,
       companiesSkippedExisting: meta.companies_skipped_existing ?? 0,
@@ -208,7 +215,7 @@ export async function POST(request: NextRequest) {
       errors: meta.errors?.length ? JSON.stringify(meta.errors) : null,
     })
     .onConflictDoUpdate({
-      target: dailyRuns.runDate,
+      target: [dailyRuns.runDate, dailyRuns.runSlot],
       set: {
         listingsScraped: jobsOnly
           ? (existingRun?.listingsScraped ?? 0) + (meta.listings_scraped ?? 0)

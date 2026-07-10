@@ -10,8 +10,8 @@ export async function GET() {
   const runs = await db
     .select()
     .from(dailyRuns)
-    .orderBy(desc(dailyRuns.runDate))
-    .limit(30);
+    .orderBy(desc(dailyRuns.runDate), desc(dailyRuns.createdAt))
+    .limit(60);
 
   return NextResponse.json({ runs });
 }
