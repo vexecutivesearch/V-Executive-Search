@@ -231,6 +231,11 @@ def _build_jobs_only_payload(
             "icp_match_count": result.icp_match_count,
             "companies_scored": result.companies_scored,
             "errors": result.errors,
+            "funnel": (
+                result.scrape_funnel.to_metadata()
+                if result.scrape_funnel is not None
+                else None
+            ),
         },
         "companies": companies_payload,
     }
@@ -374,8 +379,9 @@ def _run_pipeline_impl(
 
     # Stage 1: Scrape (free)
     logger.info("=== Stage 1: Scraping job listings ===")
-    listings = scrape_all(config)
+    listings, scrape_funnel = scrape_all(config)
     result.listings_scraped = len(listings)
+    result.scrape_funnel = scrape_funnel
 
     # Stage 2: Build batch and resolve domains (free)
     logger.info("=== Stage 2: Building company batch (jobs-only ingest) ===")

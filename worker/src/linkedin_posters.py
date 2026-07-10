@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from jobspy.linkedin.constant import headers
 from jobspy.util import create_session
 
+from src.funnel import ScrapeFunnel, html_poster_signals
 from src.models import JobListing, JobPoster
 
 logger = logging.getLogger(__name__)
@@ -159,36 +160,51 @@ def linkedin_job_id_from_url(job_url: str) -> str | None:
 
 
 def apply_linkedin_session_cookie(session: Any) -> None:
+    """Opt-in only — authenticated fetches risk account bans at 2× daily volume."""
+    if os.environ.get("LINKEDIN_LI_AT_ENABLED", "").lower() not in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return
     li_at = os.environ.get("LINKEDIN_LI_AT", "").strip()
-    if li_at:
-        session.cookies.set("li_at", li_at, domain=".linkedin.com")
+    if not li_at:
+        return
+    session.cookies.set("li_at", li_at, domain=".linkedin.com")
+    logger.warning(
+        "LINKEDIN_LI_AT_ENABLED — using authenticated session; burner account only, throttle heavily"
+    )
 
 
-def fetch_hiring_team(job_id: str, session: Any) -> list[JobPoster]:
+def fetch_hiring_team(job_id: str, session: Any) -> tuple[list[JobPoster], str]:
     try:
         response = session.get(
             f"https://www.linkedin.com/jobs/view/{job_id}",
             timeout=15,
         )
         if response.status_code != 200:
-            return []
+            return [], ""
         if "linkedin.com/signup" in response.url:
-            return []
-        posters = parse_hiring_team_from_html(response.text)
+            return [], ""
+        html = response.text
+        posters = parse_hiring_team_from_html(html)
         if posters:
-            return posters
+            return posters, html
         if not os.environ.get("LINKEDIN_LI_AT", "").strip():
             logger.debug(
                 "No hiring team on public page for %s — set LINKEDIN_LI_AT for Meet the hiring team",
                 job_id,
             )
-        return []
+        return [], html
     except Exception as exc:
         logger.debug("LinkedIn hiring team fetch failed for %s: %s", job_id, exc)
-        return []
+        return [], ""
 
 
-def attach_linkedin_hiring_teams(listings: list[JobListing]) -> int:
+def attach_linkedin_hiring_teams(
+    listings: list[JobListing],
+    funnel: ScrapeFunnel | None = None,
+) -> int:
     """Fetch public job posters for LinkedIn listings. Returns count found."""
     if os.environ.get("LINKEDIN_FETCH_HIRING_TEAM", "true").lower() in {
         "0",
@@ -225,10 +241,21 @@ def attach_linkedin_hiring_teams(listings: list[JobListing]) -> int:
         if index > 0:
             time.sleep(random.uniform(delay_min, delay_max))
 
-        posters = fetch_hiring_team(job_id, session)
+        posters, html = fetch_hiring_team(job_id, session)
+        if funnel is not None:
+            funnel.poster_pages_fetched += 1
+            if html:
+                pub, meet = html_poster_signals(html)
+                if pub:
+                    funnel.poster_public_block_in_html += 1
+                if meet:
+                    funnel.meet_team_in_html += 1
         if posters:
             listing.posters = posters
             found += len(posters)
+            if funnel is not None:
+                funnel.poster_parsed += 1
+                funnel.poster_contacts_seeded += len(posters)
             logger.info(
                 "LinkedIn poster for %s / %s: %s",
                 listing.company_name,

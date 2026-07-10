@@ -9,6 +9,7 @@ import {
   jobListings,
 } from "@/lib/db/schema";
 import { jobUrlFingerprint } from "@/lib/hiring-signals";
+import { mergeFunnel, measureDbFunnel } from "@/lib/pipeline-funnel";
 import { recomputeCompanyScores } from "@/lib/recompute-company-scores";
 import type { IcpStatus } from "@/lib/db/schema";
 
@@ -87,6 +88,7 @@ interface IngestPayload {
     companies_scored?: number;
     companies_deferred?: number;
     errors?: string[];
+    funnel?: Record<string, unknown>;
   };
   companies: IngestCompany[];
 }
@@ -400,14 +402,22 @@ export async function POST(request: NextRequest) {
   const uniqueIds = [...new Set(touchedCompanyIds)];
   const { scored } = await recomputeCompanyScores(uniqueIds);
 
-  if (jobsOnly) {
-    await db
-      .update(dailyRuns)
-      .set({
-        companiesScored: (existingRun?.companiesScored ?? 0) + scored,
-      })
-      .where(eq(dailyRuns.id, run.id));
-  }
+  const dbFunnel = await measureDbFunnel();
+  const scrapeFunnel = meta.funnel ?? {};
+  const mergedFunnel = mergeFunnel(
+    (existingRun?.funnelJson as Record<string, unknown> | null) ?? undefined,
+    { ...scrapeFunnel, ...dbFunnel },
+  );
+
+  await db
+    .update(dailyRuns)
+    .set({
+      companiesScored: jobsOnly
+        ? (existingRun?.companiesScored ?? 0) + scored
+        : (meta.companies_scored ?? existingRun?.companiesScored ?? scored),
+      funnelJson: mergedFunnel,
+    })
+    .where(eq(dailyRuns.id, run.id));
 
   return NextResponse.json({
     ok: true,
@@ -417,5 +427,6 @@ export async function POST(request: NextRequest) {
     jobs_inserted: jobsInserted,
     jobs_resighted: jobsResighted,
     companies_scored: scored,
+    funnel: mergedFunnel,
   });
 }

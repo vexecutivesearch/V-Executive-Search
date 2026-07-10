@@ -7,8 +7,8 @@ from typing import Any
 import pandas as pd
 from jobspy import scrape_jobs
 
+from src.funnel import ScrapeFunnel
 from src.models import JobListing
-from src.linkedin_posters import attach_linkedin_hiring_teams
 
 logger = logging.getLogger(__name__)
 
@@ -180,26 +180,51 @@ def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
     return deduped
 
 
-def scrape_all(config: dict[str, Any]) -> list[JobListing]:
+def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
     boards = normalize_boards(config.get("boards"))
+    funnel = ScrapeFunnel()
     logger.info("Job boards enabled: %s", ", ".join(boards))
     all_listings: list[JobListing] = []
+    linkedin_raw = 0
 
     for search in config.get("searches", []):
+        name = search.get("name", "unnamed")
+        if "linkedin" in boards:
+            li_only = _scrape_search_board(search, "linkedin")
+            linkedin_raw += len(li_only)
+            funnel.linkedin_per_search.append(
+                {"search": name, "linkedin_raw": len(li_only)},
+            )
         all_listings.extend(run_search(search, boards))
 
+    funnel.scrape_linkedin_raw = linkedin_raw
+    funnel.scrape_total = len(all_listings)
+    funnel.scrape_linkedin_deduped = sum(
+        1 for listing in all_listings if listing.board == "linkedin"
+    )
     logger.info("Total listings scraped: %d", len(all_listings))
 
-    linkedin_count = sum(1 for listing in all_listings if listing.board == "linkedin")
+    linkedin_count = funnel.scrape_linkedin_deduped
     indeed_count = sum(1 for listing in all_listings if listing.board == "indeed")
     logger.info(
-        "Board mix: linkedin=%d indeed=%d total=%d",
+        "Board mix: linkedin=%d indeed=%d total=%d (linkedin raw=%d cap/search=%d)",
         linkedin_count,
         indeed_count,
         len(all_listings),
+        linkedin_raw,
+        funnel.scrape_linkedin_cap_per_search,
     )
     if linkedin_count:
-        posters_found = attach_linkedin_hiring_teams(all_listings)
-        logger.info("LinkedIn hiring-team posters captured: %d", posters_found)
+        from src.linkedin_posters import attach_linkedin_hiring_teams
 
-    return all_listings
+        posters_found = attach_linkedin_hiring_teams(all_listings, funnel=funnel)
+        logger.info("LinkedIn hiring-team posters captured: %d", posters_found)
+        logger.info(
+            "Poster funnel: fetched=%d public_block=%d meet_team_html=%d parsed_listings=%d",
+            funnel.poster_pages_fetched,
+            funnel.poster_public_block_in_html,
+            funnel.meet_team_in_html,
+            funnel.poster_parsed,
+        )
+
+    return all_listings, funnel

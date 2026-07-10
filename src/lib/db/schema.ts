@@ -112,6 +112,7 @@ export const dailyRuns = pgTable("daily_runs", {
   companiesScored: integer("companies_scored").default(0),
   companiesDeferred: integer("companies_deferred").default(0),
   errors: text("errors"),
+  funnelJson: jsonb("funnel_json").$type<Record<string, unknown>>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

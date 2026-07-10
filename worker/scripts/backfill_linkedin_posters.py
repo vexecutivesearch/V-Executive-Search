@@ -68,7 +68,7 @@ def main() -> int:
             board="linkedin",
             job_url=url,
         )
-        posters = fetch_hiring_team(job_id, session)
+        posters, _html = fetch_hiring_team(job_id, session)
         if posters:
             listing.posters = posters
             listings.append(listing)

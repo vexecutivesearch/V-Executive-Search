@@ -1,5 +1,6 @@
 import { getBacklogCompanies, getRecentRuns } from "@/lib/queries";
 import { categorizeRunErrors } from "@/lib/run-errors";
+import { formatFunnelLine, type PipelineFunnel } from "@/lib/pipeline-funnel";
 import { businessListDate } from "@/lib/timezone";
 import { formatDate } from "@/lib/utils";
 
@@ -74,6 +75,11 @@ export default async function RunsPage() {
                           backlog {backlogCount}
                         </span>
                       )}
+                      {run.funnelJson ? (
+                        <p className="text-[10px] text-gray-400 mt-0.5 font-mono max-w-xs truncate">
+                          {formatFunnelLine(run.funnelJson as PipelineFunnel)}
+                        </p>
+                      ) : null}
                     </td>
                     <td className="py-3 pr-4">{run.listingsScraped}</td>
                     <td className="py-3 pr-4">{run.companiesFound}</td>

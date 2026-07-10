@@ -89,3 +89,4 @@ class PipelineResult:
     enrichment_quota: int = 0
     errors: list[str] = field(default_factory=list)
     rows: list[dict[str, Any]] = field(default_factory=list)
+    scrape_funnel: Any = None
