@@ -22,12 +22,22 @@ def normalize_linkedin(url: str) -> str:
 
 def get_contactout_client():
     """ContactOut client — hybrid (API + dashboard) on Mac when available, else API only."""
-    from src.enrich.contactout_hybrid_loader import try_hybrid_contactout_client
     from src.enrich.contactout_api import ContactOutApiClient
 
-    hybrid = try_hybrid_contactout_client()
-    if hybrid is not None:
-        return hybrid
+    try:
+        from src.enrich.contactout_hybrid_loader import try_hybrid_contactout_client
+
+        hybrid = try_hybrid_contactout_client()
+        if hybrid is not None:
+            return hybrid
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "ContactOut hybrid unavailable (%s) — using API only",
+            exc,
+        )
+
     return ContactOutApiClient()
 
 

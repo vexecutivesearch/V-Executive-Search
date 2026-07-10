@@ -166,8 +166,11 @@ export async function getBacklogCompanies(
     .orderBy(desc(companies.leadScore), desc(companies.updatedAt))
     .limit(500);
 
+  // Current-day backlog: show all unarchived in-focus jobs.
+  // Historical snapshots still require last_seen >= asOfDate so a board outage
+  // one morning doesn't wipe Indeed/Google rows from today's working list.
   const enriched = await enrichCompanies(companiesRows, geoSettings, {
-    asOfDate,
+    asOfDate: isCurrentDay ? undefined : asOfDate,
   });
 
   return enriched
