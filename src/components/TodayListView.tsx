@@ -151,6 +151,20 @@ export function TodayListView({
       ? `⚠ Board gaps: ${funnelJson.board_failures.join("; ")}`
       : null;
 
+  const posterCoverageLabel = (() => {
+    const f = runStats?.funnelJson as
+      | {
+          poster_pages_fetched?: number;
+          poster_parsed?: number;
+        }
+      | null
+      | undefined;
+    const fetched = f?.poster_pages_fetched ?? 0;
+    const parsed = f?.poster_parsed ?? 0;
+    if (!fetched) return null;
+    return `Hiring team on ${parsed}/${fetched} LinkedIn pages (guest HTML — most jobs hide the poster)`;
+  })();
+
   const funnelLabel = runStats
     ? [
         listRange?.isToday
@@ -158,6 +172,7 @@ export function TodayListView({
           : `Pipeline run ${listRange?.snapshotDate ?? ""}: ${runStats.listingsScraped ?? 0} listings · ${runStats.companiesFound ?? 0} new companies`,
         boardMixLabel,
         boardFailureLabel,
+        posterCoverageLabel,
         `Enriched ${runStats.companiesEnriched ?? 0} · ${runStats.contactsEnriched ?? 0} contacts · ${runStats.creditsUsed ?? 0} credits`,
         backlogCount != null && listRange
           ? backlogSummaryLabel(listRange, backlogCount)

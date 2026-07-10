@@ -522,24 +522,16 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
       </section>
 
       <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
-        <h2 className="font-semibold text-lg">Daily email — backlog filters</h2>
+        <h2 className="font-semibold text-lg">Daily email — backlog section</h2>
         <p className="text-sm text-gray-500">
-          Filters apply to the ranked backlog (top 500) section in your daily report.
-          Leave unchecked for all. Call sheet leads are unchanged.
+          Optional. When off, the daily email is call-sheet only (recommended until
+          filters are tuned). When on, a short ranked-backlog preview is appended.
         </p>
 
-        {!filterOptions.dataAvailability.industryFilterReady && (
-          <p className="text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 rounded-lg px-3 py-2">
-            Industry filters are hidden in Today until backlog industry fill reaches
-            40% (currently {filterOptions.dataAvailability.industryPct}%).
-            Run industry backfill after the Apollo lookup fix.
-          </p>
-        )}
-
-        <label className="flex items-center gap-2 text-sm">
+        <label className="flex items-center gap-2 text-sm font-medium">
           <input
             type="checkbox"
-            checked={emailPrefs.includeBacklogSection !== false}
+            checked={emailPrefs.includeBacklogSection === true}
             onChange={(e) =>
               setEmailPrefs((p) => ({
                 ...p,
@@ -547,92 +539,108 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
               }))
             }
           />
-          Include filtered backlog section in daily email
+          Include ranked backlog section in daily email
         </label>
 
-        <MultiSelect
-          label="Job titles (email backlog)"
-          options={filterOptions.jobTitles}
-          selected={emailPrefs.jobTitleFilters ?? []}
-          onChange={(jobTitleFilters) =>
-            setEmailPrefs((p) => ({ ...p, jobTitleFilters }))
-          }
-          emptyHint="Run a scrape to populate job title options."
-        />
+        {emailPrefs.includeBacklogSection === true ? (
+          <div className="space-y-3 pt-2 border-t dark:border-gray-800">
+            <p className="text-xs text-gray-500">
+              Leave title/industry unchecked for all. Filters refine the backlog
+              preview only — they do not change the CRM Today view.
+            </p>
 
-        <MultiSelect
-          label="Industries (email backlog)"
-          options={filterOptions.industries}
-          selected={emailPrefs.industryFilters ?? []}
-          onChange={(industryFilters) =>
-            setEmailPrefs((p) => ({ ...p, industryFilters }))
-          }
-          emptyHint="Industries appear after org lookup backfill."
-        />
+            <MultiSelect
+              label="Job titles (search profiles)"
+              options={filterOptions.jobTitles}
+              selected={emailPrefs.jobTitleFilters ?? []}
+              onChange={(jobTitleFilters) =>
+                setEmailPrefs((p) => ({ ...p, jobTitleFilters }))
+              }
+              emptyHint="Add search profiles above first."
+            />
 
-        {filterOptions.dataAvailability.industryFilterReady ? null : (
-          <p className="text-xs text-gray-500">
-            Industry checkboxes will populate after backlog industry backfill.
-          </p>
-        )}
-
-        <div className="flex flex-wrap items-center gap-3 text-sm">
-          <span className="font-medium">Salary filter</span>
-          {filterOptions.dataAvailability.salaryFilterReady ? (
-            <>
-              <select
-                value={emailPrefs.salaryFilter ?? "any"}
-                onChange={(e) =>
-                  setEmailPrefs((p) => ({
-                    ...p,
-                    salaryFilter: e.target.value as EmailReportPreferences["salaryFilter"],
-                  }))
+            {filterOptions.dataAvailability.industryFilterReady ? (
+              <MultiSelect
+                label="Industries"
+                options={filterOptions.industries}
+                selected={emailPrefs.industryFilters ?? []}
+                onChange={(industryFilters) =>
+                  setEmailPrefs((p) => ({ ...p, industryFilters }))
                 }
-                className="border rounded-md px-2 py-1 dark:border-gray-700 dark:bg-gray-900"
-              >
-                <option value="any">Any</option>
-                <option value="has_salary">Has salary posted</option>
-                <option value="min_salary">Minimum salary</option>
-              </select>
-              {(emailPrefs.salaryFilter ?? "any") === "min_salary" && (
+                emptyHint="No industries in the database yet."
+              />
+            ) : (
+              <p className="text-xs text-gray-500">
+                Industry filter locked until backlog industry fill ≥ 40% (currently{" "}
+                {filterOptions.dataAvailability.industryPct}%).
+              </p>
+            )}
+
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <span className="font-medium">Salary filter</span>
+              {filterOptions.dataAvailability.salaryFilterReady ? (
+                <>
+                  <select
+                    value={emailPrefs.salaryFilter ?? "any"}
+                    onChange={(e) =>
+                      setEmailPrefs((p) => ({
+                        ...p,
+                        salaryFilter: e.target
+                          .value as EmailReportPreferences["salaryFilter"],
+                      }))
+                    }
+                    className="border rounded-md px-2 py-1 dark:border-gray-700 dark:bg-gray-900"
+                  >
+                    <option value="any">Any</option>
+                    <option value="has_salary">Has salary posted</option>
+                    <option value="min_salary">Minimum salary</option>
+                  </select>
+                  {(emailPrefs.salaryFilter ?? "any") === "min_salary" && (
+                    <input
+                      type="number"
+                      min={0}
+                      step={5000}
+                      value={emailPrefs.salaryMinUsd ?? 80000}
+                      onChange={(e) =>
+                        setEmailPrefs((p) => ({
+                          ...p,
+                          salaryMinUsd: parseInt(e.target.value, 10) || 0,
+                        }))
+                      }
+                      className="w-28 border rounded-md px-2 py-1 dark:border-gray-700 dark:bg-gray-900"
+                    />
+                  )}
+                </>
+              ) : (
+                <span className="text-gray-500">
+                  Hidden until salary fill ≥ 40% (currently{" "}
+                  {filterOptions.dataAvailability.salaryAnyPct}%)
+                </span>
+              )}
+              <label className="flex items-center gap-2">
+                Max backlog rows
                 <input
                   type="number"
-                  min={0}
-                  step={5000}
-                  value={emailPrefs.salaryMinUsd ?? 80000}
+                  min={1}
+                  max={100}
+                  value={emailPrefs.backlogLeadLimit ?? 25}
                   onChange={(e) =>
                     setEmailPrefs((p) => ({
                       ...p,
-                      salaryMinUsd: parseInt(e.target.value, 10) || 0,
+                      backlogLeadLimit: parseInt(e.target.value, 10) || 25,
                     }))
                   }
-                  className="w-28 border rounded-md px-2 py-1 dark:border-gray-700 dark:bg-gray-900"
+                  className="w-16 border rounded-md px-2 py-1 dark:border-gray-700 dark:bg-gray-900"
                 />
-              )}
-            </>
-          ) : (
-            <span className="text-gray-500">
-              Hidden until salary fill ≥ 40% (currently{" "}
-              {filterOptions.dataAvailability.salaryAnyPct}%)
-            </span>
-          )}
-          <label className="flex items-center gap-2">
-            Max backlog rows
-            <input
-              type="number"
-              min={1}
-              max={100}
-              value={emailPrefs.backlogLeadLimit ?? 25}
-              onChange={(e) =>
-                setEmailPrefs((p) => ({
-                  ...p,
-                  backlogLeadLimit: parseInt(e.target.value, 10) || 25,
-                }))
-              }
-              className="w-16 border rounded-md px-2 py-1 dark:border-gray-700 dark:bg-gray-900"
-            />
-          </label>
-        </div>
+              </label>
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs text-gray-500">
+            Backlog email section is off. Enable above only when you want a filtered
+            preview in the morning email.
+          </p>
+        )}
 
         <button
           onClick={saveEmailPreferences}

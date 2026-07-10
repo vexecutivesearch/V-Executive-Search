@@ -17,7 +17,8 @@ export const DEFAULT_EMAIL_REPORT_PREFERENCES: EmailReportPreferences = {
   salaryFilter: "any",
   salaryMinUsd: 80000,
   backlogLeadLimit: 25,
-  includeBacklogSection: true,
+  /** Off until explicitly enabled in Admin — unfinished filter UX must not ship in email. */
+  includeBacklogSection: false,
 };
 
 export function normalizeEmailReportPreferences(
@@ -33,8 +34,7 @@ export function normalizeEmailReportPreferences(
     salaryMinUsd: raw.salaryMinUsd ?? DEFAULT_EMAIL_REPORT_PREFERENCES.salaryMinUsd,
     backlogLeadLimit:
       raw.backlogLeadLimit ?? DEFAULT_EMAIL_REPORT_PREFERENCES.backlogLeadLimit,
-    includeBacklogSection:
-      raw.includeBacklogSection ??
-      DEFAULT_EMAIL_REPORT_PREFERENCES.includeBacklogSection,
+    // Explicit true only — null/undefined stays off
+    includeBacklogSection: raw.includeBacklogSection === true,
   };
 }

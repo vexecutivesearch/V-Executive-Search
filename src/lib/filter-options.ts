@@ -1,40 +1,34 @@
 import { and, isNotNull, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { companies, jobListings } from "@/lib/db/schema";
+import { companies } from "@/lib/db/schema";
 import { getActiveSearchProfiles } from "@/lib/pipeline-config";
-import { getFilterDataAvailability, type FilterDataAvailability } from "@/lib/filter-data-availability";
+import {
+  getFilterDataAvailability,
+  type FilterDataAvailability,
+} from "@/lib/filter-data-availability";
 
 export type TodayFilterOptions = {
+  /** Active search profile names only (never polluted location fragments). */
   jobTitles: string[];
   industries: string[];
   dataAvailability: FilterDataAvailability;
 };
 
-/** Distinct filter values from active backlog + search profiles. */
+/** Distinct filter values — titles from search profiles; industries from DB. */
 export async function getTodayFilterOptions(): Promise<TodayFilterOptions> {
-  const [profiles, industryRows, searchRows, dataAvailability] = await Promise.all([
+  const [profiles, industryRows, dataAvailability] = await Promise.all([
     getActiveSearchProfiles(),
     db
       .selectDistinct({ industry: companies.industry })
       .from(companies)
       .where(and(isNotNull(companies.industry), ne(companies.industry, "")))
       .orderBy(companies.industry),
-    db
-      .selectDistinct({ searchName: jobListings.searchName })
-      .from(jobListings)
-      .where(and(isNotNull(jobListings.searchName), ne(jobListings.searchName, "")))
-      .orderBy(jobListings.searchName),
     getFilterDataAvailability(),
   ]);
 
-  const profileNames = profiles.map((p) => p.name);
-  const fromListings = searchRows
-    .map((r) => r.searchName?.split(" — ")[0]?.trim())
-    .filter(Boolean) as string[];
-
   const jobTitles = [
-    ...new Set([...profileNames, ...fromListings].map((s) => s.trim())),
-  ].sort();
+    ...new Set(profiles.map((p) => p.name.trim()).filter(Boolean)),
+  ].sort((a, b) => a.localeCompare(b));
 
   const industries = industryRows
     .map((r) => r.industry?.trim())
