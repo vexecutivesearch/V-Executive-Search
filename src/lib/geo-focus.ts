@@ -32,6 +32,59 @@ function stateMatches(
   return false;
 }
 
+/** WPB focus — LinkedIn lists jobs across Palm Beach + Broward counties. */
+const PALM_BEACH_COUNTY_CITIES = [
+  "west palm beach",
+  "palm beach gardens",
+  "boynton beach",
+  "boca raton",
+  "lake worth",
+  "jupiter",
+  "wellington",
+  "delray beach",
+  "royal palm beach",
+  "greenacres",
+  "lantana",
+  "riviera beach",
+  "palm springs",
+  "north palm beach",
+  "juno beach",
+  "hypoluxo",
+  "manalapan",
+  "palm beach",
+];
+
+const BROWARD_COUNTY_CITIES = [
+  "fort lauderdale",
+  "hollywood",
+  "pembroke pines",
+  "miramar",
+  "coral springs",
+  "pompano beach",
+  "davie",
+  "sunrise",
+  "plantation",
+  "deerfield beach",
+  "tamarac",
+  "margate",
+  "dania",
+];
+
+function isSouthFloridaMetroLocation(
+  location: string,
+  focusCities: string[],
+): boolean {
+  const focusPalmBeach = focusCities.some((city) => {
+    const n = normalize(city);
+    return n.includes("west palm") || n.includes("palm beach");
+  });
+  if (!focusPalmBeach) return false;
+  const loc = normalize(location);
+  return [...PALM_BEACH_COUNTY_CITIES, ...BROWARD_COUNTY_CITIES].some((city) =>
+    loc.includes(city),
+  );
+}
+
 /** True when a scraped job listing location falls inside admin geo focus. */
 export function jobLocationInFocus(
   location: string | null | undefined,
@@ -77,6 +130,10 @@ export function jobLocationInFocus(
     cities.some((city) => normalize(city).includes("palm beach")) &&
     locNorm.includes("palm beach")
   ) {
+    return true;
+  }
+
+  if (isSouthFloridaMetroLocation(location, cities)) {
     return true;
   }
 

@@ -13,6 +13,7 @@ import { businessListDate, BUSINESS_TIMEZONE } from "@/lib/timezone";
 import type { ListDateRange } from "@/lib/list-date-range";
 import { applySharedLineFilter } from "@/lib/contact-phones";
 import { focusGeoLabel, getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
+import { isStaffingAgency } from "@/lib/icp-filter";
 import type { Contact, JobListing } from "@/lib/db/schema";
 
 function etDateFromTimestamp(value: Date): string {
@@ -119,7 +120,14 @@ export async function getBacklogCompanies(
   const geoSettings = await getGeoFocusSettings();
 
   const conditions = [
-    ne(companies.icpStatus, "fail"),
+    or(
+      ne(companies.icpStatus, "fail"),
+      sql`EXISTS (
+        SELECT 1 FROM contacts AS ct
+        WHERE ct.company_id = ${companies.id}
+          AND ct.source_provider = 'linkedin_poster'
+      )`,
+    ),
     not(ilike(companies.name, "(Listing)%")),
     lte(companies.firstSeen, asOfDate),
     or(
@@ -165,6 +173,7 @@ export async function getBacklogCompanies(
   return enriched
     .filter(
       (c) =>
+        !isStaffingAgency(c.name) &&
         c.jobListings.length > 0 &&
         !c.contacts.some(hasCallableContact),
     )
