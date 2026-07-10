@@ -192,6 +192,39 @@ export function AdminDashboard({
         </p>
       )}
 
+      <section className="border border-amber-200 dark:border-amber-900 rounded-xl p-5 space-y-3 bg-amber-50/50 dark:bg-amber-950/20">
+        <h2 className="font-semibold text-lg">Worker Mac setup</h2>
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          Scrapes and enrichment credits run on a separate Mac via{" "}
+          <code className="text-xs">worker/.env</code> — not stored in this
+          admin UI. On a fresh install, copy{" "}
+          <code className="text-xs">worker/.env.example</code> →{" "}
+          <code className="text-xs">worker/.env</code>, set CRM/API keys, then
+          run <code className="text-xs">./scripts/install_launchd.sh</code>.
+        </p>
+        <div className="text-sm text-gray-700 dark:text-gray-300 space-y-2">
+          <p className="font-medium">LinkedIn hiring team (optional)</p>
+          <p className="text-gray-600 dark:text-gray-400">
+            Public job pages only expose a &quot;job poster&quot; on ~5–10% of
+            listings. &quot;Meet the hiring team&quot; requires a logged-in
+            session on the worker. To enable on a{" "}
+            <strong>burner LinkedIn account only</strong> (never your primary):
+          </p>
+          <pre className="text-xs bg-white dark:bg-gray-950 border border-amber-200 dark:border-amber-900 rounded-lg p-3 overflow-x-auto">
+{`# worker/.env
+LINKEDIN_LI_AT_ENABLED=true
+LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
+          </pre>
+          <p className="text-xs text-amber-800 dark:text-amber-200">
+            Pilot with{" "}
+            <code className="text-xs">python scripts/backfill_linkedin_posters.py</code>{" "}
+            on 5 jobs before enabling twice-daily scrapes — automated auth
+            fetches risk account bans. Decision-maker outreach still flows
+            through Apollo → ContactOut by company; posters are a bonus signal.
+          </p>
+        </div>
+      </section>
+
       <section className="border rounded-xl p-5 space-y-4 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Geographic focus</h2>
         <p className="text-sm text-gray-500">
@@ -360,8 +393,9 @@ export function AdminDashboard({
       <section className="border rounded-xl p-5 space-y-4 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Job boards</h2>
         <p className="text-sm text-gray-500">
-          Sources scraped at 2 AM ET (via JobSpy on your home Mac). Toggle
-          boards to A/B which sources produce net-new companies — no deploy needed.
+          Sources scraped at 6 AM and 6 PM ET (via JobSpy on your worker Mac).
+          Toggle boards to A/B which sources produce net-new companies — no
+          deploy needed.
         </p>
         <ul className="space-y-2">
           {JOB_BOARD_OPTIONS.map((board) => (
