@@ -1,6 +1,7 @@
 import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { pipelineSettings, searchProfiles } from "@/lib/db/schema";
+import { TARGET_TITLES } from "@/lib/enrichment-config";
 import { DEFAULT_JOB_BOARDS, resolveJobBoards } from "@/lib/job-boards";
 import {
   DEFAULT_WPB_METRO_ALIASES,
@@ -8,26 +9,75 @@ import {
 } from "@/lib/metro-defaults";
 import { backfillLinkedinDistanceDefaults } from "@/lib/search-profile-defaults";
 
+/**
+ * Broad geo hiring signals for JobSpy — not contact titles.
+ * Space term = location-first "all roles" pull; others fill common buckets.
+ */
 const DEFAULT_SEARCHES = [
   {
-    name: "HR Director",
-    searchTerm: "HR Director",
+    name: "Market scan",
+    searchTerm: " ",
     sortOrder: 0,
     linkedinDistance: 25,
+    resultsWanted: 100,
   },
   {
-    name: "VP People",
-    searchTerm: "VP People",
+    name: "Manager",
+    searchTerm: "manager",
     sortOrder: 1,
     linkedinDistance: 25,
+    resultsWanted: 50,
   },
   {
-    name: "Head of Talent",
-    searchTerm: "Head of Talent",
+    name: "Director",
+    searchTerm: "director",
     sortOrder: 2,
-    linkedinDistance: null as number | null,
+    linkedinDistance: 25,
+    resultsWanted: 50,
+  },
+  {
+    name: "Coordinator",
+    searchTerm: "coordinator",
+    sortOrder: 3,
+    linkedinDistance: 25,
+    resultsWanted: 50,
+  },
+  {
+    name: "Specialist",
+    searchTerm: "specialist",
+    sortOrder: 4,
+    linkedinDistance: 25,
+    resultsWanted: 50,
+  },
+  {
+    name: "Assistant",
+    searchTerm: "assistant",
+    sortOrder: 5,
+    linkedinDistance: 25,
+    resultsWanted: 50,
+  },
+  {
+    name: "Analyst",
+    searchTerm: "analyst",
+    sortOrder: 6,
+    linkedinDistance: 25,
+    resultsWanted: 50,
+  },
+  {
+    name: "Sales",
+    searchTerm: "sales",
+    sortOrder: 7,
+    linkedinDistance: 25,
+    resultsWanted: 50,
   },
 ];
+
+/** Old Admin profiles that were contact titles misused as scrape queries. */
+const LEGACY_CONTACT_AS_SEARCH = new Set([
+  "hr director",
+  "vp people",
+  "head of talent",
+]);
 
 export type GeoZone = {
   label: string;
@@ -38,6 +88,13 @@ export type GeoZone = {
 function normalizeList(values: string[] | null | undefined): string[] {
   if (!values?.length) return [];
   return [...new Set(values.map((v) => v.trim()).filter(Boolean))];
+}
+
+export function normalizeContactTitles(
+  values: string[] | null | undefined,
+): string[] {
+  const list = normalizeList(values);
+  return list.length ? list : [...TARGET_TITLES];
 }
 
 /** Remove duplicate search profiles (keep lowest sort_order / oldest id). */
@@ -51,7 +108,7 @@ export async function dedupeSearchProfiles(): Promise<number> {
   const toDelete: string[] = [];
 
   for (const row of rows) {
-    const key = row.searchTerm.trim().toLowerCase();
+    const key = row.searchTerm.trim().toLowerCase() || " ";
     if (seen.has(key)) {
       toDelete.push(row.id);
     } else {
@@ -64,6 +121,45 @@ export async function dedupeSearchProfiles(): Promise<number> {
   }
 
   return toDelete.length;
+}
+
+/**
+ * One-time: replace HR/People contact titles used as JobSpy queries with
+ * broad market-scan buckets. Skips if any non-legacy active profile exists.
+ */
+export async function migrateLegacyContactTitleSearches(): Promise<boolean> {
+  const rows = await db.select().from(searchProfiles);
+  if (!rows.length) return false;
+
+  const hasBroad = rows.some((r) => {
+    const term = r.searchTerm.trim().toLowerCase();
+    const name = r.name.trim().toLowerCase();
+    return name.includes("market scan") || term === "" || term === "manager";
+  });
+  if (hasBroad) return false;
+
+  const active = rows.filter((r) => r.isActive);
+  if (!active.length) return false;
+  if (
+    !active.every((r) =>
+      LEGACY_CONTACT_AS_SEARCH.has(r.searchTerm.trim().toLowerCase()),
+    )
+  ) {
+    return false;
+  }
+
+  await db.delete(searchProfiles);
+  await db.insert(searchProfiles).values(
+    DEFAULT_SEARCHES.map((s) => ({
+      name: s.name,
+      searchTerm: s.searchTerm,
+      isActive: true,
+      sortOrder: s.sortOrder,
+      linkedinDistance: s.linkedinDistance,
+      resultsWanted: s.resultsWanted,
+    })),
+  );
+  return true;
 }
 
 export async function getOrCreateSettings() {
@@ -81,6 +177,7 @@ export async function getOrCreateSettings() {
         metroAliases: [...DEFAULT_WPB_METRO_ALIASES],
         notificationEmail: "hello@proventheory.co",
         jobBoards: [...DEFAULT_JOB_BOARDS],
+        contactTitles: [...TARGET_TITLES],
       })
       .returning();
   } else if (!normalizeList(settings.metroCities).length) {
@@ -89,6 +186,17 @@ export async function getOrCreateSettings() {
       .set({
         metroCities: [...DEFAULT_WPB_METRO_CITIES],
         metroAliases: [...DEFAULT_WPB_METRO_ALIASES],
+        updatedAt: new Date(),
+      })
+      .where(eq(pipelineSettings.id, settings.id))
+      .returning();
+  }
+
+  if (!normalizeList(settings.contactTitles).length) {
+    [settings] = await db
+      .update(pipelineSettings)
+      .set({
+        contactTitles: [...TARGET_TITLES],
         updatedAt: new Date(),
       })
       .where(eq(pipelineSettings.id, settings.id))
@@ -104,11 +212,14 @@ export async function getOrCreateSettings() {
         isActive: true,
         sortOrder: s.sortOrder,
         linkedinDistance: s.linkedinDistance,
+        resultsWanted: s.resultsWanted,
       })),
     );
-    await dedupeSearchProfiles();
+  } else {
+    await migrateLegacyContactTitleSearches();
   }
 
+  await dedupeSearchProfiles();
   await backfillLinkedinDistanceDefaults();
 
   const boards = resolveJobBoards(settings.jobBoards);
@@ -138,9 +249,20 @@ export async function getAllSearchProfiles() {
 }
 
 /** Build geographic zones from settings (multi-select geofence). */
-export function buildGeoZones(settings: typeof pipelineSettings.$inferSelect): GeoZone[] {
+export function buildGeoZones(
+  settings: Awaited<ReturnType<typeof getOrCreateSettings>>,
+): GeoZone[] {
   const state = settings.focusState || "Florida";
   const zones: GeoZone[] = [];
+
+  if (settings.geographicScope === "national") {
+    zones.push({
+      label: "United States",
+      location: "United States",
+      googleSuffix: "United States",
+    });
+    return zones;
+  }
 
   if (settings.geographicScope === "state") {
     zones.push({
@@ -157,10 +279,11 @@ export function buildGeoZones(settings: typeof pipelineSettings.$inferSelect): G
     const list = counties.length ? counties : legacy ? [legacy] : [];
 
     for (const county of list) {
+      const loc = formatBoardLocation(`${county} County`, state);
       zones.push({
-        label: `${county} County, ${state}`,
-        location: `${county} County, ${state}`,
-        googleSuffix: `${county} County ${state}`,
+        label: loc,
+        location: loc,
+        googleSuffix: loc,
       });
     }
     return zones.length
@@ -174,20 +297,89 @@ export function buildGeoZones(settings: typeof pipelineSettings.$inferSelect): G
         ];
   }
 
-  // city scope (default)
-  const cities = normalizeList(settings.focusCities);
+  // city scope: focus cities first, then Admin metro expansion (nearby hubs).
+  // Cap keeps LinkedIn/Indeed multi-draw runs from exploding.
+  // Never hardcode a market — empty focus falls back to configured metro, then seed.
+  const MAX_SCRAPE_CITY_ZONES = 8;
+  const focus = normalizeList(settings.focusCities);
   const legacyCity = settings.focusCity?.trim();
-  const list = cities.length ? cities : legacyCity ? [legacyCity] : ["West Palm Beach"];
+  const metro = normalizeList(settings.metroCities);
+  const focusList = focus.length
+    ? focus
+    : legacyCity
+      ? [legacyCity]
+      : metro.length
+        ? [metro[0]]
+        : ["West Palm Beach"];
+  const ordered: string[] = [];
+  for (const city of [...focusList, ...metro]) {
+    const key = city.trim().toLowerCase();
+    if (!key) continue;
+    if (ordered.some((c) => c.toLowerCase() === key)) continue;
+    ordered.push(city.trim());
+  }
+  const list = ordered.slice(0, MAX_SCRAPE_CITY_ZONES);
 
   for (const city of list) {
+    const loc = formatBoardLocation(city, state);
     zones.push({
-      label: `${city}, ${state}`,
-      location: `${city}, ${state}`,
-      googleSuffix: `${city} ${state}`,
+      label: loc,
+      location: loc,
+      googleSuffix: loc,
     });
   }
 
   return zones;
+}
+
+/** USPS-style place for JobSpy / Google NL ("West Palm Beach, FL"). */
+const STATE_ABBR: Record<string, string> = {
+  Florida: "FL",
+  florida: "FL",
+  FL: "FL",
+  fl: "FL",
+};
+
+export function formatBoardLocation(cityOrPlace: string, state: string): string {
+  const place = cityOrPlace.trim().replace(/,?\s*(FL|Florida)\s*$/i, "");
+  const abbr =
+    STATE_ABBR[state.trim()] ??
+    (state.trim().length === 2 ? state.trim().toUpperCase() : state.trim());
+  if (!place) return abbr;
+  // Already "City, ST"
+  if (/,\s*[A-Z]{2}$/i.test(place)) return place;
+  return `${place}, ${abbr}`;
+}
+
+function googleRecencyPhrase(hoursOld: number): string {
+  // Match JobSpy hours_old window — "posted today" is too narrow for a 6AM/6PM pull.
+  if (hoursOld <= 24) return "posted since yesterday";
+  if (hoursOld <= 72) return "posted in the last 3 days";
+  if (hoursOld <= 168) return "posted in the last week";
+  return "posted in the last month";
+}
+
+/**
+ * JobSpy Google needs natural-language built from Admin config — never hardcoded
+ * titles or geo. Place comes from the scrape zone (focus + metro hubs);
+ * window comes from hours_old (keep wide — last week / 168h — for resilience
+ * and repost signals; "new today" is a CRM highlight, not a scrape window).
+ *
+ * Examples (when Admin geo is WPB metro):
+ *   jobs near West Palm Beach, FL posted in the last week
+ *   manager jobs near Boca Raton, FL posted in the last week
+ */
+export function googleSearchTerm(
+  searchTerm: string,
+  location: string,
+  hoursOld = 168,
+): string {
+  const role = searchTerm.trim();
+  const place = location.trim();
+  const window = googleRecencyPhrase(hoursOld);
+  const head = role ? `${role} jobs` : "jobs";
+  if (!place) return `${head} ${window}`;
+  return `${head} near ${place} ${window}`;
 }
 
 export async function buildPipelineConfig() {
@@ -195,41 +387,30 @@ export async function buildPipelineConfig() {
   const profiles = await getActiveSearchProfiles();
   const zones = buildGeoZones(settings);
 
-  const targetTitles = [
-    "CEO",
-    "Chief Executive Officer",
-    "President",
-    "Founder",
-    "Co-Founder",
-    "COO",
-    "Chief Operating Officer",
-    "CFO",
-    "Chief Financial Officer",
-    "CTO",
-    "Chief Technology Officer",
-    "CHRO",
-    "Chief People Officer",
-    "VP People",
-    "VP Human Resources",
-    "Head of HR",
-    "HR Director",
-    "Director of Human Resources",
-  ];
-
+  const targetTitles = normalizeContactTitles(settings.contactTitles);
   const targetSeniorities = ["c_suite", "vp", "head", "director"];
 
   const searches = profiles.flatMap((p) =>
-    zones.map((zone) => ({
-      name: `${p.name} — ${zone.label}`,
-      search_term: p.searchTerm,
-      location: zone.location,
-      google_search_term: `${p.searchTerm} jobs ${zone.googleSuffix} since yesterday`,
-      country_indeed: "USA",
-      is_remote: p.isRemote ?? false,
-      results_wanted: p.resultsWanted ?? 50,
-      hours_old: p.hoursOld ?? 168,
-      linkedin_distance: p.linkedinDistance ?? undefined,
-    })),
+    zones.map((zone) => {
+      const hoursOld = p.hoursOld ?? 168;
+      const searchTerm = p.searchTerm.trim() ? p.searchTerm : " ";
+      return {
+        name: `${p.name} — ${zone.label}`,
+        search_term: searchTerm,
+        location: zone.location,
+        google_search_term: googleSearchTerm(
+          p.searchTerm,
+          zone.location,
+          hoursOld,
+        ),
+        country_indeed: "USA",
+        is_remote: p.isRemote ?? false,
+        results_wanted: p.resultsWanted ?? 50,
+        hours_old: hoursOld,
+        distance: p.linkedinDistance ?? 50,
+        linkedin_distance: p.linkedinDistance ?? undefined,
+      };
+    }),
   );
 
   return {

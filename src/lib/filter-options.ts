@@ -8,13 +8,13 @@ import {
 } from "@/lib/filter-data-availability";
 
 export type TodayFilterOptions = {
-  /** Active search profile names only (never polluted location fragments). */
+  /** Active market-scan profile names (scrape buckets — not contact titles). */
   jobTitles: string[];
   industries: string[];
   dataAvailability: FilterDataAvailability;
 };
 
-/** Distinct filter values — titles from search profiles; industries from DB. */
+/** Distinct filter values — scrape buckets from search profiles; industries from DB. */
 export async function getTodayFilterOptions(): Promise<TodayFilterOptions> {
   const [profiles, industryRows, dataAvailability] = await Promise.all([
     getActiveSearchProfiles(),

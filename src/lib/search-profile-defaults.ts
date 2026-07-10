@@ -5,6 +5,15 @@ import { searchProfiles } from "@/lib/db/schema";
 /** One-time backfill: per-search LinkedIn distance defaults for existing profiles. */
 export async function backfillLinkedinDistanceDefaults(): Promise<number> {
   const defaults: Record<string, number | null> = {
+    "Market scan": 25,
+    Manager: 25,
+    Director: 25,
+    Coordinator: 25,
+    Specialist: 25,
+    Assistant: 25,
+    Analyst: 25,
+    Sales: 25,
+    // Legacy contact-title profiles (pre-broad-scan)
     "HR Director": 25,
     "VP People": 25,
     "Head of Talent": null,

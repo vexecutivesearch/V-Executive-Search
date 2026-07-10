@@ -26,8 +26,9 @@ export const JOB_BOARD_OPTIONS: JobBoardOption[] = [
   {
     id: "google",
     label: "Google Jobs",
-    description: "Aggregates many sources; good reach.",
-    defaultEnabled: true,
+    description:
+      "Disabled by default — JobSpy Google scraper returns empty HTML (needs SerpApi). Re-enable only to test.",
+    defaultEnabled: false,
   },
   {
     id: "linkedin",
@@ -39,7 +40,8 @@ export const JOB_BOARD_OPTIONS: JobBoardOption[] = [
   {
     id: "zip_recruiter",
     label: "ZipRecruiter",
-    description: "Solid SMB and mid-market US coverage; low block risk.",
+    description:
+      "Known-degraded (Cloudflare 403). Keep on for loud board_failure; overlaps Indeed — do not chase.",
     defaultEnabled: true,
   },
   {

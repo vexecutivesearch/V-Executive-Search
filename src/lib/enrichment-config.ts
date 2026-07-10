@@ -1,22 +1,14 @@
+/** People titles to find at hiring companies — not JobSpy scrape queries. */
 export const TARGET_TITLES = [
-  "CEO",
-  "Chief Executive Officer",
-  "President",
-  "Founder",
-  "Co-Founder",
-  "COO",
-  "Chief Operating Officer",
-  "CFO",
-  "Chief Financial Officer",
-  "CTO",
-  "Chief Technology Officer",
-  "CHRO",
-  "Chief People Officer",
-  "VP People",
-  "VP Human Resources",
-  "Head of HR",
   "HR Director",
+  "VP People",
+  "Head of Talent",
   "Director of Human Resources",
+  "VP Human Resources",
+  "Chief People Officer",
+  "CHRO",
+  "Head of HR",
+  "Head of People",
 ];
 
 export const TARGET_SENIORITIES = ["c_suite", "vp", "head", "director"];

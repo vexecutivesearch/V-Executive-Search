@@ -24,6 +24,10 @@ import {
 import { isPersonalEmail } from "@/lib/phone-utils";
 import { db } from "@/lib/db";
 import { contacts } from "@/lib/db/schema";
+import {
+  getOrCreateSettings,
+  normalizeContactTitles,
+} from "@/lib/pipeline-config";
 
 const APOLLO_BASE = "https://api.apollo.io/api/v1";
 
@@ -124,10 +128,11 @@ async function searchPeople(
   domain: string,
   perPage: number,
   personLocations?: string[],
+  personTitles: string[] = TARGET_TITLES,
 ): Promise<Record<string, unknown>[]> {
   const payload: Record<string, unknown> = {
     q_organization_domains_list: [domain],
-    person_titles: TARGET_TITLES,
+    person_titles: personTitles,
     include_similar_titles: true,
     person_seniorities: TARGET_SENIORITIES,
     page: 1,
@@ -210,6 +215,9 @@ export async function enrichCompanyContacts(options: {
   const useContactOut = Boolean(contactOutApiKey) && contactOutAvailable;
   const apolloPhone = ENRICH_PHONE;
 
+  const settings = await getOrCreateSettings();
+  const personTitles = normalizeContactTitles(settings.contactTitles);
+
   const parsedLocations = collectJobLocations(jobLocations);
   const jobLocationLabel = parsedLocations[0]?.label ?? null;
   const apolloLocations = [
@@ -218,9 +226,15 @@ export async function enrichCompanyContacts(options: {
 
   const perPage = Math.max(contactsPerCompany * 5, 10);
   const localPeople = apolloLocations.length
-    ? await searchPeople(apiKey, domain, perPage, apolloLocations)
+    ? await searchPeople(apiKey, domain, perPage, apolloLocations, personTitles)
     : [];
-  const broadPeople = await searchPeople(apiKey, domain, perPage);
+  const broadPeople = await searchPeople(
+    apiKey,
+    domain,
+    perPage,
+    undefined,
+    personTitles,
+  );
   const people = mergePeople(localPeople, broadPeople).sort((a, b) => {
     const ka = personSortKey(a, parsedLocations);
     const kb = personSortKey(b, parsedLocations);

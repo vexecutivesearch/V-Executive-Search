@@ -119,6 +119,14 @@ export function AdminDashboard({
     daily_enrich_quota: settings.dailyEnrichQuota ?? 25,
     min_score_for_enrich: settings.minScoreForEnrich ?? 60,
     min_score_for_phone: settings.minScoreForPhone ?? 75,
+    contact_titles: (settings.contactTitles?.length
+      ? settings.contactTitles
+      : [
+          "HR Director",
+          "VP People",
+          "Head of Talent",
+        ]
+    ).join("\n"),
   });
   const [profiles, setProfiles] = useState(initialProfiles);
   const [emailPrefs, setEmailPrefs] = useState<EmailReportPreferences>(() =>
@@ -146,10 +154,14 @@ export function AdminDashboard({
       return;
     }
     setSaving(true);
+    const contact_titles = form.contact_titles
+      .split("\n")
+      .map((t) => t.trim())
+      .filter(Boolean);
     const res = await fetch("/api/admin/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
+      body: JSON.stringify({ ...form, contact_titles }),
     });
     setSaving(false);
     setMessage(res.ok ? "Settings saved." : "Failed to save.");
@@ -321,14 +333,15 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
               emptyHint="City dropdowns are available for Florida. Add more states in locations.ts as you expand."
             />
             <MultiSelect
-              label="Metro expansion cities (accept jobs in these cities when focus is WPB)"
+              label="Metro expansion cities (nearby scrape hubs + accept in ICP)"
               options={metroOptions}
               selected={form.metro_cities}
               onChange={(metro_cities) => setForm({ ...form, metro_cities })}
               emptyHint="Metro list available for Florida WPB market."
             />
             <p className="text-xs text-gray-500">
-              Also matches: {DEFAULT_WPB_METRO_ALIASES.join(", ")}
+              Focus cities scrape first; metro cities are added as nearby hubs
+              (capped). Also matches: {DEFAULT_WPB_METRO_ALIASES.join(", ")}
             </p>
           </>
         )}
@@ -466,11 +479,34 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
       </section>
 
       <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
-        <h2 className="font-semibold text-lg">Job title searches</h2>
+        <h2 className="font-semibold text-lg">Contact titles (enrichment)</h2>
         <p className="text-sm text-gray-500">
-          Active searches run in your selected geographic area and job boards during
-          the 6 AM / 6 PM scrape. LinkedIn radius (miles) is per title — tight for
-          supply-rich searches, blank for wide (scarce titles like Head of Talent).
+          People to find at companies that are hiring — used by Apollo/ContactOut,
+          not as job-board search queries. One title per line.
+        </p>
+        <textarea
+          rows={8}
+          className="w-full border rounded-lg px-3 py-2 text-sm font-mono dark:border-gray-700 dark:bg-gray-900"
+          value={form.contact_titles}
+          onChange={(e) =>
+            setForm((f) => ({ ...f, contact_titles: e.target.value }))
+          }
+        />
+        <button
+          onClick={saveSettings}
+          disabled={saving}
+          className="bg-gray-900 text-white dark:bg-white dark:text-gray-900 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+        >
+          {saving ? "Saving…" : "Save contact titles"}
+        </button>
+      </section>
+
+      <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
+        <h2 className="font-semibold text-lg">Market scan queries</h2>
+        <p className="text-sm text-gray-500">
+          Broad hiring signals scraped in your geo (open roles across common job
+          buckets — not the contact titles above). LinkedIn radius (miles) is per
+          query; blank = wide.
         </p>
         <ul className="space-y-2">
           {profiles.map((p) => (
@@ -478,7 +514,12 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
               key={p.id}
               className="flex flex-wrap items-center justify-between gap-3 text-sm border rounded-lg px-3 py-2 dark:border-gray-800"
             >
-              <span className="font-medium">{p.name}</span>
+              <span className="font-medium">
+                {p.name}
+                <span className="ml-2 text-xs font-normal text-gray-500">
+                  ({p.searchTerm.trim() || "all roles"})
+                </span>
+              </span>
               <div className="flex items-center gap-4">
                 <label className="flex items-center gap-2 text-xs text-gray-500">
                   LI radius (mi)
@@ -550,13 +591,13 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
             </p>
 
             <MultiSelect
-              label="Job titles (search profiles)"
+              label="Market scan buckets"
               options={filterOptions.jobTitles}
               selected={emailPrefs.jobTitleFilters ?? []}
               onChange={(jobTitleFilters) =>
                 setEmailPrefs((p) => ({ ...p, jobTitleFilters }))
               }
-              emptyHint="Add search profiles above first."
+              emptyHint="Add market scan queries above first."
             />
 
             {filterOptions.dataAvailability.industryFilterReady ? (

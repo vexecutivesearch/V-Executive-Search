@@ -1,39 +1,47 @@
-# Saved job search criteria — FALLBACK when CRM config is unavailable
-# Primary config is managed in Admin: https://your-app.vercel.app/admin
+# FALLBACK only when CRM Admin config is unavailable.
+# Primary: Admin geo + market-scan profiles + contact titles.
+# google_search_term must be NL: "{role?} jobs near {City, ST} posted in the last week"
+# Window stays wide (168h) — do not use "posted today".
 
 searches:
-  - name: "HR Director — Florida"
-    search_term: "HR Director"
-    location: "Florida"
-    google_search_term: "HR Director jobs Florida since yesterday"
+  - name: "Market scan — West Palm Beach, FL"
+    search_term: " "
+    location: "West Palm Beach, FL"
+    google_search_term: "jobs near West Palm Beach, FL posted in the last week"
+    country_indeed: "USA"
+    results_wanted: 100
+    hours_old: 168
+    distance: 50
+  - name: "Manager — West Palm Beach, FL"
+    search_term: "manager"
+    location: "West Palm Beach, FL"
+    google_search_term: "manager jobs near West Palm Beach, FL posted in the last week"
     country_indeed: "USA"
     results_wanted: 50
-    hours_old: 24
+    hours_old: 168
+    distance: 50
 
 boards:
   - indeed
-  - google
   - linkedin
   - zip_recruiter
 
 target_titles:
-  - CEO
-  - Founder
-  - Owner
-  - President
-  - HR Manager
-  - Head of Talent
+  - HR Director
   - VP People
+  - Head of Talent
+  - Director of Human Resources
+  - VP Human Resources
   - Chief People Officer
-  - Director of HR
-  - Human Resources Manager
+  - CHRO
+  - Head of HR
+  - Head of People
 
 target_seniorities:
   - c_suite
   - vp
   - head
   - director
-  - manager
 
 enrichment:
   contacts_per_company: 3

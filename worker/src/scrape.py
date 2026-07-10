@@ -18,15 +18,19 @@ logger = logging.getLogger(__name__)
 ALLOWED_BOARDS = frozenset(
     {"indeed", "google", "linkedin", "zip_recruiter", "glassdoor"}
 )
-DEFAULT_BOARDS = ["linkedin", "indeed", "google", "zip_recruiter"]
+# Google omitted by default — JobSpy Google returns empty HTML; use SerpApi if needed.
+DEFAULT_BOARDS = ["linkedin", "indeed", "zip_recruiter"]
 
 # LinkedIn guest API returns different subsets per call — union multiple draws.
 LINKEDIN_DRAW_COUNT = max(1, int(os.getenv("LINKEDIN_DRAW_COUNT", "3")))
-# Pause between draws (seconds) — avoid back-to-back hits on residential IP.
 LINKEDIN_DRAW_JITTER_MIN = float(os.getenv("LINKEDIN_DRAW_JITTER_MIN", "4"))
 LINKEDIN_DRAW_JITTER_MAX = float(os.getenv("LINKEDIN_DRAW_JITTER_MAX", "12"))
 
-# Scrape LinkedIn first — smaller result sets + hiring-team fetch is LinkedIn-only.
+# Indeed can flake empty under rate pressure — multi-draw + backoff like LinkedIn.
+INDEED_DRAW_COUNT = max(1, int(os.getenv("INDEED_DRAW_COUNT", "3")))
+INDEED_JITTER_MIN = float(os.getenv("INDEED_JITTER_MIN", "2"))
+INDEED_JITTER_MAX = float(os.getenv("INDEED_JITTER_MAX", "6"))
+
 BOARD_PRIORITY = {
     "linkedin": 0,
     "indeed": 1,
@@ -140,19 +144,60 @@ def _dedupe_listings(listings: list[JobListing]) -> list[JobListing]:
     return out
 
 
+def _google_recency_phrase(hours_old: int) -> str:
+    if hours_old <= 24:
+        return "posted since yesterday"
+    if hours_old <= 72:
+        return "posted in the last 3 days"
+    if hours_old <= 168:
+        return "posted in the last week"
+    return "posted in the last month"
+
+
+def build_google_search_term(search: dict[str, Any]) -> str:
+    """Natural-language Google query for broad geo scrape (not contact titles).
+
+    Examples:
+      jobs near West Palm Beach, FL posted in the last week
+      manager jobs near Boca Raton, FL posted in the last week
+    """
+    existing = (search.get("google_search_term") or "").strip()
+    if existing and (" near " in existing.lower() or existing.lower().startswith("jobs near")):
+        return existing
+    if existing and "posted" in existing.lower() and " near " in existing.lower():
+        return existing
+
+    role = (search.get("search_term") or "").strip()
+    location = (search.get("location") or "").strip()
+    hours_old = int(search.get("hours_old") or 168)
+    window = _google_recency_phrase(hours_old)
+    head = f"{role} jobs" if role else "jobs"
+    if location:
+        return f"{head} near {location} {window}"
+    return f"{head} {window}"
+
+
 def _board_kwargs(search: dict[str, Any], board: str) -> dict[str, Any]:
-    # Indeed/Google/Zip need a wider window than 24h — overnight gaps + JobSpy
-    # flakiness otherwise return near-zero and the backlog looks LinkedIn-only.
     default_hours = 168 if board != "linkedin" else 24
+    hours_old = int(search.get("hours_old") or default_hours)
     kwargs: dict[str, Any] = {
         "site_name": [board],
         "search_term": search["search_term"],
         "location": search.get("location", ""),
         "results_wanted": search.get("results_wanted", 50),
-        "hours_old": int(search.get("hours_old") or default_hours),
+        "hours_old": hours_old,
         "country_indeed": search.get("country_indeed", "USA"),
         "linkedin_fetch_description": False,
     }
+
+    distance = search.get("distance")
+    if distance is None:
+        distance = search.get("linkedin_distance")
+    if distance is not None and str(distance).strip() != "":
+        kwargs["distance"] = int(distance)
+    elif board in ("indeed", "zip_recruiter"):
+        # Cover WPB + nearby metro when scraping a hub city.
+        kwargs["distance"] = 50
 
     if board == "linkedin":
         kwargs["results_wanted"] = min(
@@ -163,12 +208,33 @@ def _board_kwargs(search: dict[str, Any], board: str) -> dict[str, Any]:
             search.get("linkedin_hours_old")
             or max(int(search.get("hours_old") or 24), 168)
         )
-        distance = search.get("linkedin_distance")
-        if distance is not None and str(distance).strip() != "":
-            kwargs["distance"] = int(distance)
 
-    if board == "google" and search.get("google_search_term"):
-        kwargs["google_search_term"] = search["google_search_term"]
+    if board == "google":
+        google_term = build_google_search_term({**search, "hours_old": hours_old})
+        kwargs["google_search_term"] = google_term
+        logger.info(
+            "Google board params search=%r google_search_term=%r location=%r "
+            "hours_old=%s results_wanted=%s",
+            search.get("name"),
+            google_term,
+            kwargs.get("location"),
+            kwargs.get("hours_old"),
+            kwargs.get("results_wanted"),
+        )
+
+    if board == "indeed":
+        logger.info(
+            "Indeed board params search=%r search_term=%r location=%r "
+            "results_wanted=%s hours_old=%s country_indeed=%r distance=%s",
+            search.get("name"),
+            kwargs.get("search_term"),
+            kwargs.get("location"),
+            kwargs.get("results_wanted"),
+            kwargs.get("hours_old"),
+            kwargs.get("country_indeed"),
+            kwargs.get("distance"),
+        )
+
     if search.get("is_remote") is not None:
         kwargs["is_remote"] = search["is_remote"]
 
@@ -213,7 +279,7 @@ def _scrape_search_board(search: dict[str, Any], board: str) -> list[JobListing]
                 exc,
             )
             if attempt == 1:
-                time.sleep(3)
+                time.sleep(3 + random.uniform(0, 2))
                 continue
             return []
 
@@ -225,7 +291,7 @@ def _scrape_search_board(search: dict[str, Any], board: str) -> list[JobListing]
                 attempt,
             )
             if attempt == 1:
-                time.sleep(2)
+                time.sleep(2 + random.uniform(0, 2))
                 continue
             return []
 
@@ -234,10 +300,85 @@ def _scrape_search_board(search: dict[str, Any], board: str) -> list[JobListing]
     return []
 
 
+def _scrape_indeed_union(
+    search: dict[str, Any],
+) -> tuple[list[JobListing], dict[str, Any]]:
+    """Multi-draw Indeed with backoff — distinguishes thin market from flake."""
+    name = search.get("name", "unnamed")
+    kwargs = _board_kwargs(search, "indeed")
+    draw_counts: list[int] = []
+    merged: list[JobListing] = []
+
+    for draw in range(1, INDEED_DRAW_COUNT + 1):
+        try:
+            df = scrape_jobs(**kwargs)
+        except Exception as exc:
+            logger.error(
+                "Search '%s' Indeed draw %d/%d failed: %s",
+                name,
+                draw,
+                INDEED_DRAW_COUNT,
+                exc,
+            )
+            draw_counts.append(0)
+            if draw < INDEED_DRAW_COUNT:
+                time.sleep(random.uniform(INDEED_JITTER_MIN, INDEED_JITTER_MAX))
+            continue
+
+        batch = _dataframe_to_listings(df, name, "indeed")
+        draw_counts.append(len(batch))
+        merged.extend(batch)
+        logger.info(
+            "Search '%s' Indeed draw %d/%d yielded %d listings",
+            name,
+            draw,
+            INDEED_DRAW_COUNT,
+            len(batch),
+        )
+
+        if len(batch) > 0 and draw >= 2:
+            break
+
+        if draw < INDEED_DRAW_COUNT:
+            lo, hi = INDEED_JITTER_MIN, INDEED_JITTER_MAX
+            if len(batch) == 0:
+                lo, hi = hi, hi * 2
+            delay = random.uniform(lo, hi)
+            logger.info(
+                "Search '%s' Indeed draw pause %.1fs before draw %d",
+                name,
+                delay,
+                draw + 1,
+            )
+            time.sleep(delay)
+
+    unioned = _dedupe_listings(merged)
+    stats = {
+        "search": name,
+        "indeed_draws": draw_counts,
+        "indeed_raw_sum": sum(draw_counts),
+        "indeed_union": len(unioned),
+    }
+    logger.info(
+        "Search '%s' Indeed union: draws=%s raw_sum=%d union=%d",
+        name,
+        draw_counts,
+        stats["indeed_raw_sum"],
+        stats["indeed_union"],
+    )
+    if stats["indeed_union"] == 0:
+        logger.warning(
+            "Search '%s' Indeed confirmed empty across %d draws "
+            "(thin market or sustained block — not a single silent failure)",
+            name,
+            INDEED_DRAW_COUNT,
+        )
+    return unioned, stats
+
+
 def _scrape_linkedin_union(
     search: dict[str, Any],
 ) -> tuple[list[JobListing], dict[str, Any]]:
-    """Fetch LinkedIn multiple times and union — mitigates JobSpy paginator variance."""
     name = search.get("name", "unnamed")
     kwargs = _board_kwargs(search, "linkedin")
     draw_counts: list[int] = []
@@ -279,13 +420,11 @@ def _scrape_linkedin_union(
             time.sleep(delay)
 
     unioned = _dedupe_listings(merged)
-    max_draw = max(draw_counts) if draw_counts else 0
-    union_n = len(unioned)
     stats = {
         "search": name,
         "linkedin_draws": draw_counts,
         "linkedin_raw_sum": sum(draw_counts),
-        "linkedin_union": union_n,
+        "linkedin_union": len(unioned),
         "linkedin_distance": search.get("linkedin_distance"),
     }
     violations = check_linkedin_per_search_invariants(stats)
@@ -311,6 +450,8 @@ def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
     for board in boards:
         if board == "linkedin":
             board_listings, _stats = _scrape_linkedin_union(search)
+        elif board == "indeed":
+            board_listings, _stats = _scrape_indeed_union(search)
         else:
             board_listings = _scrape_search_board(search, board)
         logger.info(
@@ -335,31 +476,37 @@ def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
     boards = normalize_boards(config.get("boards"))
     funnel = ScrapeFunnel()
     logger.info(
-        "Job boards enabled: %s (LinkedIn draws/search=%d)",
+        "Job boards enabled: %s (LinkedIn draws/search=%d Indeed draws/search=%d)",
         ", ".join(boards),
         LINKEDIN_DRAW_COUNT,
+        INDEED_DRAW_COUNT,
     )
+    if "google" in boards:
+        logger.warning(
+            "Google board enabled — JobSpy Google often returns 0 (empty HTML). "
+            "If still empty after NL google_search_term, disable and use SerpApi."
+        )
     all_listings: list[JobListing] = []
     linkedin_raw_sum = 0
 
     for search in config.get("searches", []):
         name = search.get("name", "unnamed")
-        if "linkedin" in boards:
-            li_union, stats = _scrape_linkedin_union(search)
-            linkedin_raw_sum += stats["linkedin_raw_sum"]
-            funnel.linkedin_per_search.append(stats)
-            funnel.funnel_invariant_violations.extend(
-                check_linkedin_per_search_invariants(stats),
-            )
-            # Non-LinkedIn boards via run_search would re-scrape LinkedIn — build manually.
-            merged = list(li_union)
-            for board in boards:
-                if board == "linkedin":
-                    continue
+        merged: list[JobListing] = []
+        for board in boards:
+            if board == "linkedin":
+                li_union, stats = _scrape_linkedin_union(search)
+                linkedin_raw_sum += stats["linkedin_raw_sum"]
+                funnel.linkedin_per_search.append(stats)
+                funnel.funnel_invariant_violations.extend(
+                    check_linkedin_per_search_invariants(stats),
+                )
+                merged.extend(li_union)
+            elif board == "indeed":
+                indeed_union, _stats = _scrape_indeed_union(search)
+                merged.extend(indeed_union)
+            else:
                 merged.extend(_scrape_search_board(search, board))
-            search_listings = _dedupe_listings(merged)
-        else:
-            search_listings = run_search(search, boards)
+        search_listings = _dedupe_listings(merged)
 
         logger.info(
             "Search '%s' ingested %d listings",
@@ -383,7 +530,18 @@ def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
     for board in boards:
         count = by_board.get(board, 0)
         if count == 0:
-            msg = f"{board}: 0 listings this run (configured board returned nothing)"
+            if board == "zip_recruiter":
+                msg = (
+                    f"{board}: 0 listings this run "
+                    "(known-degraded Cloudflare/403 — non-blocking)"
+                )
+            elif board == "google":
+                msg = (
+                    f"{board}: 0 listings this run "
+                    "(JobSpy Google empty HTML — flag SerpApi; non-blocking)"
+                )
+            else:
+                msg = f"{board}: 0 listings this run (configured board returned nothing)"
             funnel.board_failures.append(msg)
             logger.error("BOARD FAILURE — %s", msg)
 

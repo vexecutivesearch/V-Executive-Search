@@ -12,6 +12,7 @@ import {
 import type { TodayFilterOptions } from "@/lib/filter-options";
 import type { ListDateRange } from "@/lib/list-date-range";
 import { backlogSummaryLabel } from "@/lib/list-date-range";
+import { isNewToday } from "@/lib/new-today";
 import type { dailyRuns } from "@/lib/db/schema";
 
 const DISCLAIMER_KEY = "today-list-location-disclaimer-dismissed";
@@ -43,6 +44,7 @@ export function TodayListView({
   const [geoOnly, setGeoOnly] = useState(false);
   const [callableOnly, setCallableOnly] = useState(listMode === "call-sheet");
   const [hotSignalsOnly, setHotSignalsOnly] = useState(false);
+  const [newTodayOnly, setNewTodayOnly] = useState(false);
   const [linkedinOnly, setLinkedinOnly] = useState(false);
   const [leadFilters, setLeadFilters] = useState<LeadFilterState>({
     ...DEFAULT_LEAD_FILTER,
@@ -83,6 +85,17 @@ export function TodayListView({
         const signals = company.hiringSignals ?? {};
         if (!Object.keys(signals).length) return false;
       }
+      if (newTodayOnly) {
+        if (
+          !isNewToday({
+            companyFirstSeen: company.firstSeen,
+            listings: company.jobListings,
+            listDate: listRange?.snapshotDate,
+          })
+        ) {
+          return false;
+        }
+      }
       if (linkedinOnly) {
         const hasLinkedIn = company.jobListings.some(
           (j) => j.board?.toLowerCase() === "linkedin",
@@ -120,7 +133,7 @@ export function TodayListView({
     });
 
     return rows;
-  }, [companies, search, sort, geoOnly, callableOnly, hotSignalsOnly, linkedinOnly, leadFilters]);
+  }, [companies, search, sort, geoOnly, callableOnly, hotSignalsOnly, newTodayOnly, linkedinOnly, leadFilters, listRange?.snapshotDate]);
 
   const funnelJson = runStats?.funnelJson as
     | {
@@ -273,6 +286,16 @@ export function TodayListView({
           <label className="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
             <input
               type="checkbox"
+              checked={newTodayOnly}
+              onChange={(e) => setNewTodayOnly(e.target.checked)}
+              className="rounded border-gray-300"
+            />
+            New today
+          </label>
+
+          <label className="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
+            <input
+              type="checkbox"
               checked={linkedinOnly}
               onChange={(e) => setLinkedinOnly(e.target.checked)}
               className="rounded border-gray-300"
@@ -286,9 +309,9 @@ export function TodayListView({
               setLeadFilters((f) => ({ ...f, jobTitle: e.target.value }))
             }
             className="text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900"
-            aria-label="Filter by job title search"
+            aria-label="Filter by market scan bucket"
           >
-            <option value="">All job titles</option>
+            <option value="">All scan buckets</option>
             {(filterOptions?.jobTitles ?? []).map((t) => (
               <option key={t} value={t}>
                 {t}

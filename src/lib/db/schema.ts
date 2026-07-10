@@ -73,6 +73,8 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   emailReportPreferences: jsonb("email_report_preferences").$type<
     import("@/lib/email-report-preferences").EmailReportPreferences
   >(),
+  /** Decision-maker titles for Apollo/ContactOut — not scrape search terms. */
+  contactTitles: jsonb("contact_titles").$type<string[]>().default([]),
   runRequestedAt: timestamp("run_requested_at"),
   contactoutSyncRequestedAt: timestamp("contactout_sync_requested_at"),
   imessageCheckRequestedAt: timestamp("imessage_check_requested_at"),

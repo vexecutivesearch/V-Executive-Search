@@ -3,7 +3,10 @@ import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { pipelineSettings } from "@/lib/db/schema";
 import { resolveJobBoards } from "@/lib/job-boards";
-import { getOrCreateSettings } from "@/lib/pipeline-config";
+import {
+  getOrCreateSettings,
+  normalizeContactTitles,
+} from "@/lib/pipeline-config";
 import { normalizeEmailReportPreferences } from "@/lib/email-report-preferences";
 import { eq } from "drizzle-orm";
 
@@ -39,6 +42,7 @@ export async function PUT(request: NextRequest) {
     daily_enrich_quota?: number;
     min_score_for_enrich?: number;
     min_score_for_phone?: number;
+    contact_titles?: string[];
     email_report_preferences?: Record<string, unknown>;
   };
   try {
@@ -73,6 +77,11 @@ export async function PUT(request: NextRequest) {
         )
       : current.emailReportPreferences;
 
+  const contactTitles =
+    body.contact_titles != null
+      ? normalizeContactTitles(body.contact_titles)
+      : normalizeContactTitles(current.contactTitles);
+
   const [updated] = await db
     .update(pipelineSettings)
     .set({
@@ -94,6 +103,7 @@ export async function PUT(request: NextRequest) {
         body.min_score_for_enrich ?? current.minScoreForEnrich,
       minScoreForPhone:
         body.min_score_for_phone ?? current.minScoreForPhone,
+      contactTitles,
       emailReportPreferences,
       updatedAt: new Date(),
     })

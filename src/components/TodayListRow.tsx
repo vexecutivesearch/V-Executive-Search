@@ -13,6 +13,7 @@ import {
   scoreLead,
   scoreTextClass,
 } from "@/lib/lead-score";
+import { isNewToday } from "@/lib/new-today";
 
 export function TodayListRow({
   company: initial,
@@ -66,6 +67,10 @@ export function TodayListRow({
     null;
   const lead = scoreLead(company);
   const displayScore = company.leadScore ?? lead.score;
+  const showNewToday = isNewToday({
+    companyFirstSeen: company.firstSeen,
+    listings: company.jobListings,
+  });
 
   async function refreshCompany(updated?: CompanyCardData) {
     if (updated) {
@@ -162,6 +167,11 @@ export function TodayListRow({
               >
                 {company.name}
               </Link>
+              {showNewToday && (
+                <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                  New today
+                </span>
+              )}
               {lead.geoMismatch && (
                 <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-300">
                   Geo mismatch
