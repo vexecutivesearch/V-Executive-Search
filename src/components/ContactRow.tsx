@@ -79,7 +79,10 @@ export function ContactRow({
         )}
         {contact.sourceProvider === "linkedin_poster" && (
           <span className="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-200">
-            Job poster
+            {contact.title?.toLowerCase().includes("job poster") ||
+            contact.title === "Job poster"
+              ? "Job poster"
+              : "Hiring team"}
           </span>
         )}
         {contact.linkedinUrl && (

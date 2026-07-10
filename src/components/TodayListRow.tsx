@@ -38,7 +38,23 @@ export function TodayListRow({
     setCompany(initial);
   }, [initial]);
 
-  const primaryJob = company.jobListings[0];
+  const linkedInJob =
+    company.jobListings.find(
+      (j) => j.board?.toLowerCase() === "linkedin" && j.posterName,
+    ) ??
+    company.jobListings.find((j) => j.board?.toLowerCase() === "linkedin");
+  const primaryJob = linkedInJob ?? company.jobListings[0];
+  const posterContacts = company.contacts.filter(
+    (c) => c.sourceProvider === "linkedin_poster",
+  );
+  const listingPoster =
+    primaryJob?.posterName && primaryJob.posterLinkedinUrl
+      ? {
+          name: primaryJob.posterName,
+          title: primaryJob.posterTitle,
+          linkedinUrl: primaryJob.posterLinkedinUrl,
+        }
+      : null;
   const jobLocation =
     primaryJob?.location ||
     company.contacts.find((c) => c.jobLocation)?.jobLocation ||
@@ -170,7 +186,7 @@ export function TodayListRow({
                   {primaryJob.board}
                   {primaryJob.location ? ` · ${primaryJob.location}` : ""}
                   {primaryJob.posterName
-                    ? ` · Poster: ${primaryJob.posterName}`
+                    ? ` · Hiring team: ${primaryJob.posterName}`
                     : ""}
                 </p>
               </>
@@ -183,7 +199,16 @@ export function TodayListRow({
             {company.contacts.length > 0 ? (
               <>
                 {lead.callableCount}/{company.contacts.length}
+                {posterContacts.length > 0 && lead.callableCount === 0 && (
+                  <span className="block text-[10px] text-indigo-600 dark:text-indigo-300">
+                    {posterContacts.length} hiring team
+                  </span>
+                )}
               </>
+            ) : listingPoster ? (
+              <span className="text-indigo-600 dark:text-indigo-300 text-xs">
+                Hiring team
+              </span>
             ) : (
               <span className="text-gray-400">—</span>
             )}
@@ -338,6 +363,34 @@ export function TodayListRow({
               {company.contacts.map((c) => (
                 <ContactRow key={c.id} contact={c} jobLocation={jobLocation} />
               ))}
+            </div>
+          ) : listingPoster ? (
+            <div className="mb-3 rounded-lg border border-indigo-200 dark:border-indigo-900 bg-indigo-50/60 dark:bg-indigo-950/30 p-3 text-sm">
+              <p className="text-xs font-medium uppercase tracking-wide text-indigo-800 dark:text-indigo-200 mb-1">
+                LinkedIn hiring team
+              </p>
+              <p className="font-medium">{listingPoster.name}</p>
+              {listingPoster.title && (
+                <p className="text-gray-600 dark:text-gray-400 text-xs mt-0.5">
+                  {listingPoster.title}
+                </p>
+              )}
+              <a
+                href={
+                  listingPoster.linkedinUrl.startsWith("http")
+                    ? listingPoster.linkedinUrl
+                    : `https://www.linkedin.com/in/${listingPoster.linkedinUrl}`
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 dark:text-blue-400 hover:underline text-xs mt-2 inline-block"
+              >
+                View LinkedIn profile →
+              </a>
+              <p className="text-xs text-gray-500 mt-2">
+                Use Enrich contacts to pull email/phone via ContactOut from this
+                profile.
+              </p>
             </div>
           ) : (
             <p className="text-sm text-gray-400 italic">No contacts enriched yet</p>

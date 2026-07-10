@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 _LINKEDIN_IN_RE = re.compile(r"linkedin\.com/in/", re.I)
 _JOB_ID_RE = re.compile(r"/jobs/view/(\d+)")
 _POSTER_HEADING_RE = re.compile(
-    r"(Meet the hiring team|job poster from|People you can reach out to)",
+    r"(Meet the hiring team|job poster from|People you can reach out to|Direct message the job poster)",
     re.I,
 )
 
@@ -47,9 +47,52 @@ def _extract_title_from_card(name: str, card_text: str) -> str:
             continue
         if "connection" in lower or "message" in lower or "job poster" in lower:
             continue
+        if "direct message" in lower:
+            continue
         if len(line) >= 4:
             return line
     return ""
+
+
+def _name_from_anchor(anchor) -> str:
+    sr = anchor.find("span", class_=re.compile(r"sr-only"))
+    if sr:
+        name = sr.get_text(" ", strip=True)
+        if name and len(name) >= 2:
+            return name
+    alt = anchor.find("img", alt=re.compile(r"view .+ profile", re.I))
+    if alt and alt.get("alt"):
+        match = re.search(r"view (.+?)[''']s profile", alt["alt"], re.I)
+        if match:
+            return match.group(1).strip()
+    text = anchor.get_text(" ", strip=True)
+    return text if text and len(text) >= 2 else ""
+
+
+def _posters_from_card_section(section, *, is_job_poster: bool) -> list[JobPoster]:
+    posters: list[JobPoster] = []
+    seen: set[str] = set()
+    for anchor in section.find_all("a", href=_LINKEDIN_IN_RE):
+        href = _normalize_linkedin_url(anchor.get("href", ""))
+        if href in seen:
+            continue
+        name = _name_from_anchor(anchor)
+        if not name:
+            continue
+        seen.add(href)
+        card = anchor.find_parent("div", class_=re.compile(r"base-main-card|base-card"))
+        title = ""
+        if card:
+            title = _extract_title_from_card(name, card.get_text("\n", strip=True))
+        posters.append(
+            JobPoster(
+                name=name,
+                title=title,
+                linkedin_url=href,
+                is_job_poster=is_job_poster,
+            )
+        )
+    return posters
 
 
 def parse_hiring_team_from_html(html: str) -> list[JobPoster]:
@@ -57,51 +100,53 @@ def parse_hiring_team_from_html(html: str) -> list[JobPoster]:
     posters: list[JobPoster] = []
     seen: set[str] = set()
 
+    def add(items: list[JobPoster]) -> None:
+        for poster in items:
+            key = poster.linkedin_url.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            posters.append(poster)
+
+    # Public guest layout: "Direct message the job poster"
+    for block in soup.select(".message-the-recruiter"):
+        add(_posters_from_card_section(block, is_job_poster=True))
+
+    # Authenticated / SSR layout: "Meet the hiring team"
+    for block in soup.select(
+        ".meet-the-hiring-team, .job-details-jobs-unified-top-card__hiring-team"
+    ):
+        add(_posters_from_card_section(block, is_job_poster=False))
+
     headings = soup.find_all(string=_POSTER_HEADING_RE)
     for heading in headings:
         section = heading.find_parent("section") or heading.find_parent("div", class_=True)
         if not section:
             continue
         section_text = section.get_text(" ", strip=True)
-        is_job_poster = bool(re.search(r"job poster", section_text, re.I))
-        for anchor in section.find_all("a", href=_LINKEDIN_IN_RE):
-            href = _normalize_linkedin_url(anchor.get("href", ""))
-            if href in seen:
-                continue
-            name = anchor.get_text(" ", strip=True)
-            if not name or len(name) < 2:
-                continue
-            seen.add(href)
-            card = anchor.find_parent("div", class_=True)
-            title = ""
-            if card:
-                title = _extract_title_from_card(name, card.get_text("\n", strip=True))
-            posters.append(
-                JobPoster(
-                    name=name,
-                    title=title,
-                    linkedin_url=href,
-                    is_job_poster=is_job_poster,
-                )
+        is_job_poster = bool(re.search(r"job poster|direct message the job poster", section_text, re.I))
+        is_hiring_team = bool(re.search(r"meet the hiring team", section_text, re.I))
+        add(
+            _posters_from_card_section(
+                section,
+                is_job_poster=is_job_poster and not is_hiring_team,
             )
+        )
 
     if not posters and re.search(r"job poster", html, re.I):
         for anchor in soup.find_all("a", href=_LINKEDIN_IN_RE):
             href = _normalize_linkedin_url(anchor.get("href", ""))
-            if href in seen:
+            name = _name_from_anchor(anchor)
+            if not name:
                 continue
-            name = anchor.get_text(" ", strip=True)
-            if not name or len(name) < 2:
-                continue
-            seen.add(href)
-            posters.append(
+            add([
                 JobPoster(
                     name=name,
                     title="",
                     linkedin_url=href,
                     is_job_poster=True,
                 )
-            )
+            ])
             break
 
     posters.sort(key=lambda p: (not p.is_job_poster, p.name.lower()))
@@ -113,17 +158,31 @@ def linkedin_job_id_from_url(job_url: str) -> str | None:
     return match.group(1) if match else None
 
 
+def apply_linkedin_session_cookie(session: Any) -> None:
+    li_at = os.environ.get("LINKEDIN_LI_AT", "").strip()
+    if li_at:
+        session.cookies.set("li_at", li_at, domain=".linkedin.com")
+
+
 def fetch_hiring_team(job_id: str, session: Any) -> list[JobPoster]:
     try:
         response = session.get(
             f"https://www.linkedin.com/jobs/view/{job_id}",
-            timeout=10,
+            timeout=15,
         )
         if response.status_code != 200:
             return []
         if "linkedin.com/signup" in response.url:
             return []
-        return parse_hiring_team_from_html(response.text)
+        posters = parse_hiring_team_from_html(response.text)
+        if posters:
+            return posters
+        if not os.environ.get("LINKEDIN_LI_AT", "").strip():
+            logger.debug(
+                "No hiring team on public page for %s — set LINKEDIN_LI_AT for Meet the hiring team",
+                job_id,
+            )
+        return []
     except Exception as exc:
         logger.debug("LinkedIn hiring team fetch failed for %s: %s", job_id, exc)
         return []
@@ -153,6 +212,7 @@ def attach_linkedin_hiring_teams(listings: list[JobListing]) -> int:
         clear_cookies=True,
     )
     session.headers.update(headers)
+    apply_linkedin_session_cookie(session)
 
     delay_min = float(os.environ.get("LINKEDIN_POSTER_DELAY_MIN", "2"))
     delay_max = float(os.environ.get("LINKEDIN_POSTER_DELAY_MAX", "4"))
@@ -173,7 +233,7 @@ def attach_linkedin_hiring_teams(listings: list[JobListing]) -> int:
                 "LinkedIn poster for %s / %s: %s",
                 listing.company_name,
                 listing.job_title,
-                posters[0].name,
+                ", ".join(p.name for p in posters[:3]),
             )
 
     logger.info(

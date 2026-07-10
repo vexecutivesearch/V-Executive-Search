@@ -35,6 +35,7 @@ export function TodayListView({
   const [geoOnly, setGeoOnly] = useState(false);
   const [callableOnly, setCallableOnly] = useState(listMode === "call-sheet");
   const [hotSignalsOnly, setHotSignalsOnly] = useState(false);
+  const [linkedinOnly, setLinkedinOnly] = useState(false);
   const [dismissedNotice, setDismissedNotice] = useState(false);
 
   useEffect(() => {
@@ -70,6 +71,12 @@ export function TodayListView({
       if (hotSignalsOnly) {
         const signals = company.hiringSignals ?? {};
         if (!Object.keys(signals).length) return false;
+      }
+      if (linkedinOnly) {
+        const hasLinkedIn = company.jobListings.some(
+          (j) => j.board?.toLowerCase() === "linkedin",
+        );
+        if (!hasLinkedIn) return false;
       }
 
       if (!term) return true;
@@ -203,6 +210,16 @@ export function TodayListView({
             />
             Hot signals
           </label>
+
+          <label className="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={linkedinOnly}
+              onChange={(e) => setLinkedinOnly(e.target.checked)}
+              className="rounded border-gray-300"
+            />
+            LinkedIn jobs
+          </label>
         </div>
 
         <p className="text-xs text-gray-500 mt-2">
@@ -225,6 +242,7 @@ export function TodayListView({
               setGeoOnly(false);
               setCallableOnly(listMode === "call-sheet");
               setHotSignalsOnly(false);
+              setLinkedinOnly(false);
             }}
             className="text-sm text-blue-600 dark:text-blue-400 hover:underline mt-2"
           >
