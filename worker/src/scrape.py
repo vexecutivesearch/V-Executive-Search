@@ -441,6 +441,22 @@ def _scrape_linkedin_union(
     return unioned, stats
 
 
+def _scrape_google_board(search: dict[str, Any]) -> list[JobListing]:
+    """Google Jobs: SerpApi when keyed; never JobSpy (returns empty HTML)."""
+    from src.serpapi_google import scrape_google_serpapi, serpapi_google_enabled
+
+    name = search.get("name", "unnamed")
+    if serpapi_google_enabled():
+        return scrape_google_serpapi(search)
+
+    logger.error(
+        "Search '%s' board=google skipped — set SERPAPI_API_KEY on the worker "
+        "(JobSpy Google returns empty HTML)",
+        name,
+    )
+    return []
+
+
 def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
     name = search.get("name", "unnamed")
     boards = normalize_boards(boards)
@@ -452,6 +468,8 @@ def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
             board_listings, _stats = _scrape_linkedin_union(search)
         elif board == "indeed":
             board_listings, _stats = _scrape_indeed_union(search)
+        elif board == "google":
+            board_listings = _scrape_google_board(search)
         else:
             board_listings = _scrape_search_board(search, board)
         logger.info(
@@ -473,7 +491,14 @@ def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
 
 
 def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
+    from src.serpapi_google import serpapi_google_enabled
+
     boards = normalize_boards(config.get("boards"))
+    # Auto-include Google when SerpApi is configured so Admin toggle isn't required.
+    if serpapi_google_enabled() and "google" not in boards:
+        boards = normalize_boards([*boards, "google"])
+        logger.info("SERPAPI_API_KEY set — enabling Google Jobs via SerpApi")
+
     funnel = ScrapeFunnel()
     logger.info(
         "Job boards enabled: %s (LinkedIn draws/search=%d Indeed draws/search=%d)",
@@ -481,10 +506,10 @@ def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
         LINKEDIN_DRAW_COUNT,
         INDEED_DRAW_COUNT,
     )
-    if "google" in boards:
+    if "google" in boards and not serpapi_google_enabled():
         logger.warning(
-            "Google board enabled — JobSpy Google often returns 0 (empty HTML). "
-            "If still empty after NL google_search_term, disable and use SerpApi."
+            "Google board enabled without SERPAPI_API_KEY — will record board_failure "
+            "(JobSpy Google is not used)"
         )
     all_listings: list[JobListing] = []
     linkedin_raw_sum = 0
@@ -504,6 +529,8 @@ def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
             elif board == "indeed":
                 indeed_union, _stats = _scrape_indeed_union(search)
                 merged.extend(indeed_union)
+            elif board == "google":
+                merged.extend(_scrape_google_board(search))
             else:
                 merged.extend(_scrape_search_board(search, board))
         search_listings = _dedupe_listings(merged)
@@ -533,13 +560,16 @@ def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
             if board == "zip_recruiter":
                 msg = (
                     f"{board}: 0 listings this run "
-                    "(known-degraded Cloudflare/403 — non-blocking)"
+                    "(often blocked — non-blocking warning)"
                 )
             elif board == "google":
-                msg = (
-                    f"{board}: 0 listings this run "
-                    "(JobSpy Google empty HTML — flag SerpApi; non-blocking)"
-                )
+                if serpapi_google_enabled():
+                    msg = f"{board}: 0 listings this run (SerpApi returned nothing)"
+                else:
+                    msg = (
+                        f"{board}: 0 listings — add SERPAPI_API_KEY on the worker "
+                        "(JobSpy Google is disabled)"
+                    )
             else:
                 msg = f"{board}: 0 listings this run (configured board returned nothing)"
             funnel.board_failures.append(msg)

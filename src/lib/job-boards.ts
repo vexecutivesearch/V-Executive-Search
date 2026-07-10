@@ -27,7 +27,7 @@ export const JOB_BOARD_OPTIONS: JobBoardOption[] = [
     id: "google",
     label: "Google Jobs",
     description:
-      "Off for now — the free scraper is unreliable. SerpApi unlocks a stable Google Jobs feed when you’re ready.",
+      "Uses SerpApi on the Mac worker when SERPAPI_API_KEY is set. Auto-enables at scrape time with a key; leave unchecked otherwise.",
     defaultEnabled: false,
   },
   {

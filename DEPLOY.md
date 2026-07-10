@@ -82,7 +82,7 @@ Configure **N** and score thresholds in `/admin` → Enrichment quotas.
 
 **Today's Call Sheet** in the CRM uses a **6 AM – 6 AM Eastern** business day. Enriched leads appear on the call sheet tab; the backlog tab shows ranked companies awaiting enrichment.
 
-Default job boards: **Indeed, LinkedIn, ZipRecruiter**. **Google Jobs** is off by default — JobSpy’s Google scraper returns empty HTML; use **SerpApi** (`SERPAPI_API_KEY` on the Mac worker) for a reliable Google Jobs feed. Glassdoor is available but off. Toggle in `/admin` → Job boards.
+Default job boards: **Indeed, LinkedIn, ZipRecruiter**. **Google Jobs** uses **SerpApi** when `SERPAPI_API_KEY` is set on the Mac worker (auto-enabled at scrape time). JobSpy’s Google scraper is not used. Glassdoor is available but off. Toggle in `/admin` → Job boards.
 
 ### Legacy note
 
@@ -134,7 +134,7 @@ npm run dev
 | `RESEND_API_KEY` | Yes | Daily HTML report from worker |
 | `REPORT_FROM_EMAIL` | Yes | Resend-verified sender |
 | `CONTACTOUT_API_KEY` | Recommended | Personal email/mobile via LinkedIn URL |
-| `SERPAPI_API_KEY` | Optional | Reliable Google Jobs API — JobSpy Google returns empty HTML |
+| `SERPAPI_API_KEY` | Optional | Google Jobs via SerpApi on the Mac worker (auto-enables Google board) |
 
 See `worker/.env.example` for the full list.
 

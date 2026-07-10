@@ -88,7 +88,7 @@ Enabled in `/admin` → **Job boards**. Default: `indeed`, `linkedin`, `zip_recr
 | Board | Notes |
 |-------|-------|
 | **Indeed** | Reliable baseline / workhorse |
-| **Google Jobs** | JobSpy scraper returns empty HTML — leave off. Wire **SerpApi** (`SERPAPI_API_KEY`) for a reliable Google Jobs API feed (~$50/mo). |
+| **Google Jobs** | **SerpApi** when `SERPAPI_API_KEY` is set on the worker (auto-enabled). JobSpy Google is unused. |
 | **LinkedIn Jobs** | Senior/corporate roles; higher block risk — watch logs |
 | **ZipRecruiter** | Often Cloudflare 403 — keep on for loud `board_failure`; overlaps Indeed |
 | **Glassdoor** | Off by default; overlaps Indeed |
