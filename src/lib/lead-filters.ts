@@ -1,8 +1,13 @@
 import type { JobListing } from "@/lib/db/schema";
 import type { EmailReportPreferences } from "@/lib/email-report-preferences";
+import {
+  isKnownSectorName,
+  sectorFromIndustry,
+} from "@/lib/industry-sectors";
 
 export type LeadFilterState = {
   jobTitle: string;
+  /** Broad sector name (from industry rollup), not raw Apollo industry. */
   industry: string;
   salaryFilter: "any" | "has_salary" | "min_salary";
   salaryMinUsd: number;
@@ -72,18 +77,30 @@ export function companyMatchesJobTitleFilters(
   );
 }
 
+/**
+ * Match company raw industry against sector filters (or legacy raw substrings).
+ * Filters are sector names from the rollup map; raw industry stays on the record.
+ */
 export function companyMatchesIndustryFilters(
   industry: string | null | undefined,
   industryFilters: string[],
   includeUnknownIndustry: boolean,
 ): boolean {
   if (!industryFilters.length) return true;
-  const ind = (industry ?? "").toLowerCase();
-  const industryOk = industryFilters.some((f) =>
-    ind.includes(f.toLowerCase()),
-  );
-  if (industryOk) return true;
-  return includeUnknownIndustry && !ind;
+  const raw = (industry ?? "").trim();
+  if (!raw) return includeUnknownIndustry;
+
+  const sector = sectorFromIndustry(raw);
+  const sectorOk = industryFilters.some((f) => {
+    const needle = f.trim();
+    if (!needle) return false;
+    if (isKnownSectorName(needle)) {
+      return sector === needle;
+    }
+    // Legacy email prefs / free-text: substring on raw industry
+    return raw.toLowerCase().includes(needle.toLowerCase());
+  });
+  return sectorOk;
 }
 
 export function companyMatchesSalaryFilter(

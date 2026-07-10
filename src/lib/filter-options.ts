@@ -6,15 +6,21 @@ import {
   getFilterDataAvailability,
   type FilterDataAvailability,
 } from "@/lib/filter-data-availability";
+import {
+  OTHER_SECTOR,
+  allSectorFilterOptions,
+  sectorFromIndustry,
+} from "@/lib/industry-sectors";
 
 export type TodayFilterOptions = {
   /** Active market-scan profile names (scrape buckets — not contact titles). */
   jobTitles: string[];
+  /** Broad sector buckets for filtering (raw industry stays on the company). */
   industries: string[];
   dataAvailability: FilterDataAvailability;
 };
 
-/** Distinct filter values — scrape buckets from search profiles; industries from DB. */
+/** Distinct filter values — scrape buckets + sector rollups present in the DB. */
 export async function getTodayFilterOptions(): Promise<TodayFilterOptions> {
   const [profiles, industryRows, dataAvailability] = await Promise.all([
     getActiveSearchProfiles(),
@@ -30,9 +36,19 @@ export async function getTodayFilterOptions(): Promise<TodayFilterOptions> {
     ...new Set(profiles.map((p) => p.name.trim()).filter(Boolean)),
   ].sort((a, b) => a.localeCompare(b));
 
-  const industries = industryRows
-    .map((r) => r.industry?.trim())
-    .filter(Boolean) as string[];
+  const sectorsPresent = new Set<string>();
+  for (const row of industryRows) {
+    const sector = sectorFromIndustry(row.industry);
+    if (sector) sectorsPresent.add(sector);
+  }
+
+  // Stable order from config; only include sectors that appear (plus Other if needed).
+  const industries = allSectorFilterOptions().filter((s) =>
+    sectorsPresent.has(s),
+  );
+  if (!industries.length && industryRows.length) {
+    industries.push(OTHER_SECTOR);
+  }
 
   return { jobTitles, industries, dataAvailability };
 }

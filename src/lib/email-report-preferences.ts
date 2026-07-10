@@ -2,7 +2,7 @@
 export type EmailReportPreferences = {
   /** Search profile names (e.g. "HR Director") — empty = all */
   jobTitleFilters?: string[];
-  /** Company industry strings — empty = all */
+  /** Broad sector names (industry rollup) — empty = all */
   industryFilters?: string[];
   salaryFilter?: "any" | "has_salary" | "min_salary";
   salaryMinUsd?: number;

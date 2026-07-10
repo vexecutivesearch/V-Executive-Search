@@ -72,7 +72,42 @@ describe("companyMatchesLeadFilters", () => {
     ).toBe(false);
   });
 
-  it("filters by industry substring", () => {
+  it("filters by sector rollup", () => {
+    expect(
+      companyMatchesLeadFilters(
+        {
+          industry: "hospital & health care",
+          jobListings: company.jobListings,
+        },
+        {
+          jobTitle: "",
+          industry: "Healthcare & Life Sciences",
+          salaryFilter: "any",
+          salaryMinUsd: 80000,
+          includeUnknownIndustry: false,
+          includeUnknownSalary: true,
+        },
+      ),
+    ).toBe(true);
+    expect(
+      companyMatchesLeadFilters(
+        {
+          industry: "hospital & health care",
+          jobListings: company.jobListings,
+        },
+        {
+          jobTitle: "",
+          industry: "Financial Services",
+          salaryFilter: "any",
+          salaryMinUsd: 80000,
+          includeUnknownIndustry: false,
+          includeUnknownSalary: true,
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("filters by legacy industry substring", () => {
     expect(
       companyMatchesLeadFilters(company, {
         jobTitle: "",
@@ -147,11 +182,11 @@ describe("companyMatchesEmailReportFilters", () => {
     ).toBe(true);
   });
 
-  it("ORs across selected industries", () => {
+  it("ORs across selected sectors", () => {
     expect(
       companyMatchesEmailReportFilters(company, {
         jobTitleFilters: [],
-        industryFilters: ["Healthcare", "Financial"],
+        industryFilters: ["Healthcare & Life Sciences", "Financial Services"],
         salaryFilter: "any",
       }),
     ).toBe(true);

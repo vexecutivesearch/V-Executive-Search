@@ -586,8 +586,8 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
         {emailPrefs.includeBacklogSection === true ? (
           <div className="space-y-3 pt-2 border-t dark:border-gray-800">
             <p className="text-xs text-gray-500">
-              Leave title/industry unchecked for all. Filters refine the backlog
-              preview only — they do not change the CRM Today view.
+              Leave scan bucket/sector unchecked for all. Filters refine the
+              backlog preview only — they do not change the CRM Today view.
             </p>
 
             <MultiSelect
@@ -602,7 +602,7 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
 
             {filterOptions.dataAvailability.industryFilterReady ? (
               <MultiSelect
-                label="Industries"
+                label="Sectors (rolled up from company industry)"
                 options={filterOptions.industries}
                 selected={emailPrefs.industryFilters ?? []}
                 onChange={(industryFilters) =>
@@ -612,7 +612,7 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
               />
             ) : (
               <p className="text-xs text-gray-500">
-                Industry filter locked until backlog industry fill ≥ 40% (currently{" "}
+                Sector filter locked until backlog industry fill ≥ 40% (currently{" "}
                 {filterOptions.dataAvailability.industryPct}%).
               </p>
             )}

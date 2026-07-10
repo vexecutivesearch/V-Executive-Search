@@ -327,9 +327,9 @@ export function TodayListView({
                   setLeadFilters((f) => ({ ...f, industry: e.target.value }))
                 }
                 className="text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900 max-w-[10rem]"
-                aria-label="Filter by industry"
+                aria-label="Filter by sector"
               >
-                <option value="">All industries</option>
+                <option value="">All sectors</option>
                 {(filterOptions?.industries ?? []).map((ind) => (
                   <option key={ind} value={ind}>
                     {ind}
