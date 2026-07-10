@@ -61,6 +61,10 @@ interface IngestJobListing {
   location?: string;
   search_name?: string;
   posted_at?: string;
+  salary_min?: number | null;
+  salary_max?: number | null;
+  salary_currency?: string | null;
+  salary_text?: string | null;
   poster_name?: string;
   poster_title?: string;
   poster_linkedin_url?: string;
@@ -377,6 +381,10 @@ export async function POST(request: NextRequest) {
               posterTitle: jl.poster_title ?? existingJob.posterTitle,
               posterLinkedinUrl:
                 jl.poster_linkedin_url ?? existingJob.posterLinkedinUrl,
+              salaryMin: jl.salary_min ?? existingJob.salaryMin,
+              salaryMax: jl.salary_max ?? existingJob.salaryMax,
+              salaryCurrency: jl.salary_currency ?? existingJob.salaryCurrency,
+              salaryText: jl.salary_text ?? existingJob.salaryText,
             })
             .where(eq(jobListings.id, existingJob.id));
           jobsResighted += 1;
@@ -391,6 +399,10 @@ export async function POST(request: NextRequest) {
         url,
         location: jl.location ?? null,
         searchName: jl.search_name ?? null,
+        salaryMin: jl.salary_min ?? null,
+        salaryMax: jl.salary_max ?? null,
+        salaryCurrency: jl.salary_currency ?? null,
+        salaryText: jl.salary_text ?? null,
         postedAt: jl.posted_at ? new Date(jl.posted_at) : null,
         posterName: jl.poster_name ?? null,
         posterTitle: jl.poster_title ?? null,

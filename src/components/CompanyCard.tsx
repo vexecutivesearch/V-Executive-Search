@@ -12,6 +12,7 @@ export interface CompanyCardData {
   domainConfidence: string;
   status: CompanyStatus;
   firstSeen: string;
+  industry?: string | null;
   leadScore?: number;
   hiringSignals?: Record<string, boolean | number>;
   reasonToCall?: string | null;

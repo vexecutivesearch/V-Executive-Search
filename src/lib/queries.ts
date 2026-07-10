@@ -439,6 +439,7 @@ async function enrichCompanies(
       domainConfidence: company.domainConfidence,
       status: company.status,
       firstSeen: company.firstSeen,
+      industry: company.industry,
       leadScore: company.leadScore ?? 0,
       hiringSignals: company.hiringSignals ?? {},
       reasonToCall: company.reasonToCall,

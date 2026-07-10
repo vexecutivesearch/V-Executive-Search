@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { pipelineSettings } from "@/lib/db/schema";
 import { resolveJobBoards } from "@/lib/job-boards";
 import { getOrCreateSettings } from "@/lib/pipeline-config";
+import { normalizeEmailReportPreferences } from "@/lib/email-report-preferences";
 import { eq } from "drizzle-orm";
 
 function normalizeList(values: unknown): string[] {
@@ -38,6 +39,7 @@ export async function PUT(request: NextRequest) {
     daily_enrich_quota?: number;
     min_score_for_enrich?: number;
     min_score_for_phone?: number;
+    email_report_preferences?: Record<string, unknown>;
   };
   try {
     body = await request.json();
@@ -62,6 +64,15 @@ export async function PUT(request: NextRequest) {
     ? resolveJobBoards(body.job_boards)
     : resolveJobBoards(current.jobBoards);
 
+  const emailReportPreferences =
+    body.email_report_preferences != null
+      ? normalizeEmailReportPreferences(
+          body.email_report_preferences as Parameters<
+            typeof normalizeEmailReportPreferences
+          >[0],
+        )
+      : current.emailReportPreferences;
+
   const [updated] = await db
     .update(pipelineSettings)
     .set({
@@ -83,6 +94,7 @@ export async function PUT(request: NextRequest) {
         body.min_score_for_enrich ?? current.minScoreForEnrich,
       minScoreForPhone:
         body.min_score_for_phone ?? current.minScoreForPhone,
+      emailReportPreferences,
       updatedAt: new Date(),
     })
     .where(eq(pipelineSettings.id, current.id))

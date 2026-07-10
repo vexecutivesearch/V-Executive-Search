@@ -4,6 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 import type { CompanyCardData } from "./CompanyCard";
 import { TodayListRow } from "./TodayListRow";
 import { contactIsCallable } from "@/lib/lead-score";
+import {
+  companyMatchesLeadFilters,
+  DEFAULT_LEAD_FILTER,
+  type LeadFilterState,
+} from "@/lib/lead-filters";
+import type { TodayFilterOptions } from "@/lib/filter-options";
 import type { ListDateRange } from "@/lib/list-date-range";
 import { backlogSummaryLabel } from "@/lib/list-date-range";
 import type { dailyRuns } from "@/lib/db/schema";
@@ -21,6 +27,7 @@ export function TodayListView({
   backlogCount,
   listRange,
   showFunnel = true,
+  filterOptions,
 }: {
   companies: CompanyCardData[];
   geoLabel: string;
@@ -29,6 +36,7 @@ export function TodayListView({
   backlogCount?: number;
   listRange?: ListDateRange;
   showFunnel?: boolean;
+  filterOptions?: TodayFilterOptions;
 }) {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortKey>("score");
@@ -36,6 +44,9 @@ export function TodayListView({
   const [callableOnly, setCallableOnly] = useState(listMode === "call-sheet");
   const [hotSignalsOnly, setHotSignalsOnly] = useState(false);
   const [linkedinOnly, setLinkedinOnly] = useState(false);
+  const [leadFilters, setLeadFilters] = useState<LeadFilterState>({
+    ...DEFAULT_LEAD_FILTER,
+  });
   const [dismissedNotice, setDismissedNotice] = useState(false);
 
   useEffect(() => {
@@ -79,6 +90,8 @@ export function TodayListView({
         if (!hasLinkedIn) return false;
       }
 
+      if (!companyMatchesLeadFilters(company, leadFilters)) return false;
+
       if (!term) return true;
 
       const primaryJob = company.jobListings[0];
@@ -107,7 +120,7 @@ export function TodayListView({
     });
 
     return rows;
-  }, [companies, search, sort, geoOnly, callableOnly, hotSignalsOnly]);
+  }, [companies, search, sort, geoOnly, callableOnly, hotSignalsOnly, linkedinOnly, leadFilters]);
 
   const funnelLabel = runStats
     ? [
@@ -220,6 +233,71 @@ export function TodayListView({
             />
             LinkedIn jobs
           </label>
+
+          <select
+            value={leadFilters.jobTitle}
+            onChange={(e) =>
+              setLeadFilters((f) => ({ ...f, jobTitle: e.target.value }))
+            }
+            className="text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900"
+            aria-label="Filter by job title search"
+          >
+            <option value="">All job titles</option>
+            {(filterOptions?.jobTitles ?? []).map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={leadFilters.industry}
+            onChange={(e) =>
+              setLeadFilters((f) => ({ ...f, industry: e.target.value }))
+            }
+            className="text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900 max-w-[10rem]"
+            aria-label="Filter by industry"
+          >
+            <option value="">All industries</option>
+            {(filterOptions?.industries ?? []).map((ind) => (
+              <option key={ind} value={ind}>
+                {ind}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={leadFilters.salaryFilter}
+            onChange={(e) =>
+              setLeadFilters((f) => ({
+                ...f,
+                salaryFilter: e.target.value as LeadFilterState["salaryFilter"],
+              }))
+            }
+            className="text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900"
+            aria-label="Filter by salary"
+          >
+            <option value="any">Any salary</option>
+            <option value="has_salary">Has salary posted</option>
+            <option value="min_salary">Min salary ≥</option>
+          </select>
+
+          {leadFilters.salaryFilter === "min_salary" && (
+            <input
+              type="number"
+              min={0}
+              step={5000}
+              value={leadFilters.salaryMinUsd}
+              onChange={(e) =>
+                setLeadFilters((f) => ({
+                  ...f,
+                  salaryMinUsd: parseInt(e.target.value, 10) || 0,
+                }))
+              }
+              className="w-24 text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900"
+              aria-label="Minimum salary USD"
+            />
+          )}
         </div>
 
         <p className="text-xs text-gray-500 mt-2">
@@ -243,6 +321,7 @@ export function TodayListView({
               setCallableOnly(listMode === "call-sheet");
               setHotSignalsOnly(false);
               setLinkedinOnly(false);
+              setLeadFilters({ ...DEFAULT_LEAD_FILTER });
             }}
             className="text-sm text-blue-600 dark:text-blue-400 hover:underline mt-2"
           >

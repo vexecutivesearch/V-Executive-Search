@@ -13,6 +13,7 @@ import { businessListDate } from "@/lib/timezone";
 import { getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
 import { parseJobLocation } from "@/lib/location-match";
 import { contactIsCallable } from "@/lib/lead-score";
+import { getFilteredBacklogEmailLeads } from "@/lib/backlog-email";
 import type { Contact } from "@/lib/db/schema";
 
 export type DailyReportPhone = SourcedPhone & {
@@ -44,6 +45,7 @@ export type DailyCallSheet = {
   companies_enriched: number;
   credits_used: number;
   leads: CallSheetLead[];
+  backlog_leads: import("@/lib/backlog-email").BacklogEmailLead[];
 };
 
 function resolveEmails(contact: {
@@ -169,6 +171,7 @@ export async function getDailyCallSheet(): Promise<DailyCallSheet> {
     companies_enriched: run?.companiesEnriched ?? leads.length,
     credits_used: run?.creditsUsed ?? 0,
     leads,
+    backlog_leads: await getFilteredBacklogEmailLeads(),
   };
 }
 

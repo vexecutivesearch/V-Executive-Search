@@ -1,0 +1,147 @@
+import { describe, expect, it } from "vitest";
+import {
+  companyMatchesEmailReportFilters,
+  companyMatchesLeadFilters,
+  listingHasSalary,
+  listingMatchesJobTitle,
+} from "@/lib/lead-filters";
+
+const baseListing = {
+  title: "HR Director",
+  searchName: "HR Director",
+  salaryMin: null as number | null,
+  salaryMax: null as number | null,
+  salaryText: null as string | null,
+};
+
+describe("listingMatchesJobTitle", () => {
+  it("matches search profile name prefix", () => {
+    expect(
+      listingMatchesJobTitle(
+        { title: "Director of HR", searchName: "HR Director" },
+        "HR Director",
+      ),
+    ).toBe(true);
+  });
+
+  it("returns true when filter empty", () => {
+    expect(listingMatchesJobTitle(baseListing, "")).toBe(true);
+  });
+});
+
+describe("listingHasSalary", () => {
+  it("detects min/max and text", () => {
+    expect(listingHasSalary({ ...baseListing, salaryMin: 90000 })).toBe(true);
+    expect(listingHasSalary({ ...baseListing, salaryText: "$120k" })).toBe(true);
+    expect(listingHasSalary(baseListing)).toBe(false);
+  });
+});
+
+describe("companyMatchesLeadFilters", () => {
+  const company = {
+    industry: "Healthcare",
+    jobListings: [
+      { ...baseListing, salaryMax: 95000 },
+      {
+        ...baseListing,
+        title: "VP People",
+        searchName: "VP People",
+        salaryMax: null,
+      },
+    ],
+  };
+
+  it("filters by job title", () => {
+    expect(
+      companyMatchesLeadFilters(company, {
+        jobTitle: "VP People",
+        industry: "",
+        salaryFilter: "any",
+        salaryMinUsd: 80000,
+      }),
+    ).toBe(true);
+    expect(
+      companyMatchesLeadFilters(company, {
+        jobTitle: "Head of Talent",
+        industry: "",
+        salaryFilter: "any",
+        salaryMinUsd: 80000,
+      }),
+    ).toBe(false);
+  });
+
+  it("filters by industry substring", () => {
+    expect(
+      companyMatchesLeadFilters(company, {
+        jobTitle: "",
+        industry: "health",
+        salaryFilter: "any",
+        salaryMinUsd: 80000,
+      }),
+    ).toBe(true);
+  });
+
+  it("filters by minimum salary", () => {
+    expect(
+      companyMatchesLeadFilters(company, {
+        jobTitle: "",
+        industry: "",
+        salaryFilter: "min_salary",
+        salaryMinUsd: 100000,
+      }),
+    ).toBe(false);
+    expect(
+      companyMatchesLeadFilters(company, {
+        jobTitle: "",
+        industry: "",
+        salaryFilter: "min_salary",
+        salaryMinUsd: 90000,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("companyMatchesEmailReportFilters", () => {
+  const company = {
+    industry: "Financial Services",
+    jobListings: [
+      {
+        ...baseListing,
+        searchName: "HR Director",
+        salaryMax: 110000,
+      },
+    ],
+  };
+
+  it("ORs across selected job titles", () => {
+    expect(
+      companyMatchesEmailReportFilters(company, {
+        jobTitleFilters: ["VP People", "HR Director"],
+        industryFilters: [],
+        salaryFilter: "any",
+      }),
+    ).toBe(true);
+  });
+
+  it("ORs across selected industries", () => {
+    expect(
+      companyMatchesEmailReportFilters(company, {
+        jobTitleFilters: [],
+        industryFilters: ["Healthcare", "Financial"],
+        salaryFilter: "any",
+      }),
+    ).toBe(true);
+  });
+
+  it("requires has_salary when configured", () => {
+    expect(
+      companyMatchesEmailReportFilters(
+        {
+          industry: "Tech",
+          jobListings: [{ ...baseListing, salaryMax: null }],
+        },
+        { salaryFilter: "has_salary" },
+      ),
+    ).toBe(false);
+  });
+});

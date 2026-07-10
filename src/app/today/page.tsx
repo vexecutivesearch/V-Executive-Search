@@ -9,6 +9,7 @@ import {
   getLatestRunStats,
   getTodayGeoLabel,
 } from "@/lib/queries";
+import { getTodayFilterOptions } from "@/lib/filter-options";
 import {
   backlogSummaryLabel,
   listDateRangeLabel,
@@ -40,12 +41,15 @@ export default async function TodayPage({
   let backlogCompanies;
   let runStats;
   let geoLabel = "your focus area";
+  let filterOptions;
   try {
-    [callSheetCompanies, backlogCompanies, runStats, geoLabel] = await Promise.all([
+    [callSheetCompanies, backlogCompanies, runStats, geoLabel, filterOptions] =
+      await Promise.all([
       getCallSheetCompanies(listRange),
       getBacklogForDateRange(listRange),
       getLatestRunStats(listRange.snapshotDate),
       getTodayGeoLabel(),
+      getTodayFilterOptions(),
     ]);
   } catch {
     return (
@@ -157,6 +161,7 @@ export default async function TodayPage({
           runStats={runStats}
           backlogCount={backlogCompanies.length}
           listRange={listRange}
+          filterOptions={filterOptions}
         />
       )}
     </div>

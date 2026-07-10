@@ -70,6 +70,9 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   jobBoards: jsonb("job_boards")
     .$type<JobBoardId[]>()
     .default([...DEFAULT_JOB_BOARDS]),
+  emailReportPreferences: jsonb("email_report_preferences").$type<
+    import("@/lib/email-report-preferences").EmailReportPreferences
+  >(),
   runRequestedAt: timestamp("run_requested_at"),
   contactoutSyncRequestedAt: timestamp("contactout_sync_requested_at"),
   imessageCheckRequestedAt: timestamp("imessage_check_requested_at"),
@@ -187,6 +190,10 @@ export const jobListings = pgTable("job_listings", {
   url: text("url"),
   location: text("location"),
   searchName: text("search_name"),
+  salaryMin: integer("salary_min"),
+  salaryMax: integer("salary_max"),
+  salaryCurrency: text("salary_currency").default("USD"),
+  salaryText: text("salary_text"),
   postedAt: timestamp("posted_at"),
   posterName: text("poster_name"),
   posterTitle: text("poster_title"),

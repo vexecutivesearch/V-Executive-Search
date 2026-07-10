@@ -178,6 +178,10 @@ def _job_listing_payload(jl: JobListing) -> dict[str, Any]:
         "location": jl.location,
         "search_name": jl.search_name,
         "posted_at": jl.date_posted.isoformat() if jl.date_posted else None,
+        "salary_min": jl.salary_min,
+        "salary_max": jl.salary_max,
+        "salary_currency": jl.salary_currency,
+        "salary_text": jl.salary_text,
     }
     if poster:
         payload["poster_name"] = poster.name

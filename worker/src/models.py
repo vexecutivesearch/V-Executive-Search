@@ -28,6 +28,10 @@ class JobListing:
     job_url: str
     date_posted: datetime | None = None
     search_name: str = ""
+    salary_min: int | None = None
+    salary_max: int | None = None
+    salary_currency: str | None = None
+    salary_text: str | None = None
     posters: list[JobPoster] = field(default_factory=list)
 
 

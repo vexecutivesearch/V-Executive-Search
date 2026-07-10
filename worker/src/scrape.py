@@ -61,6 +61,26 @@ def _parse_date(value: Any) -> datetime | None:
         return None
 
 
+def _parse_int(value: Any) -> int | None:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    try:
+        return int(float(value))
+    except (ValueError, TypeError):
+        return None
+
+
+def _salary_text(min_amt: int | None, max_amt: int | None, currency: str | None) -> str | None:
+    if min_amt is None and max_amt is None:
+        return None
+    cur = currency or "USD"
+    sym = "$" if cur.upper() == "USD" else f"{cur} "
+    if min_amt is not None and max_amt is not None and min_amt != max_amt:
+        return f"{sym}{min_amt:,}–{sym}{max_amt:,}"
+    val = max_amt if max_amt is not None else min_amt
+    return f"{sym}{val:,}" if val is not None else None
+
+
 def _normalize_listing(row: pd.Series, search_name: str, board: str) -> JobListing | None:
     company = row.get("company")
     title = row.get("title")
@@ -72,6 +92,14 @@ def _normalize_listing(row: pd.Series, search_name: str, board: str) -> JobListi
     if pd.isna(location):
         location = ""
 
+    salary_min = _parse_int(row.get("min_amount"))
+    salary_max = _parse_int(row.get("max_amount"))
+    currency = row.get("currency")
+    if currency is not None and not pd.isna(currency):
+        currency = str(currency).strip() or None
+    else:
+        currency = None
+
     return JobListing(
         company_name=str(company).strip(),
         job_title=str(title).strip(),
@@ -80,6 +108,10 @@ def _normalize_listing(row: pd.Series, search_name: str, board: str) -> JobListi
         job_url=str(job_url).strip() if job_url and not pd.isna(job_url) else "",
         date_posted=_parse_date(row.get("date_posted")),
         search_name=search_name,
+        salary_min=salary_min,
+        salary_max=salary_max,
+        salary_currency=currency,
+        salary_text=_salary_text(salary_min, salary_max, currency),
     )
 
 

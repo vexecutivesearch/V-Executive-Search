@@ -3,6 +3,11 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { GeographicScope, PipelineSettings, SearchProfile } from "@/lib/db/schema";
+import type { EmailReportPreferences } from "@/lib/email-report-preferences";
+import {
+  normalizeEmailReportPreferences,
+} from "@/lib/email-report-preferences";
+import type { TodayFilterOptions } from "@/lib/filter-options";
 import {
   JOB_BOARD_OPTIONS,
   resolveJobBoards,
@@ -80,9 +85,11 @@ function MultiSelect({
 export function AdminDashboard({
   settings,
   profiles: initialProfiles,
+  filterOptions,
 }: {
   settings: PipelineSettings;
   profiles: SearchProfile[];
+  filterOptions: TodayFilterOptions;
 }) {
   const router = useRouter();
   const initialCities =
@@ -114,6 +121,9 @@ export function AdminDashboard({
     min_score_for_phone: settings.minScoreForPhone ?? 75,
   });
   const [profiles, setProfiles] = useState(initialProfiles);
+  const [emailPrefs, setEmailPrefs] = useState<EmailReportPreferences>(() =>
+    normalizeEmailReportPreferences(settings.emailReportPreferences),
+  );
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -176,6 +186,18 @@ export function AdminDashboard({
         x.id === id ? { ...x, linkedinDistance: linkedin_distance } : x,
       ),
     );
+  }
+
+  async function saveEmailPreferences() {
+    setSaving(true);
+    const res = await fetch("/api/admin/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email_report_preferences: emailPrefs }),
+    });
+    setSaving(false);
+    setMessage(res.ok ? "Email report preferences saved." : "Failed to save.");
+    router.refresh();
   }
 
   function toggleJobBoard(id: JobBoardId) {
@@ -497,6 +519,105 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
             </li>
           ))}
         </ul>
+      </section>
+
+      <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
+        <h2 className="font-semibold text-lg">Daily email — backlog filters</h2>
+        <p className="text-sm text-gray-500">
+          Filters apply to the ranked backlog (top 500) section in your daily report.
+          Leave unchecked for all. Call sheet leads are unchanged.
+        </p>
+
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={emailPrefs.includeBacklogSection !== false}
+            onChange={(e) =>
+              setEmailPrefs((p) => ({
+                ...p,
+                includeBacklogSection: e.target.checked,
+              }))
+            }
+          />
+          Include filtered backlog section in daily email
+        </label>
+
+        <MultiSelect
+          label="Job titles (email backlog)"
+          options={filterOptions.jobTitles}
+          selected={emailPrefs.jobTitleFilters ?? []}
+          onChange={(jobTitleFilters) =>
+            setEmailPrefs((p) => ({ ...p, jobTitleFilters }))
+          }
+          emptyHint="Run a scrape to populate job title options."
+        />
+
+        <MultiSelect
+          label="Industries (email backlog)"
+          options={filterOptions.industries}
+          selected={emailPrefs.industryFilters ?? []}
+          onChange={(industryFilters) =>
+            setEmailPrefs((p) => ({ ...p, industryFilters }))
+          }
+          emptyHint="Industries appear after domain enrichment."
+        />
+
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <span className="font-medium">Salary filter</span>
+          <select
+            value={emailPrefs.salaryFilter ?? "any"}
+            onChange={(e) =>
+              setEmailPrefs((p) => ({
+                ...p,
+                salaryFilter: e.target.value as EmailReportPreferences["salaryFilter"],
+              }))
+            }
+            className="border rounded-md px-2 py-1 dark:border-gray-700 dark:bg-gray-900"
+          >
+            <option value="any">Any</option>
+            <option value="has_salary">Has salary posted</option>
+            <option value="min_salary">Minimum salary</option>
+          </select>
+          {(emailPrefs.salaryFilter ?? "any") === "min_salary" && (
+            <input
+              type="number"
+              min={0}
+              step={5000}
+              value={emailPrefs.salaryMinUsd ?? 80000}
+              onChange={(e) =>
+                setEmailPrefs((p) => ({
+                  ...p,
+                  salaryMinUsd: parseInt(e.target.value, 10) || 0,
+                }))
+              }
+              className="w-28 border rounded-md px-2 py-1 dark:border-gray-700 dark:bg-gray-900"
+            />
+          )}
+          <label className="flex items-center gap-2">
+            Max backlog rows
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={emailPrefs.backlogLeadLimit ?? 25}
+              onChange={(e) =>
+                setEmailPrefs((p) => ({
+                  ...p,
+                  backlogLeadLimit: parseInt(e.target.value, 10) || 25,
+                }))
+              }
+              className="w-16 border rounded-md px-2 py-1 dark:border-gray-700 dark:bg-gray-900"
+            />
+          </label>
+        </div>
+
+        <button
+          onClick={saveEmailPreferences}
+          disabled={saving}
+          className="bg-gray-900 text-white dark:bg-white dark:text-gray-900 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+        >
+          {saving ? "Saving…" : "Save email preferences"}
+        </button>
       </section>
 
       <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">

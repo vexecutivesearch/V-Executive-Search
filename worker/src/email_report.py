@@ -146,12 +146,41 @@ def send_daily_report(
             format_call_sheet_card(lead, CRM_BASE_URL) for lead in leads
         )
 
+    backlog_leads = (crm_data or {}).get("backlog_leads") or []
+    if backlog_leads:
+        backlog_cards = []
+        for bl in backlog_leads:
+            company = html.escape(str(bl.get("company", "")))
+            job = html.escape(str(bl.get("job_title") or "—"))
+            loc = html.escape(str(bl.get("job_location") or ""))
+            ind = html.escape(str(bl.get("industry") or ""))
+            sal = html.escape(str(bl.get("salary_text") or ""))
+            rank = bl.get("rank", "?")
+            score = bl.get("score", 0)
+            meta = " · ".join(
+                p for p in [ind, loc, sal] if p
+            )
+            backlog_cards.append(
+                f'<div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin:8px 0">'
+                f'<strong>#{rank} {company}</strong> <span style="color:#6b7280">({score} pts)</span>'
+                f'<div style="font-size:13px;margin-top:4px">{job}</div>'
+                f'<div style="font-size:12px;color:#6b7280;margin-top:2px">{meta}</div>'
+                f"</div>"
+            )
+        body_backlog = (
+            '<h3 style="margin:28px 0 12px;font-size:16px">Ranked backlog (filtered)</h3>'
+            + "".join(backlog_cards)
+        )
+    else:
+        body_backlog = ""
+
     html_body = f"""
     <html><body style="font-family:sans-serif;color:#111;max-width:680px;margin:0 auto;padding:16px">
       <h2 style="margin:0 0 8px">V Executive Search — Call Sheet ({safe_geo})</h2>
       <p style="margin:0 0 4px;color:#6b7280;font-size:14px">Run date: {run_date}</p>
       <p style="margin:0 0 20px;font-size:14px;font-weight:600;color:#111827">{funnel}</p>
       {body_leads}
+      {body_backlog}
       <p style="margin-top:28px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:13px">
         <a href="{CRM_BASE_URL}/today" style="color:#2563eb;font-weight:600">
           Open full call sheet in CRM →
