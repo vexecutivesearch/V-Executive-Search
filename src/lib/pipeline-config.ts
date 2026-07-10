@@ -227,7 +227,7 @@ export async function buildPipelineConfig() {
       country_indeed: "USA",
       is_remote: p.isRemote ?? false,
       results_wanted: p.resultsWanted ?? 50,
-      hours_old: p.hoursOld ?? 24,
+      hours_old: p.hoursOld ?? 168,
       linkedin_distance: p.linkedinDistance ?? undefined,
     })),
   );

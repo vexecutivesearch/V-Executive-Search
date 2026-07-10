@@ -122,11 +122,42 @@ export function TodayListView({
     return rows;
   }, [companies, search, sort, geoOnly, callableOnly, hotSignalsOnly, linkedinOnly, leadFilters]);
 
+  const funnelJson = runStats?.funnelJson as
+    | {
+        scrape_by_board?: Record<string, number>;
+        board_failures?: string[];
+        db_backlog_by_board?: Record<string, number>;
+      }
+    | null
+    | undefined;
+
+  const boardMixLabel = (() => {
+    const scrape = funnelJson?.scrape_by_board;
+    if (!scrape || !Object.keys(scrape).length) return null;
+    const parts = ["indeed", "linkedin", "google", "zip_recruiter"]
+      .filter((b) => scrape[b] != null)
+      .map((b) => `${b} ${scrape[b]}`);
+    const extras = Object.entries(scrape)
+      .filter(
+        ([b]) =>
+          !["indeed", "linkedin", "google", "zip_recruiter"].includes(b),
+      )
+      .map(([b, n]) => `${b} ${n}`);
+    return `Boards: ${[...parts, ...extras].join(" · ")}`;
+  })();
+
+  const boardFailureLabel =
+    funnelJson?.board_failures?.length
+      ? `⚠ Board gaps: ${funnelJson.board_failures.join("; ")}`
+      : null;
+
   const funnelLabel = runStats
     ? [
         listRange?.isToday
           ? `Today scraped ${runStats.listingsScraped ?? 0} listings · ${runStats.companiesFound ?? 0} new companies`
           : `Pipeline run ${listRange?.snapshotDate ?? ""}: ${runStats.listingsScraped ?? 0} listings · ${runStats.companiesFound ?? 0} new companies`,
+        boardMixLabel,
+        boardFailureLabel,
         `Enriched ${runStats.companiesEnriched ?? 0} · ${runStats.contactsEnriched ?? 0} contacts · ${runStats.creditsUsed ?? 0} credits`,
         backlogCount != null && listRange
           ? backlogSummaryLabel(listRange, backlogCount)

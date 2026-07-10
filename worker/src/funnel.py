@@ -30,6 +30,8 @@ class ScrapeFunnel:
     scrape_linkedin_deduped: int = 0
     scrape_total: int = 0
     scrape_linkedin_cap_per_search: int = 30
+    scrape_by_board: dict[str, int] = field(default_factory=dict)
+    board_failures: list[str] = field(default_factory=list)
     poster_pages_fetched: int = 0
     poster_public_block_in_html: int = 0
     meet_team_in_html: int = 0

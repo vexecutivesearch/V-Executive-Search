@@ -43,7 +43,12 @@ export function TodayListRow({
       (j) => j.board?.toLowerCase() === "linkedin" && j.posterName,
     ) ??
     company.jobListings.find((j) => j.board?.toLowerCase() === "linkedin");
-  const primaryJob = linkedInJob ?? company.jobListings[0];
+  // Call sheet prefers LinkedIn (poster path). Backlog shows the top listing as-is
+  // so Indeed/Google/Zip rows are visible, not hidden behind a LinkedIn preference.
+  const primaryJob =
+    listMode === "backlog"
+      ? company.jobListings[0]
+      : (linkedInJob ?? company.jobListings[0]);
   const posterContacts = company.contacts.filter(
     (c) => c.sourceProvider === "linkedin_poster",
   );

@@ -137,11 +137,9 @@ write_calendar_plist "com.vexecsearch.rescore" \
   "$WORKER_ROOT/logs/rescore_am_stdout.log" \
   "$WORKER_ROOT/logs/rescore_am_stderr.log"
 
-write_calendar_plist "com.vexecsearch.enrich" \
-  "scripts/run_daily.py --enrich-only" \
-  7 0 \
-  "$WORKER_ROOT/logs/enrich_stdout.log" \
-  "$WORKER_ROOT/logs/enrich_stderr.log"
+# Enrich is MANUAL ONLY — do not schedule. Trigger from /admin when ready.
+launchctl bootout "gui/$(id -u)/com.vexecsearch.enrich" 2>/dev/null || true
+rm -f "$LAUNCH_AGENTS/com.vexecsearch.enrich.plist"
 
 write_calendar_plist "com.vexecsearch.presence" \
   "scripts/check_presence.py" \
@@ -177,7 +175,7 @@ launchctl bootout "gui/$(id -u)/com.vexecsearch.contactout-keepalive" 2>/dev/nul
 launchctl bootout "gui/$(id -u)/com.vexecsearch.daily" 2>/dev/null || true
 rm -f "$LAUNCH_AGENTS/com.vexecsearch.daily.plist"
 
-for label in com.vexecsearch.hygiene com.vexecsearch.scrape com.vexecsearch.rescore com.vexecsearch.enrich com.vexecsearch.presence com.vexecsearch.email com.vexecsearch.scrape-pm com.vexecsearch.rescore-pm com.vexecsearch.poll; do
+for label in com.vexecsearch.hygiene com.vexecsearch.scrape com.vexecsearch.rescore com.vexecsearch.presence com.vexecsearch.email com.vexecsearch.scrape-pm com.vexecsearch.rescore-pm com.vexecsearch.poll; do
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENTS/${label}.plist"
   launchctl enable "gui/$(id -u)/$label"
@@ -189,12 +187,12 @@ echo "Done. Scheduled (America/New_York):"
 echo "  • 06:00 Morning scrape + jobs_only ingest + LinkedIn posters (free)"
 echo "  • 06:15 Archive stale listings (free)"
 echo "  • 06:30 Rescore backlog (free)"
-echo "  • 07:00 Enrich top-N call sheet (paid)"
 echo "  • 07:30 Presence checks — iMessage + email MX (free)"
 echo "  • 07:45 Call sheet email (free)"
 echo "  • 18:00 Evening scrape + jobs_only ingest + LinkedIn posters (free)"
 echo "  • 18:30 Evening rescore backlog (free)"
 echo "  • Every 5 min Admin 'Run now' poll (com.vexecsearch.poll)"
+echo "  • Enrich: MANUAL ONLY (Admin → Run enrich / worker --enrich-only)"
 echo ""
 echo "Note: Mac must be awake at scheduled times — launchd does not run missed jobs after sleep."
 echo ""

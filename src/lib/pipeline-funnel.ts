@@ -25,6 +25,8 @@ export type PipelineFunnel = {
   scrape_linkedin_deduped?: number;
   scrape_total?: number;
   scrape_linkedin_cap_per_search?: number;
+  scrape_by_board?: Record<string, number>;
+  board_failures?: string[];
   linkedin_per_search?: LinkedInPerSearchFunnel[];
   poster_pages_fetched?: number;
   poster_public_block_in_html?: number;
@@ -37,6 +39,7 @@ export type PipelineFunnel = {
   db_icp_eligible_companies?: number;
   db_backlog_total?: number;
   db_backlog_linkedin?: number;
+  db_backlog_by_board?: Record<string, number>;
   db_jobs_with_poster?: number;
   measured_at?: string;
   /** Set when union/max(draw) or in-focus/union math breaks — never silent. */
@@ -106,6 +109,17 @@ export async function measureDbFunnel(
   const backlogLinkedIn = backlog.filter((c) =>
     c.jobListings.some((j) => j.board?.toLowerCase() === "linkedin"),
   );
+  const backlogByBoard: Record<string, number> = {};
+  for (const company of backlog) {
+    const boards = new Set(
+      company.jobListings
+        .map((j) => (j.board ?? "unknown").toLowerCase())
+        .filter(Boolean),
+    );
+    for (const board of boards) {
+      backlogByBoard[board] = (backlogByBoard[board] ?? 0) + 1;
+    }
+  }
 
   return {
     db_linkedin_jobs: liJobs.length,
@@ -114,6 +128,7 @@ export async function measureDbFunnel(
     db_icp_eligible_companies: icpEligible,
     db_backlog_total: backlog.length,
     db_backlog_linkedin: backlogLinkedIn.length,
+    db_backlog_by_board: backlogByBoard,
     db_jobs_with_poster: withPoster,
     measured_at: new Date().toISOString(),
   };

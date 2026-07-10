@@ -141,12 +141,15 @@ def _dedupe_listings(listings: list[JobListing]) -> list[JobListing]:
 
 
 def _board_kwargs(search: dict[str, Any], board: str) -> dict[str, Any]:
+    # Indeed/Google/Zip need a wider window than 24h — overnight gaps + JobSpy
+    # flakiness otherwise return near-zero and the backlog looks LinkedIn-only.
+    default_hours = 168 if board != "linkedin" else 24
     kwargs: dict[str, Any] = {
         "site_name": [board],
         "search_term": search["search_term"],
         "location": search.get("location", ""),
         "results_wanted": search.get("results_wanted", 50),
-        "hours_old": search.get("hours_old", 24),
+        "hours_old": int(search.get("hours_old") or default_hours),
         "country_indeed": search.get("country_indeed", "USA"),
         "linkedin_fetch_description": False,
     }
@@ -158,7 +161,7 @@ def _board_kwargs(search: dict[str, Any], board: str) -> dict[str, Any]:
         )
         kwargs["hours_old"] = int(
             search.get("linkedin_hours_old")
-            or max(int(search.get("hours_old", 24)), 168)
+            or max(int(search.get("hours_old") or 24), 168)
         )
         distance = search.get("linkedin_distance")
         if distance is not None and str(distance).strip() != "":
@@ -198,18 +201,37 @@ def _scrape_search_board(search: dict[str, Any], board: str) -> list[JobListing]
     name = search.get("name", "unnamed")
     kwargs = _board_kwargs(search, board)
 
-    try:
-        df = scrape_jobs(**kwargs)
-    except Exception as exc:
-        logger.error("Search '%s' board=%s failed: %s", name, board, exc)
-        return []
+    for attempt in range(1, 3):
+        try:
+            df = scrape_jobs(**kwargs)
+        except Exception as exc:
+            logger.error(
+                "Search '%s' board=%s attempt %d failed: %s",
+                name,
+                board,
+                attempt,
+                exc,
+            )
+            if attempt == 1:
+                time.sleep(3)
+                continue
+            return []
 
-    if df is None or df.empty:
-        logger.info("Search '%s' board=%s returned no results", name, board)
-        return []
+        if df is None or df.empty:
+            logger.warning(
+                "Search '%s' board=%s attempt %d returned no results",
+                name,
+                board,
+                attempt,
+            )
+            if attempt == 1:
+                time.sleep(2)
+                continue
+            return []
 
-    listings = _dataframe_to_listings(df, name, board)
-    return listings
+        return _dataframe_to_listings(df, name, board)
+
+    return []
 
 
 def _scrape_linkedin_union(
@@ -351,18 +373,43 @@ def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
     funnel.scrape_linkedin_deduped = sum(
         1 for listing in all_listings if listing.board == "linkedin"
     )
+
+    by_board: dict[str, int] = {}
+    for listing in all_listings:
+        key = (listing.board or "unknown").lower()
+        by_board[key] = by_board.get(key, 0) + 1
+    funnel.scrape_by_board = by_board
+
+    for board in boards:
+        count = by_board.get(board, 0)
+        if count == 0:
+            msg = f"{board}: 0 listings this run (configured board returned nothing)"
+            funnel.board_failures.append(msg)
+            logger.error("BOARD FAILURE — %s", msg)
+
     logger.info("Total listings scraped: %d", len(all_listings))
 
     linkedin_count = funnel.scrape_linkedin_deduped
-    indeed_count = sum(1 for listing in all_listings if listing.board == "indeed")
+    indeed_count = by_board.get("indeed", 0)
+    google_count = by_board.get("google", 0)
+    zip_count = by_board.get("zip_recruiter", 0)
     logger.info(
-        "Board mix: linkedin=%d indeed=%d total=%d (linkedin raw_sum=%d cap/search=%d)",
+        "Board mix: linkedin=%d indeed=%d google=%d zip_recruiter=%d total=%d "
+        "(linkedin raw_sum=%d cap/search=%d)",
         linkedin_count,
         indeed_count,
+        google_count,
+        zip_count,
         len(all_listings),
         linkedin_raw_sum,
         funnel.scrape_linkedin_cap_per_search,
     )
+    if funnel.board_failures:
+        logger.error(
+            "Scrape board failures (%d): %s",
+            len(funnel.board_failures),
+            "; ".join(funnel.board_failures),
+        )
     if linkedin_count:
         from src.linkedin_posters import attach_linkedin_hiring_teams
 
