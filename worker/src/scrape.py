@@ -15,18 +15,30 @@ logger = logging.getLogger(__name__)
 ALLOWED_BOARDS = frozenset(
     {"indeed", "google", "linkedin", "zip_recruiter", "glassdoor"}
 )
-DEFAULT_BOARDS = ["indeed", "google", "linkedin", "zip_recruiter"]
+DEFAULT_BOARDS = ["linkedin", "indeed", "google", "zip_recruiter"]
+
+# Scrape LinkedIn first — smaller result sets + hiring-team fetch is LinkedIn-only.
+BOARD_PRIORITY = {
+    "linkedin": 0,
+    "indeed": 1,
+    "google": 2,
+    "zip_recruiter": 3,
+    "glassdoor": 4,
+}
 
 
 def normalize_boards(boards: list[str] | None) -> list[str]:
     if not boards:
-        return list(DEFAULT_BOARDS)
-    out: list[str] = []
-    for raw in boards:
-        board = str(raw).strip().lower()
-        if board in ALLOWED_BOARDS and board not in out:
-            out.append(board)
-    return out or list(DEFAULT_BOARDS)
+        raw = list(DEFAULT_BOARDS)
+    else:
+        raw = []
+        for board in boards:
+            b = str(board).strip().lower()
+            if b in ALLOWED_BOARDS and b not in raw:
+                raw.append(b)
+        if not raw:
+            raw = list(DEFAULT_BOARDS)
+    return sorted(raw, key=lambda b: BOARD_PRIORITY.get(b, 99))
 
 
 def _parse_date(value: Any) -> datetime | None:
@@ -100,6 +112,17 @@ def _scrape_search_board(search: dict[str, Any], board: str) -> list[JobListing]
         "linkedin_fetch_description": False,
     }
 
+    if board == "linkedin":
+        # LinkedIn returns fewer rows for niche geo searches — widen the window.
+        kwargs["results_wanted"] = min(
+            30,
+            int(search.get("linkedin_results_wanted") or search.get("results_wanted", 30)),
+        )
+        kwargs["hours_old"] = int(
+            search.get("linkedin_hours_old")
+            or max(int(search.get("hours_old", 24)), 168)
+        )
+
     if board == "google" and search.get("google_search_term"):
         kwargs["google_search_term"] = search["google_search_term"]
     if search.get("is_remote") is not None:
@@ -168,7 +191,15 @@ def scrape_all(config: dict[str, Any]) -> list[JobListing]:
     logger.info("Total listings scraped: %d", len(all_listings))
 
     linkedin_count = sum(1 for listing in all_listings if listing.board == "linkedin")
+    indeed_count = sum(1 for listing in all_listings if listing.board == "indeed")
+    logger.info(
+        "Board mix: linkedin=%d indeed=%d total=%d",
+        linkedin_count,
+        indeed_count,
+        len(all_listings),
+    )
     if linkedin_count:
-        attach_linkedin_hiring_teams(all_listings)
+        posters_found = attach_linkedin_hiring_teams(all_listings)
+        logger.info("LinkedIn hiring-team posters captured: %d", posters_found)
 
     return all_listings
