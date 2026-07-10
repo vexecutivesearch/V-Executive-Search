@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
 from typing import Any
 
@@ -16,6 +17,9 @@ ALLOWED_BOARDS = frozenset(
     {"indeed", "google", "linkedin", "zip_recruiter", "glassdoor"}
 )
 DEFAULT_BOARDS = ["linkedin", "indeed", "google", "zip_recruiter"]
+
+# LinkedIn guest API returns different subsets per call — union multiple draws.
+LINKEDIN_DRAW_COUNT = max(1, int(os.getenv("LINKEDIN_DRAW_COUNT", "3")))
 
 # Scrape LinkedIn first — smaller result sets + hiring-team fetch is LinkedIn-only.
 BOARD_PRIORITY = {
@@ -99,9 +103,7 @@ def _dedupe_listings(listings: list[JobListing]) -> list[JobListing]:
     return out
 
 
-def _scrape_search_board(search: dict[str, Any], board: str) -> list[JobListing]:
-    name = search.get("name", "unnamed")
-
+def _board_kwargs(search: dict[str, Any], board: str) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "site_name": [board],
         "search_term": search["search_term"],
@@ -113,7 +115,6 @@ def _scrape_search_board(search: dict[str, Any], board: str) -> list[JobListing]
     }
 
     if board == "linkedin":
-        # LinkedIn returns fewer rows for niche geo searches — widen the window.
         kwargs["results_wanted"] = min(
             30,
             int(search.get("linkedin_results_wanted") or search.get("results_wanted", 30)),
@@ -122,22 +123,25 @@ def _scrape_search_board(search: dict[str, Any], board: str) -> list[JobListing]
             search.get("linkedin_hours_old")
             or max(int(search.get("hours_old", 24)), 168)
         )
+        distance = search.get("linkedin_distance")
+        if distance is not None and str(distance).strip() != "":
+            kwargs["distance"] = int(distance)
 
     if board == "google" and search.get("google_search_term"):
         kwargs["google_search_term"] = search["google_search_term"]
     if search.get("is_remote") is not None:
         kwargs["is_remote"] = search["is_remote"]
 
+    return kwargs
+
+
+def _dataframe_to_listings(
+    df: pd.DataFrame | None,
+    search_name: str,
+    board: str,
+) -> list[JobListing]:
     listings: list[JobListing] = []
-
-    try:
-        df = scrape_jobs(**kwargs)
-    except Exception as exc:
-        logger.error("Search '%s' board=%s failed: %s", name, board, exc)
-        return listings
-
     if df is None or df.empty:
-        logger.info("Search '%s' board=%s returned no results", name, board)
         return listings
 
     site_col = "site" if "site" in df.columns else None
@@ -147,11 +151,80 @@ def _scrape_search_board(search: dict[str, Any], board: str) -> list[JobListing]
             if site_col and not pd.isna(row.get(site_col))
             else board
         )
-        listing = _normalize_listing(row, name, row_board or board)
+        listing = _normalize_listing(row, search_name, row_board or board)
         if listing:
             listings.append(listing)
-
     return listings
+
+
+def _scrape_search_board(search: dict[str, Any], board: str) -> list[JobListing]:
+    name = search.get("name", "unnamed")
+    kwargs = _board_kwargs(search, board)
+
+    try:
+        df = scrape_jobs(**kwargs)
+    except Exception as exc:
+        logger.error("Search '%s' board=%s failed: %s", name, board, exc)
+        return []
+
+    if df is None or df.empty:
+        logger.info("Search '%s' board=%s returned no results", name, board)
+        return []
+
+    listings = _dataframe_to_listings(df, name, board)
+    return listings
+
+
+def _scrape_linkedin_union(
+    search: dict[str, Any],
+) -> tuple[list[JobListing], dict[str, Any]]:
+    """Fetch LinkedIn multiple times and union — mitigates JobSpy paginator variance."""
+    name = search.get("name", "unnamed")
+    kwargs = _board_kwargs(search, "linkedin")
+    draw_counts: list[int] = []
+    merged: list[JobListing] = []
+
+    for draw in range(1, LINKEDIN_DRAW_COUNT + 1):
+        try:
+            df = scrape_jobs(**kwargs)
+        except Exception as exc:
+            logger.error(
+                "Search '%s' LinkedIn draw %d/%d failed: %s",
+                name,
+                draw,
+                LINKEDIN_DRAW_COUNT,
+                exc,
+            )
+            draw_counts.append(0)
+            continue
+
+        batch = _dataframe_to_listings(df, name, "linkedin")
+        draw_counts.append(len(batch))
+        merged.extend(batch)
+        logger.info(
+            "Search '%s' LinkedIn draw %d/%d yielded %d listings",
+            name,
+            draw,
+            LINKEDIN_DRAW_COUNT,
+            len(batch),
+        )
+
+    unioned = _dedupe_listings(merged)
+    stats = {
+        "search": name,
+        "linkedin_draws": draw_counts,
+        "linkedin_raw_sum": sum(draw_counts),
+        "linkedin_union": len(unioned),
+        "linkedin_distance": search.get("linkedin_distance"),
+    }
+    logger.info(
+        "Search '%s' LinkedIn union: draws=%s raw_sum=%d union=%d",
+        name,
+        draw_counts,
+        stats["linkedin_raw_sum"],
+        stats["linkedin_union"],
+    )
+    return unioned, stats
 
 
 def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
@@ -161,7 +234,10 @@ def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
 
     merged: list[JobListing] = []
     for board in boards:
-        board_listings = _scrape_search_board(search, board)
+        if board == "linkedin":
+            board_listings, _stats = _scrape_linkedin_union(search)
+        else:
+            board_listings = _scrape_search_board(search, board)
         logger.info(
             "Search '%s' board=%s yielded %d listings",
             name,
@@ -183,21 +259,38 @@ def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
 def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
     boards = normalize_boards(config.get("boards"))
     funnel = ScrapeFunnel()
-    logger.info("Job boards enabled: %s", ", ".join(boards))
+    logger.info(
+        "Job boards enabled: %s (LinkedIn draws/search=%d)",
+        ", ".join(boards),
+        LINKEDIN_DRAW_COUNT,
+    )
     all_listings: list[JobListing] = []
-    linkedin_raw = 0
+    linkedin_raw_sum = 0
 
     for search in config.get("searches", []):
         name = search.get("name", "unnamed")
         if "linkedin" in boards:
-            li_only = _scrape_search_board(search, "linkedin")
-            linkedin_raw += len(li_only)
-            funnel.linkedin_per_search.append(
-                {"search": name, "linkedin_raw": len(li_only)},
-            )
-        all_listings.extend(run_search(search, boards))
+            li_union, stats = _scrape_linkedin_union(search)
+            linkedin_raw_sum += stats["linkedin_raw_sum"]
+            funnel.linkedin_per_search.append(stats)
+            # Non-LinkedIn boards via run_search would re-scrape LinkedIn — build manually.
+            merged = list(li_union)
+            for board in boards:
+                if board == "linkedin":
+                    continue
+                merged.extend(_scrape_search_board(search, board))
+            search_listings = _dedupe_listings(merged)
+        else:
+            search_listings = run_search(search, boards)
 
-    funnel.scrape_linkedin_raw = linkedin_raw
+        logger.info(
+            "Search '%s' ingested %d listings",
+            name,
+            len(search_listings),
+        )
+        all_listings.extend(search_listings)
+
+    funnel.scrape_linkedin_raw = linkedin_raw_sum
     funnel.scrape_total = len(all_listings)
     funnel.scrape_linkedin_deduped = sum(
         1 for listing in all_listings if listing.board == "linkedin"
@@ -207,11 +300,11 @@ def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
     linkedin_count = funnel.scrape_linkedin_deduped
     indeed_count = sum(1 for listing in all_listings if listing.board == "indeed")
     logger.info(
-        "Board mix: linkedin=%d indeed=%d total=%d (linkedin raw=%d cap/search=%d)",
+        "Board mix: linkedin=%d indeed=%d total=%d (linkedin raw_sum=%d cap/search=%d)",
         linkedin_count,
         indeed_count,
         len(all_listings),
-        linkedin_raw,
+        linkedin_raw_sum,
         funnel.scrape_linkedin_cap_per_search,
     )
     if linkedin_count:

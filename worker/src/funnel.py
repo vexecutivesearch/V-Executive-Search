@@ -18,9 +18,7 @@ class ScrapeFunnel:
     linkedin_per_search: list[dict[str, Any]] = field(default_factory=list)
 
     def to_metadata(self) -> dict[str, Any]:
-        data = asdict(self)
-        data.pop("linkedin_per_search", None)
-        return data
+        return asdict(self)
 
 
 def html_poster_signals(html: str) -> tuple[bool, bool]:

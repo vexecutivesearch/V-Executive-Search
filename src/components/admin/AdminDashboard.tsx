@@ -163,6 +163,21 @@ export function AdminDashboard({
     );
   }
 
+  async function updateProfileDistance(id: string, raw: string) {
+    const linkedin_distance =
+      raw.trim() === "" ? null : Math.max(1, parseInt(raw, 10) || 25);
+    await fetch("/api/admin/search-profiles", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, linkedin_distance }),
+    });
+    setProfiles((p) =>
+      p.map((x) =>
+        x.id === id ? { ...x, linkedinDistance: linkedin_distance } : x,
+      ),
+    );
+  }
+
   function toggleJobBoard(id: JobBoardId) {
     setForm((prev) => {
       const selected = prev.job_boards.includes(id)
@@ -432,23 +447,53 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
         <h2 className="font-semibold text-lg">Job title searches</h2>
         <p className="text-sm text-gray-500">
           Active searches run in your selected geographic area and job boards during
-          the nightly scrape (2 AM ET).
+          the 6 AM / 6 PM scrape. LinkedIn radius (miles) is per title — tight for
+          supply-rich searches, blank for wide (scarce titles like Head of Talent).
         </p>
         <ul className="space-y-2">
           {profiles.map((p) => (
             <li
               key={p.id}
-              className="flex items-center justify-between text-sm border rounded-lg px-3 py-2 dark:border-gray-800"
+              className="flex flex-wrap items-center justify-between gap-3 text-sm border rounded-lg px-3 py-2 dark:border-gray-800"
             >
               <span className="font-medium">{p.name}</span>
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={p.isActive}
-                  onChange={(e) => toggleProfile(p.id, e.target.checked)}
-                />
-                Active
-              </label>
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 text-xs text-gray-500">
+                  LI radius (mi)
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    placeholder="wide"
+                    className="w-16 border rounded px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900"
+                    value={p.linkedinDistance ?? ""}
+                    onChange={(e) =>
+                      setProfiles((rows) =>
+                        rows.map((x) =>
+                          x.id === p.id
+                            ? {
+                                ...x,
+                                linkedinDistance:
+                                  e.target.value === ""
+                                    ? null
+                                    : parseInt(e.target.value, 10) || null,
+                              }
+                            : x,
+                        ),
+                      )
+                    }
+                    onBlur={(e) => updateProfileDistance(p.id, e.target.value)}
+                  />
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={p.isActive}
+                    onChange={(e) => toggleProfile(p.id, e.target.checked)}
+                  />
+                  Active
+                </label>
+              </div>
             </li>
           ))}
         </ul>

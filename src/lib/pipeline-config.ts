@@ -6,11 +6,27 @@ import {
   DEFAULT_WPB_METRO_ALIASES,
   DEFAULT_WPB_METRO_CITIES,
 } from "@/lib/metro-defaults";
+import { backfillLinkedinDistanceDefaults } from "@/lib/search-profile-defaults";
 
 const DEFAULT_SEARCHES = [
-  { name: "HR Director", searchTerm: "HR Director", sortOrder: 0 },
-  { name: "VP People", searchTerm: "VP People", sortOrder: 1 },
-  { name: "Head of Talent", searchTerm: "Head of Talent", sortOrder: 2 },
+  {
+    name: "HR Director",
+    searchTerm: "HR Director",
+    sortOrder: 0,
+    linkedinDistance: 25,
+  },
+  {
+    name: "VP People",
+    searchTerm: "VP People",
+    sortOrder: 1,
+    linkedinDistance: 25,
+  },
+  {
+    name: "Head of Talent",
+    searchTerm: "Head of Talent",
+    sortOrder: 2,
+    linkedinDistance: null as number | null,
+  },
 ];
 
 export type GeoZone = {
@@ -87,10 +103,13 @@ export async function getOrCreateSettings() {
         searchTerm: s.searchTerm,
         isActive: true,
         sortOrder: s.sortOrder,
+        linkedinDistance: s.linkedinDistance,
       })),
     );
     await dedupeSearchProfiles();
   }
+
+  await backfillLinkedinDistanceDefaults();
 
   const boards = resolveJobBoards(settings.jobBoards);
   if (!settings.jobBoards?.length) {
@@ -209,6 +228,7 @@ export async function buildPipelineConfig() {
       is_remote: p.isRemote ?? false,
       results_wanted: p.resultsWanted ?? 50,
       hours_old: p.hoursOld ?? 24,
+      linkedin_distance: p.linkedinDistance ?? undefined,
     })),
   );
 

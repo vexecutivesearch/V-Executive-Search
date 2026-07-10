@@ -64,6 +64,8 @@ const METRO_PASS_CASES = [
   ["West Palm Beach Metropolitan Area", "WPB metro label"],
   ["Palm Beach County, FL", "Palm Beach County"],
   ["On-site\nBoca Raton, FL", "LinkedIn on-site prefix"],
+  ["Atlantis, FL", "Palm Beach County city not on old list"],
+  ["Fort Lauderdale, FL", "Broward adjacent"],
 ] as const;
 
 const METRO_REJECT_CASES = [
@@ -103,13 +105,15 @@ describe("geo normalization", () => {
     expect(parseJobLocation(normalized)?.city).toBe("Boca Raton");
   });
 
-  it("uses admin metro_cities config when set", () => {
+  it("uses admin focus_counties when set", () => {
     const settings = wpbSettings({
+      focusCounties: ["Palm Beach"],
       metroCities: ["Tequesta"],
       focusCities: ["West Palm Beach"],
     });
     expect(jobLocationInFocus("Tequesta, FL", settings)).toBe(true);
-    expect(jobLocationInFocus("Boca Raton, FL", settings)).toBe(false);
+    expect(jobLocationInFocus("Boca Raton, FL", settings)).toBe(true);
+    expect(jobLocationInFocus("Fort Lauderdale, FL", settings)).toBe(false);
   });
 });
 

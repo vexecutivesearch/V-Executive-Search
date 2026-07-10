@@ -27,6 +27,7 @@ export async function POST(request: NextRequest) {
     is_remote?: boolean;
     results_wanted?: number;
     hours_old?: number;
+    linkedin_distance?: number | null;
   };
   try {
     body = await request.json();
@@ -47,6 +48,7 @@ export async function POST(request: NextRequest) {
       isRemote: body.is_remote ?? null,
       resultsWanted: body.results_wanted ?? 50,
       hoursOld: body.hours_old ?? 24,
+      linkedinDistance: body.linkedin_distance ?? null,
     })
     .returning();
 
@@ -66,6 +68,7 @@ export async function PUT(request: NextRequest) {
     is_remote?: boolean | null;
     results_wanted?: number;
     hours_old?: number;
+    linkedin_distance?: number | null;
   };
   try {
     body = await request.json();
@@ -84,6 +87,9 @@ export async function PUT(request: NextRequest) {
   if (body.is_remote !== undefined) updates.isRemote = body.is_remote;
   if (body.results_wanted !== undefined) updates.resultsWanted = body.results_wanted;
   if (body.hours_old !== undefined) updates.hoursOld = body.hours_old;
+  if (body.linkedin_distance !== undefined) {
+    updates.linkedinDistance = body.linkedin_distance;
+  }
 
   const [updated] = await db
     .update(searchProfiles)

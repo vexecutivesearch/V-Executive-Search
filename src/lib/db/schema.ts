@@ -92,6 +92,8 @@ export const searchProfiles = pgTable(
     isRemote: boolean("is_remote"),
     resultsWanted: integer("results_wanted").default(50),
     hoursOld: integer("hours_old").default(24),
+    /** LinkedIn search radius in miles; null = wide (JobSpy default). Per-title tuning. */
+    linkedinDistance: integer("linkedin_distance"),
     sortOrder: integer("sort_order").default(0),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },

@@ -6,12 +6,21 @@ import { evaluateIcp } from "@/lib/icp-filter";
 import { getBacklogCompanies } from "@/lib/queries";
 import type { pipelineSettings } from "@/lib/db/schema";
 
+export type LinkedInPerSearchFunnel = {
+  search?: string;
+  linkedin_draws?: number[];
+  linkedin_raw_sum?: number;
+  linkedin_union?: number;
+  linkedin_distance?: number | null;
+};
+
 /** Per-run funnel — persisted on daily_runs.funnel_json after each scrape/ingest. */
 export type PipelineFunnel = {
   scrape_linkedin_raw?: number;
   scrape_linkedin_deduped?: number;
   scrape_total?: number;
   scrape_linkedin_cap_per_search?: number;
+  linkedin_per_search?: LinkedInPerSearchFunnel[];
   poster_pages_fetched?: number;
   poster_public_block_in_html?: number;
   meet_team_in_html?: number;
@@ -103,14 +112,42 @@ export async function measureDbFunnel(
   };
 }
 
-export function formatFunnelLine(f: PipelineFunnel): string {
+/** This run only — scrape yield + posters. No DB snapshot fields. */
+export function formatRunFunnelLine(f: PipelineFunnel): string {
   const parts = [
     f.scrape_total != null && `scraped ${f.scrape_total}`,
     f.scrape_linkedin_deduped != null &&
-      `LI ${f.scrape_linkedin_deduped}${f.scrape_linkedin_raw != null ? `/${f.scrape_linkedin_raw} raw` : ""}`,
+      `LI ${f.scrape_linkedin_deduped}${
+        f.scrape_linkedin_raw != null ? ` (raw ${f.scrape_linkedin_raw})` : ""
+      }`,
     f.poster_parsed != null && `posters ${f.poster_parsed}`,
-    f.db_backlog_linkedin != null && `backlog LI ${f.db_backlog_linkedin}`,
-    f.db_jobs_with_poster != null && `w/ poster ${f.db_jobs_with_poster}`,
   ].filter(Boolean);
+
+  const perSearch = f.linkedin_per_search;
+  if (perSearch?.length) {
+    const brief = perSearch
+      .map((s) => {
+        const name = (s.search ?? "?").split(" — ")[0];
+        return `${name} ${s.linkedin_union ?? "?"}`;
+      })
+      .join(", ");
+    parts.push(`by title: ${brief}`);
+  }
+
   return parts.join(" → ");
+}
+
+/** Cumulative DB snapshot — not single-run yield. */
+export function formatDbFunnelLine(f: PipelineFunnel): string {
+  const parts = [
+    f.db_linkedin_jobs != null && `${f.db_linkedin_jobs} LI jobs in DB`,
+    f.db_geo_pass_jobs != null && `${f.db_geo_pass_jobs} geo pass`,
+    f.db_backlog_linkedin != null && `backlog ${f.db_backlog_linkedin}`,
+    f.db_jobs_with_poster != null && `${f.db_jobs_with_poster} w/ poster`,
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
+export function formatFunnelLine(f: PipelineFunnel): string {
+  return formatRunFunnelLine(f);
 }
