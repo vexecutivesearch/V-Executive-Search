@@ -1,9 +1,10 @@
-import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, not, or, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { unauthorized, verifyWorkerAuth } from "@/lib/auth";
 import { resolveCompanyOrg } from "@/lib/domain-resolver";
 import { db } from "@/lib/db";
 import { companies } from "@/lib/db/schema";
+import { isListingPseudoCompany } from "@/lib/icp-filter";
 import { recomputeCompanyScores } from "@/lib/recompute-company-scores";
 
 export const runtime = "nodejs";
@@ -41,13 +42,16 @@ export async function POST(request: NextRequest) {
         .select()
         .from(companies)
         .where(
-          backfillIndustry
-            ? or(
-                isNull(companies.domain),
-                isNull(companies.industry),
-                sql`trim(${companies.industry}) = ''`,
-              )
-            : and(eq(companies.status, "new"), isNull(companies.domain)),
+          and(
+            not(sql`${companies.name} ILIKE '(Listing)%'`),
+            backfillIndustry
+              ? or(
+                  isNull(companies.domain),
+                  isNull(companies.industry),
+                  sql`trim(${companies.industry}) = ''`,
+                )
+              : and(eq(companies.status, "new"), isNull(companies.domain)),
+          ),
         )
         .limit(limit);
 
@@ -56,6 +60,8 @@ export async function POST(request: NextRequest) {
   const touchedIds: string[] = [];
 
   for (const row of rows) {
+    if (isListingPseudoCompany(row.name)) continue;
+
     const lookup = await resolveCompanyOrg(row.name, apiKey);
     const patch: Partial<typeof companies.$inferInsert> = {};
 

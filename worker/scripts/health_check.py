@@ -81,14 +81,24 @@ def main() -> int:
     if apollo_key:
         try:
             resp = requests.post(
-                "https://api.apollo.io/api/v1/mixed_companies/search",
+                "https://api.apollo.io/api/v1/organizations/search",
                 headers={"X-Api-Key": apollo_key, "Content-Type": "application/json"},
-                json={"q_organization_name": "Apollo.io", "page": 1, "per_page": 1},
+                json={"q_organization_name": "Chewy", "page": 1, "per_page": 1},
                 timeout=15,
             )
-            check("Apollo API key", resp.status_code == 200, f"HTTP {resp.status_code}")
+            ok = resp.status_code == 200
+            industry = None
+            if ok:
+                orgs = resp.json().get("organizations") or []
+                industry = orgs[0].get("industry") if orgs else None
+            detail = f"HTTP {resp.status_code}"
+            if industry:
+                detail += f", industry field present ({industry})"
+            elif ok:
+                detail += ", WARNING: no industry in response"
+            check("Apollo organizations/search", ok and bool(industry), detail)
         except requests.RequestException as exc:
-            check("Apollo API key", False, str(exc))
+            check("Apollo organizations/search", False, str(exc))
     else:
         check("Apollo API key", False, "APOLLO_API_KEY missing")
 

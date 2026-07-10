@@ -3,23 +3,40 @@ import { config } from "dotenv";
 config({ path: ".env.local" });
 config({ path: "worker/.env" });
 
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { and, eq, isNull, not, or, sql } from "drizzle-orm";
 import { db } from "../src/lib/db";
 import { companies } from "../src/lib/db/schema";
+import { fetchApolloApiUsage } from "../src/lib/apollo-usage";
+import { isListingPseudoCompany } from "../src/lib/icp-filter";
 import { resolveCompanyOrg } from "../src/lib/domain-resolver";
+import { recomputeCompanyScores } from "../src/lib/recompute-company-scores";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
- * Throttled free Apollo org lookup to backfill industry on existing companies.
- * Usage: npx tsx scripts/backfill-industry.ts [--limit 50] [--delay-ms 250]
+ * Throttled Apollo org lookup to backfill industry on real companies only.
+ *
+ * organizations/search may consume Apollo credits per page — run check-apollo-usage first.
+ * Usage: npx tsx scripts/backfill-industry.ts --confirm --limit 50 --delay-ms 250
  */
 async function main() {
   const apiKey = process.env.APOLLO_API_KEY;
   if (!apiKey) {
-    throw new Error("APOLLO_API_KEY not set in .env.local");
+    throw new Error("APOLLO_API_KEY not set");
+  }
+
+  if (!process.argv.includes("--confirm")) {
+    const usage = await fetchApolloApiUsage(apiKey);
+    console.error(
+      "Refusing to run without --confirm.\n",
+      JSON.stringify(usage, null, 2),
+      "\n",
+      usage.creditWarning,
+      "\nRe-run with --confirm after checking Apollo billing.",
+    );
+    process.exit(1);
   }
 
   const limitArg = process.argv.indexOf("--limit");
@@ -33,19 +50,25 @@ async function main() {
     .select()
     .from(companies)
     .where(
-      or(
-        isNull(companies.industry),
-        sql`trim(${companies.industry}) = ''`,
+      and(
+        not(sql`${companies.name} ILIKE '(Listing)%'`),
+        or(
+          isNull(companies.industry),
+          sql`trim(${companies.industry}) = ''`,
+        ),
       ),
     )
     .limit(limit);
 
-  console.log(`Backfilling industry for up to ${rows.length} companies…`);
+  console.log(`Backfilling industry for up to ${rows.length} real companies…`);
 
   let updated = 0;
   let industrySet = 0;
+  const touchedIds: string[] = [];
 
   for (const row of rows) {
+    if (isListingPseudoCompany(row.name)) continue;
+
     const lookup = await resolveCompanyOrg(row.name, apiKey);
     const patch: Partial<typeof companies.$inferInsert> = {};
 
@@ -67,6 +90,7 @@ async function main() {
         .set({ ...patch, updatedAt: new Date() })
         .where(eq(companies.id, row.id));
       updated += 1;
+      touchedIds.push(row.id);
       console.log(
         `  ✓ ${row.name} → industry=${patch.industry ?? row.industry ?? "—"}`,
       );
@@ -77,12 +101,18 @@ async function main() {
     if (delayMs > 0) await sleep(delayMs);
   }
 
+  if (touchedIds.length) {
+    await recomputeCompanyScores(touchedIds);
+  }
+
+  const usageAfter = await fetchApolloApiUsage(apiKey);
   const [stats] = await db
     .select({
       total: sql<number>`count(*)::int`,
       withIndustry: sql<number>`count(*) filter (where industry is not null and trim(industry) <> '')::int`,
     })
-    .from(companies);
+    .from(companies)
+    .where(not(sql`${companies.name} ILIKE '(Listing)%'`));
 
   console.log(
     JSON.stringify(
@@ -90,12 +120,13 @@ async function main() {
         processed: rows.length,
         updated,
         industry_set: industrySet,
-        db_total: stats.total,
-        db_with_industry: stats.withIndustry,
-        db_industry_pct:
+        real_companies_total: stats.total,
+        real_companies_with_industry: stats.withIndustry,
+        real_industry_pct:
           stats.total > 0
             ? ((100 * stats.withIndustry) / stats.total).toFixed(1)
             : "0.0",
+        apollo_usage_after: usageAfter.organizationsSearch,
       },
       null,
       2,

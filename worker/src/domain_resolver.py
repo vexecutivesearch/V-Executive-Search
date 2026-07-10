@@ -10,6 +10,12 @@ import requests
 
 from src.models import CompanyRecord, DomainConfidence
 
+LISTING_PSEUDO_PREFIX = "(Listing)"
+
+
+def is_listing_pseudo_company(name: str) -> bool:
+    return name.strip().startswith(LISTING_PSEUDO_PREFIX)
+
 logger = logging.getLogger(__name__)
 
 APOLLO_BASE = "https://api.apollo.io/api/v1"
@@ -105,6 +111,9 @@ def _search_org(company_name: str) -> OrgLookupResult:
 
 def resolve_domains(companies: list[CompanyRecord]) -> list[CompanyRecord]:
     for company in companies:
+        if is_listing_pseudo_company(company.name):
+            logger.info("Skipping org lookup for listing pseudo-company '%s'", company.name)
+            continue
         has_domain = bool(company.domain)
         has_employees = company.estimated_employees is not None
         has_industry = bool(company.industry)

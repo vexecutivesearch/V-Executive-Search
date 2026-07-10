@@ -61,6 +61,11 @@ const EXEC_TITLE_PATTERNS = [
   "managing partner",
 ];
 
+/** Job-title placeholder companies from CSV import — not real employers. */
+export function isListingPseudoCompany(companyName: string): boolean {
+  return companyName.trim().startsWith("(Listing)");
+}
+
 export function isStaffingAgency(companyName: string): boolean {
   const lower = companyName.trim().toLowerCase();
   if (STAFFING_BRAND_NAMES.has(lower)) return true;

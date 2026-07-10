@@ -24,6 +24,18 @@ python scripts/health_check.py           # smoke test all integrations
 python scripts/test_contactout_hybrid.py # ContactOut API only
 ```
 
+### After CRM deploys (industry fix, etc.)
+
+The worker does **not** auto-update. From the repo root on the Mac:
+
+```bash
+git pull origin main
+cd worker && source .venv/bin/activate
+python scripts/health_check.py   # Apollo check must show industry field
+```
+
+Until you pull, new scrapes still use the old Apollo endpoint and will get **null industry**.
+
 ## Schedule on Mac (one machine only)
 
 Must run on a **home Mac with residential IP** (job boards block cloud servers).

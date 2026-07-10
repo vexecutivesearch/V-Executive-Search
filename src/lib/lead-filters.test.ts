@@ -168,4 +168,20 @@ describe("companyMatchesEmailReportFilters", () => {
       ),
     ).toBe(false);
   });
+
+  it("includes unknown industry when email industry filters are set", () => {
+    expect(
+      companyMatchesEmailReportFilters(
+        {
+          industry: null,
+          jobListings: [{ ...baseListing, searchName: "HR Director" }],
+        },
+        {
+          jobTitleFilters: [],
+          industryFilters: ["Healthcare"],
+          salaryFilter: "any",
+        },
+      ),
+    ).toBe(true);
+  });
 });

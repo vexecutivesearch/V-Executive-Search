@@ -21,6 +21,11 @@ export const DEFAULT_LEAD_FILTER: LeadFilterState = {
   includeUnknownSalary: true,
 };
 
+export const DEFAULT_EMAIL_FILTER_BEHAVIOR = {
+  includeUnknownIndustry: true,
+  includeUnknownSalary: true,
+} as const;
+
 export function listingSalaryMax(listing: {
   salaryMax?: number | null;
   salaryMin?: number | null;
@@ -55,6 +60,30 @@ export function listingMatchesJobTitle(
     search.includes(needle) ||
     title.includes(needle)
   );
+}
+
+export function companyMatchesJobTitleFilters(
+  listings: Pick<JobListing, "title" | "searchName">[],
+  jobTitleFilters: string[],
+): boolean {
+  if (!jobTitleFilters.length) return true;
+  return jobTitleFilters.some((t) =>
+    listings.some((l) => listingMatchesJobTitle(l, t)),
+  );
+}
+
+export function companyMatchesIndustryFilters(
+  industry: string | null | undefined,
+  industryFilters: string[],
+  includeUnknownIndustry: boolean,
+): boolean {
+  if (!industryFilters.length) return true;
+  const ind = (industry ?? "").toLowerCase();
+  const industryOk = industryFilters.some((f) =>
+    ind.includes(f.toLowerCase()),
+  );
+  if (industryOk) return true;
+  return includeUnknownIndustry && !ind;
 }
 
 export function companyMatchesSalaryFilter(
@@ -96,66 +125,37 @@ export function companyMatchesLeadFilters(
       "title" | "searchName" | "salaryMin" | "salaryMax" | "salaryText"
     >[];
   },
-  filters: LeadFilterState | EmailReportPreferences,
+  filters: LeadFilterState,
 ): boolean {
-  const jobTitle =
-    "jobTitle" in filters
-      ? filters.jobTitle
-      : filters.jobTitleFilters?.[0] ?? "";
-  const industry =
-    "industry" in filters
-      ? filters.industry
-      : filters.industryFilters?.[0] ?? "";
-  const salaryFilter = filters.salaryFilter ?? "any";
-  const salaryMinUsd =
-    "salaryMinUsd" in filters && filters.salaryMinUsd != null
-      ? filters.salaryMinUsd
-      : 80000;
-  const includeUnknownIndustry =
-    "includeUnknownIndustry" in filters
-      ? filters.includeUnknownIndustry !== false
-      : true;
-  const includeUnknownSalary =
-    "includeUnknownSalary" in filters
-      ? filters.includeUnknownSalary !== false
-      : true;
-
-  if (industry.trim()) {
-    const ind = (company.industry ?? "").toLowerCase();
-    const needle = industry.trim().toLowerCase();
-    if (!ind.includes(needle)) {
-      if (!(includeUnknownIndustry && !ind)) return false;
-    }
-  }
-
   const listings = company.jobListings;
   if (!listings.length) return false;
 
-  if ("jobTitleFilters" in filters && filters.jobTitleFilters?.length) {
-    const ok = filters.jobTitleFilters.some((t) =>
-      listings.some((l) => listingMatchesJobTitle(l, t)),
-    );
-    if (!ok) return false;
-  } else if (jobTitle.trim()) {
-    const ok = listings.some((l) => listingMatchesJobTitle(l, jobTitle));
-    if (!ok) return false;
-  }
-
   if (
-    !companyMatchesSalaryFilter(
-      listings,
-      salaryFilter as LeadFilterState["salaryFilter"],
-      salaryMinUsd,
-      includeUnknownSalary,
+    !companyMatchesIndustryFilters(
+      company.industry,
+      filters.industry.trim() ? [filters.industry.trim()] : [],
+      filters.includeUnknownIndustry !== false,
     )
   ) {
     return false;
   }
 
-  return true;
+  if (
+    filters.jobTitle.trim() &&
+    !companyMatchesJobTitleFilters(listings, [filters.jobTitle.trim()])
+  ) {
+    return false;
+  }
+
+  return companyMatchesSalaryFilter(
+    listings,
+    filters.salaryFilter,
+    filters.salaryMinUsd,
+    filters.includeUnknownSalary !== false,
+  );
 }
 
-/** Multi-select email prefs — any selected title/industry must match (OR within dimension). */
+/** Email backlog prefs — same semantics as Today filters (include unknown by default). */
 export function companyMatchesEmailReportFilters(
   company: {
     industry?: string | null;
@@ -166,25 +166,29 @@ export function companyMatchesEmailReportFilters(
   },
   prefs: EmailReportPreferences,
 ): boolean {
-  if (prefs.jobTitleFilters?.length) {
-    const titleOk = prefs.jobTitleFilters.some((t) =>
-      company.jobListings.some((l) => listingMatchesJobTitle(l, t)),
-    );
-    if (!titleOk) return false;
+  const listings = company.jobListings;
+  if (!listings.length) return false;
+
+  if (
+    !companyMatchesJobTitleFilters(listings, prefs.jobTitleFilters ?? [])
+  ) {
+    return false;
   }
 
-  if (prefs.industryFilters?.length) {
-    const ind = (company.industry ?? "").toLowerCase();
-    const industryOk = prefs.industryFilters.some((f) =>
-      ind.includes(f.toLowerCase()),
-    );
-    if (!industryOk) return false;
+  if (
+    !companyMatchesIndustryFilters(
+      company.industry,
+      prefs.industryFilters ?? [],
+      DEFAULT_EMAIL_FILTER_BEHAVIOR.includeUnknownIndustry,
+    )
+  ) {
+    return false;
   }
 
   return companyMatchesSalaryFilter(
-    company.jobListings,
+    listings,
     prefs.salaryFilter ?? "any",
     prefs.salaryMinUsd ?? 80000,
-    false,
+    DEFAULT_EMAIL_FILTER_BEHAVIOR.includeUnknownSalary,
   );
 }
