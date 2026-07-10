@@ -31,6 +31,8 @@ export async function PUT(request: NextRequest) {
     focus_county?: string;
     focus_cities?: string[];
     focus_counties?: string[];
+    metro_cities?: string[];
+    metro_aliases?: string[];
     notification_email?: string;
     job_boards?: string[];
     daily_enrich_quota?: number;
@@ -50,6 +52,12 @@ export async function PUT(request: NextRequest) {
   const focusCounties = body.focus_counties
     ? normalizeList(body.focus_counties)
     : normalizeList(current.focusCounties);
+  const metroCities = body.metro_cities
+    ? normalizeList(body.metro_cities)
+    : normalizeList(current.metroCities);
+  const metroAliases = body.metro_aliases
+    ? normalizeList(body.metro_aliases)
+    : normalizeList(current.metroAliases);
   const jobBoards = body.job_boards
     ? resolveJobBoards(body.job_boards)
     : resolveJobBoards(current.jobBoards);
@@ -65,6 +73,8 @@ export async function PUT(request: NextRequest) {
       focusCounty: focusCounties[0] ?? body.focus_county ?? current.focusCounty,
       focusCities,
       focusCounties,
+      metroCities,
+      metroAliases,
       notificationEmail: body.notification_email ?? current.notificationEmail,
       jobBoards,
       dailyEnrichQuota:

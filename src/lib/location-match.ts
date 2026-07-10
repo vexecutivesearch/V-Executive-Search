@@ -73,9 +73,28 @@ function normalizeState(token: string): { abbr: string | null; name: string | nu
   return { abbr: null, name: null };
 }
 
+const REMOTE_PATTERN =
+  /\b(remote|work from home|wfh|anywhere|nationwide|hybrid)\b/i;
+const ON_SITE_PREFIX = /^(on[-\s]?site|onsite),?\s*/i;
+
+/** Strip LinkedIn/job-board prefixes before parsing or substring matching. */
+export function normalizeJobLocationString(location: string): string {
+  let value = location.trim();
+  if (!value) return value;
+  value = value.replace(/\s*\n+\s*/g, ", ");
+  value = value.replace(ON_SITE_PREFIX, "");
+  value = value.replace(/\s{2,}/g, " ");
+  return value.trim();
+}
+
+export function isRemoteLocationString(location: string): boolean {
+  const normalized = normalizeJobLocationString(location);
+  return Boolean(normalized && REMOTE_PATTERN.test(normalized));
+}
+
 export function parseJobLocation(location: string): ParsedLocation | null {
-  const raw = location.trim();
-  if (!raw || /\b(remote|work from home|wfh)\b/i.test(raw)) return null;
+  const raw = normalizeJobLocationString(location);
+  if (!raw || REMOTE_PATTERN.test(raw)) return null;
 
   const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
   if (!parts.length) return null;

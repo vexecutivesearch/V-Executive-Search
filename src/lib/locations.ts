@@ -1,3 +1,5 @@
+import { DEFAULT_WPB_METRO_CITIES } from "@/lib/metro-defaults";
+
 /** Florida cities for admin dropdown (geofence multi-select). */
 export const FLORIDA_CITIES = [
   "Boca Raton",
@@ -62,6 +64,11 @@ export const FLORIDA_COUNTIES = [
   "St. Lucie",
   "Volusia",
 ].sort();
+
+export function getMetroCitiesForState(state: string): string[] {
+  if (state === "Florida") return [...DEFAULT_WPB_METRO_CITIES].sort();
+  return [];
+}
 
 export const US_STATES = [
   "Alabama",

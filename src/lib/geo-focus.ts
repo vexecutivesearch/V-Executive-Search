@@ -1,13 +1,25 @@
 import { cache } from "react";
-import { parseJobLocation } from "@/lib/location-match";
 import {
-  buildGeoZones,
-  type GeoZone,
-} from "@/lib/pipeline-config";
+  normalizeJobLocationString,
+  parseJobLocation,
+} from "@/lib/location-match";
+import {
+  DEFAULT_WPB_METRO_ALIASES,
+  DEFAULT_WPB_METRO_CITIES,
+  normalizeMetroToken,
+} from "@/lib/metro-defaults";
+import { buildGeoZones, type GeoZone } from "@/lib/pipeline-config";
 import type { pipelineSettings } from "@/lib/db/schema";
 
+export type GeoMatchResult = "in_metro" | "out_of_metro" | "location_unknown";
+
 function normalize(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
+  return normalizeMetroToken(value);
+}
+
+function normalizeList(values: string[] | null | undefined): string[] {
+  if (!values?.length) return [];
+  return [...new Set(values.map((v) => v.trim()).filter(Boolean))];
 }
 
 function cityMatches(jobCity: string, zoneCity: string): boolean {
@@ -32,57 +44,69 @@ function stateMatches(
   return false;
 }
 
-/** WPB focus — LinkedIn lists jobs across Palm Beach + Broward counties. */
-const PALM_BEACH_COUNTY_CITIES = [
-  "west palm beach",
-  "palm beach gardens",
-  "boynton beach",
-  "boca raton",
-  "lake worth",
-  "jupiter",
-  "wellington",
-  "delray beach",
-  "royal palm beach",
-  "greenacres",
-  "lantana",
-  "riviera beach",
-  "palm springs",
-  "north palm beach",
-  "juno beach",
-  "hypoluxo",
-  "manalapan",
-  "palm beach",
-];
-
-const BROWARD_COUNTY_CITIES = [
-  "fort lauderdale",
-  "hollywood",
-  "pembroke pines",
-  "miramar",
-  "coral springs",
-  "pompano beach",
-  "davie",
-  "sunrise",
-  "plantation",
-  "deerfield beach",
-  "tamarac",
-  "margate",
-  "dania",
-];
-
-function isSouthFloridaMetroLocation(
-  location: string,
-  focusCities: string[],
-): boolean {
-  const focusPalmBeach = focusCities.some((city) => {
+function focusUsesWpbMetro(focusCities: string[]): boolean {
+  return focusCities.some((city) => {
     const n = normalize(city);
     return n.includes("west palm") || n.includes("palm beach");
   });
-  if (!focusPalmBeach) return false;
-  const loc = normalize(location);
-  return [...PALM_BEACH_COUNTY_CITIES, ...BROWARD_COUNTY_CITIES].some((city) =>
-    loc.includes(city),
+}
+
+/** Metro cities from admin config; falls back to WPB defaults when unset. */
+export function getMetroCities(
+  settings: typeof pipelineSettings.$inferSelect,
+): string[] {
+  const configured = normalizeList(settings.metroCities);
+  if (configured.length) return configured;
+
+  const focus = normalizeList(
+    settings.focusCities?.length
+      ? settings.focusCities
+      : settings.focusCity
+        ? [settings.focusCity]
+        : ["West Palm Beach"],
   );
+  if (focusUsesWpbMetro(focus)) {
+    return [...DEFAULT_WPB_METRO_CITIES];
+  }
+  return [];
+}
+
+export function getMetroAliases(
+  settings: typeof pipelineSettings.$inferSelect,
+): string[] {
+  const configured = normalizeList(settings.metroAliases);
+  if (configured.length) return configured;
+  return [...DEFAULT_WPB_METRO_ALIASES];
+}
+
+function matchesMetroCityOrAlias(
+  location: string,
+  settings: typeof pipelineSettings.$inferSelect,
+): boolean {
+  const loc = normalize(normalizeJobLocationString(location));
+  if (!loc) return false;
+
+  for (const alias of getMetroAliases(settings)) {
+    if (loc.includes(normalize(alias))) return true;
+  }
+
+  const metroCities = getMetroCities(settings);
+  return metroCities.some((city) => loc.includes(normalize(city)));
+}
+
+/** Classify a scraped job location — never silently drop; unknown ≠ out-of-metro. */
+export function classifyJobLocation(
+  location: string | null | undefined,
+  settings: typeof pipelineSettings.$inferSelect,
+): GeoMatchResult {
+  if (!location?.trim()) return "location_unknown";
+
+  const normalized = normalizeJobLocationString(location);
+  const parsed = parseJobLocation(normalized);
+  if (!parsed) return "location_unknown";
+
+  if (jobLocationInFocus(normalized, settings)) return "in_metro";
+  return "out_of_metro";
 }
 
 /** True when a scraped job listing location falls inside admin geo focus. */
@@ -92,7 +116,8 @@ export function jobLocationInFocus(
 ): boolean {
   if (!location?.trim()) return false;
 
-  const parsed = parseJobLocation(location);
+  const normalized = normalizeJobLocationString(location);
+  const parsed = parseJobLocation(normalized);
   if (!parsed) return false;
 
   const zones = buildGeoZones(settings);
@@ -113,27 +138,18 @@ export function jobLocationInFocus(
         ? [settings.focusCounty]
         : [];
     if (!counties.length) return true;
-    const loc = normalize(location);
+    const loc = normalize(normalized);
     return counties.some((county) => loc.includes(normalize(county)));
   }
 
-  // city scope (default) — match focus cities + shared metro (e.g. Palm Beach County)
+  // city scope (default) — focus cities + configured metro expansion
   const cities = settings.focusCities?.length
     ? settings.focusCities
     : settings.focusCity
       ? [settings.focusCity]
       : ["West Palm Beach"];
 
-  const locNorm = normalize(location);
-
-  if (
-    cities.some((city) => normalize(city).includes("palm beach")) &&
-    locNorm.includes("palm beach")
-  ) {
-    return true;
-  }
-
-  if (isSouthFloridaMetroLocation(location, cities)) {
+  if (matchesMetroCityOrAlias(normalized, settings)) {
     return true;
   }
 
@@ -157,9 +173,17 @@ export function jobLocationInFocus(
 export function focusGeoLabel(
   settings: typeof pipelineSettings.$inferSelect,
 ): string {
-  return buildGeoZones(settings)
+  const zones = buildGeoZones(settings)
     .map((z: GeoZone) => z.label)
     .join("; ");
+  const metro = getMetroCities(settings);
+  if (metro.length > 6) {
+    return `${zones} + ${metro.length} metro cities`;
+  }
+  if (metro.length) {
+    return `${zones} + metro (${metro.slice(0, 4).join(", ")}…)`;
+  }
+  return zones;
 }
 
 export const getGeoFocusSettings = cache(async () => {

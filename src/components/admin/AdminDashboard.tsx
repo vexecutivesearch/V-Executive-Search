@@ -11,8 +11,10 @@ import {
 import {
   getCitiesForState,
   getCountiesForState,
+  getMetroCitiesForState,
   US_STATES,
 } from "@/lib/locations";
+import { DEFAULT_WPB_METRO_ALIASES } from "@/lib/metro-defaults";
 
 const SCOPES: { value: GeographicScope; label: string }[] = [
   { value: "national", label: "National (United States)" },
@@ -96,11 +98,15 @@ export function AdminDashboard({
         ? [settings.focusCounty]
         : [];
 
+  const initialMetro =
+    settings.metroCities?.length ? settings.metroCities : [];
+
   const [form, setForm] = useState({
     geographic_scope: settings.geographicScope,
     focus_state: settings.focusState ?? "Florida",
     focus_cities: initialCities,
     focus_counties: initialCounties,
+    metro_cities: initialMetro,
     notification_email: settings.notificationEmail,
     job_boards: resolveJobBoards(settings.jobBoards),
     daily_enrich_quota: settings.dailyEnrichQuota ?? 25,
@@ -113,6 +119,10 @@ export function AdminDashboard({
 
   const cityOptions = useMemo(
     () => getCitiesForState(form.focus_state),
+    [form.focus_state],
+  );
+  const metroOptions = useMemo(
+    () => getMetroCitiesForState(form.focus_state),
     [form.focus_state],
   );
   const countyOptions = useMemo(
@@ -232,13 +242,25 @@ export function AdminDashboard({
         )}
 
         {form.geographic_scope === "city" && (
-          <MultiSelect
-            label="Cities (select all that apply)"
-            options={cityOptions}
-            selected={form.focus_cities}
-            onChange={(focus_cities) => setForm({ ...form, focus_cities })}
-            emptyHint="City dropdowns are available for Florida. Add more states in locations.ts as you expand."
-          />
+          <>
+            <MultiSelect
+              label="Cities (select all that apply)"
+              options={cityOptions}
+              selected={form.focus_cities}
+              onChange={(focus_cities) => setForm({ ...form, focus_cities })}
+              emptyHint="City dropdowns are available for Florida. Add more states in locations.ts as you expand."
+            />
+            <MultiSelect
+              label="Metro expansion cities (accept jobs in these cities when focus is WPB)"
+              options={metroOptions}
+              selected={form.metro_cities}
+              onChange={(metro_cities) => setForm({ ...form, metro_cities })}
+              emptyHint="Metro list available for Florida WPB market."
+            />
+            <p className="text-xs text-gray-500">
+              Also matches: {DEFAULT_WPB_METRO_ALIASES.join(", ")}
+            </p>
+          </>
         )}
 
         {form.geographic_scope === "county" && (

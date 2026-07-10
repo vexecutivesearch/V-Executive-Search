@@ -62,6 +62,8 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   focusCounty: text("focus_county"),
   focusCities: jsonb("focus_cities").$type<string[]>().default([]),
   focusCounties: jsonb("focus_counties").$type<string[]>().default([]),
+  metroCities: jsonb("metro_cities").$type<string[]>().default([]),
+  metroAliases: jsonb("metro_aliases").$type<string[]>().default([]),
   notificationEmail: text("notification_email")
     .default("hello@proventheory.co")
     .notNull(),

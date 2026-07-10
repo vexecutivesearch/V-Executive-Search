@@ -37,6 +37,7 @@ export function scoreCompanyPreEnrich(input: {
   listings: Pick<JobListing, "location">[];
   geoSettings: typeof pipelineSettings.$inferSelect;
   hrOnlyDeprioritize: boolean;
+  hasLinkedInPoster?: boolean;
 }): number {
   const inFocusCount = input.listings.filter((l) =>
     jobLocationInFocus(l.location, input.geoSettings),
@@ -48,6 +49,8 @@ export function scoreCompanyPreEnrich(input: {
   if (input.domainConfidence === "high") score += 8;
   score += signalScoreBonus(input.hiringSignals);
   score += icpDeprioritizeScore(input.icpStatus, input.hrOnlyDeprioritize);
+
+  if (input.hasLinkedInPoster) score += 6;
 
   return Math.min(100, Math.max(0, score));
 }

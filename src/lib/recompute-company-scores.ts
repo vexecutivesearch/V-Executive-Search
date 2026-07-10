@@ -1,10 +1,11 @@
 import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { companies, contacts, jobListings } from "@/lib/db/schema";
-import { getGeoFocusSettings } from "@/lib/geo-focus";
+import { getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
 import {
   evaluateIcp,
   hasHrOnlyListings,
+  isStaffingAgency,
 } from "@/lib/icp-filter";
 import {
   detectHiringSignals,
@@ -36,17 +37,36 @@ export async function recomputeCompanyScores(
       companyName: company.name,
       estimatedEmployees: company.estimatedEmployees,
       listings,
-      geoSettings,
     });
 
     const hrOnly = hasHrOnlyListings(listings);
     const signals = detectHiringSignals(listings, geoSettings, company.firstSeen);
-    const reasonToCall = reasonToCallFromSignals(signals);
+    let reasonToCall = reasonToCallFromSignals(signals);
 
     const companyContacts = await db
       .select()
       .from(contacts)
       .where(eq(contacts.companyId, company.id));
+
+    const posterContact = companyContacts.find(
+      (c) => c.sourceProvider === "linkedin_poster",
+    );
+    const inFocusListings = listings.filter((l) =>
+      jobLocationInFocus(l.location, geoSettings),
+    );
+    if (
+      posterContact &&
+      inFocusListings.length > 0 &&
+      !isStaffingAgency(company.name)
+    ) {
+      const posterLabel = posterContact.title
+        ? `${posterContact.name} (${posterContact.title})`
+        : posterContact.name;
+      const posterReason = `LinkedIn job poster — ${posterLabel}`;
+      reasonToCall = reasonToCall
+        ? `${posterReason} · ${reasonToCall}`
+        : posterReason;
+    }
 
     const preScore = scoreCompanyPreEnrich({
       icpStatus,
@@ -55,6 +75,9 @@ export async function recomputeCompanyScores(
       listings,
       geoSettings,
       hrOnlyDeprioritize: hrOnly,
+      hasLinkedInPoster: companyContacts.some(
+        (c) => c.sourceProvider === "linkedin_poster",
+      ),
     });
 
     const leadScore =

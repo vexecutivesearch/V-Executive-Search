@@ -2,6 +2,10 @@ import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { pipelineSettings, searchProfiles } from "@/lib/db/schema";
 import { DEFAULT_JOB_BOARDS, resolveJobBoards } from "@/lib/job-boards";
+import {
+  DEFAULT_WPB_METRO_ALIASES,
+  DEFAULT_WPB_METRO_CITIES,
+} from "@/lib/metro-defaults";
 
 const DEFAULT_SEARCHES = [
   { name: "HR Director", searchTerm: "HR Director", sortOrder: 0 },
@@ -57,9 +61,21 @@ export async function getOrCreateSettings() {
         focusState: "Florida",
         focusCity: "West Palm Beach",
         focusCities: ["West Palm Beach"],
+        metroCities: [...DEFAULT_WPB_METRO_CITIES],
+        metroAliases: [...DEFAULT_WPB_METRO_ALIASES],
         notificationEmail: "hello@proventheory.co",
         jobBoards: [...DEFAULT_JOB_BOARDS],
       })
+      .returning();
+  } else if (!normalizeList(settings.metroCities).length) {
+    [settings] = await db
+      .update(pipelineSettings)
+      .set({
+        metroCities: [...DEFAULT_WPB_METRO_CITIES],
+        metroAliases: [...DEFAULT_WPB_METRO_ALIASES],
+        updatedAt: new Date(),
+      })
+      .where(eq(pipelineSettings.id, settings.id))
       .returning();
   }
 
@@ -204,6 +220,8 @@ export async function buildPipelineConfig() {
       focus_county: settings.focusCounty,
       focus_cities: normalizeList(settings.focusCities),
       focus_counties: normalizeList(settings.focusCounties),
+      metro_cities: normalizeList(settings.metroCities),
+      metro_aliases: normalizeList(settings.metroAliases),
       notification_email: settings.notificationEmail,
       geo_label: zones.map((z) => z.label).join("; "),
       job_boards: resolveJobBoards(settings.jobBoards),

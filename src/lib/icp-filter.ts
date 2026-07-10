@@ -1,7 +1,5 @@
 import type { IcpStatus } from "@/lib/db/schema";
 import type { JobListing } from "@/lib/db/schema";
-import { jobLocationInFocus } from "@/lib/geo-focus";
-import type { pipelineSettings } from "@/lib/db/schema";
 
 const STAFFING_PATTERNS = [
   "staffing",
@@ -18,7 +16,27 @@ const STAFFING_PATTERNS = [
   "adecco",
   "kelly services",
   "robert half",
+  "hays ",
+  " hays",
+  "kforce",
+  "teksystems",
+  "aerotek",
+  "express employment",
+  "spherion",
 ];
+
+/** Known staffing brands — exact match only (avoid substring false positives). */
+const STAFFING_BRAND_NAMES = new Set([
+  "hays",
+  "randstad",
+  "adecco",
+  "robert half",
+  "kelly services",
+  "manpower",
+  "kforce",
+  "aerotek",
+  "teksystems",
+]);
 
 const HR_ONLY_TITLE_PATTERNS = [
   "hr director",
@@ -44,7 +62,8 @@ const EXEC_TITLE_PATTERNS = [
 ];
 
 export function isStaffingAgency(companyName: string): boolean {
-  const lower = companyName.toLowerCase();
+  const lower = companyName.trim().toLowerCase();
+  if (STAFFING_BRAND_NAMES.has(lower)) return true;
   return STAFFING_PATTERNS.some((p) => lower.includes(p));
 }
 
@@ -61,18 +80,16 @@ export function hasHrOnlyListings(listings: Pick<JobListing, "title">[]): boolea
   });
 }
 
+/**
+ * ICP fit — geo is handled separately via jobLocationInFocus / backlog filters.
+ * Missing employee size must not auto-fail (domain backfill + rescore first).
+ */
 export function evaluateIcp(input: {
   companyName: string;
   estimatedEmployees?: number | null;
-  listings: Pick<JobListing, "title" | "location">[];
-  geoSettings: typeof pipelineSettings.$inferSelect;
+  listings?: Pick<JobListing, "title">[];
 }): IcpStatus {
   if (isStaffingAgency(input.companyName)) return "fail";
-
-  const inFocusListings = input.listings.filter((l) =>
-    jobLocationInFocus(l.location, input.geoSettings),
-  );
-  if (!inFocusListings.length) return "fail";
 
   const employees = input.estimatedEmployees;
   if (employees != null) {
