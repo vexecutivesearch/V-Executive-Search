@@ -27,7 +27,7 @@ export const JOB_BOARD_OPTIONS: JobBoardOption[] = [
     id: "google",
     label: "Google Jobs",
     description:
-      "Off by default — JobSpy Google returns empty HTML. Use SerpApi (SERPAPI_API_KEY) for a reliable Google Jobs feed.",
+      "Off for now — the free scraper is unreliable. SerpApi unlocks a stable Google Jobs feed when you’re ready.",
     defaultEnabled: false,
   },
   {
@@ -41,7 +41,7 @@ export const JOB_BOARD_OPTIONS: JobBoardOption[] = [
     id: "zip_recruiter",
     label: "ZipRecruiter",
     description:
-      "Known-degraded (Cloudflare 403). Keep on for loud board_failure; overlaps Indeed — do not chase.",
+      "Often blocked lately. Safe to leave on — gaps show as a warning and won’t empty the backlog. Overlaps Indeed.",
     defaultEnabled: true,
   },
   {
