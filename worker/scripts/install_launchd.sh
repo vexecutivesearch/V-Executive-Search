@@ -4,6 +4,11 @@ set -euo pipefail
 
 WORKER_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
+EXPAT_LIB="${HOMEBREW_PREFIX:-/opt/homebrew}/opt/expat/lib"
+DYLD_EXPAT=""
+if [[ -d "$EXPAT_LIB" ]]; then
+  DYLD_EXPAT="$EXPAT_LIB"
+fi
 
 PYTHON="$WORKER_ROOT/.venv/bin/python"
 if [[ ! -x "$PYTHON" ]]; then
@@ -65,6 +70,14 @@ EOF
         <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
         <key>TZ</key>
         <string>America/New_York</string>
+EOF
+  if [[ -n "$DYLD_EXPAT" ]]; then
+    cat >> "$plist_path" <<EOF
+        <key>DYLD_LIBRARY_PATH</key>
+        <string>${DYLD_EXPAT}</string>
+EOF
+  fi
+  cat >> "$plist_path" <<EOF
     </dict>
 </dict>
 </plist>
@@ -110,6 +123,14 @@ write_interval_plist() {
         <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
         <key>TZ</key>
         <string>America/New_York</string>
+EOF
+  if [[ -n "$DYLD_EXPAT" ]]; then
+    cat >> "$plist_path" <<EOF
+        <key>DYLD_LIBRARY_PATH</key>
+        <string>${DYLD_EXPAT}</string>
+EOF
+  fi
+  cat >> "$plist_path" <<EOF
     </dict>
 </dict>
 </plist>
@@ -118,7 +139,7 @@ EOF
   echo "Wrote $plist_path"
 }
 
-# Daily pipeline (America/New_York) — scrape at 6 AM and 6 PM as documented.
+# Daily pipeline (America/New_York)
 write_calendar_plist "com.vexecsearch.scrape" \
   "scripts/run_daily.py --scrape-only" \
   6 0 \

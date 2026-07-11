@@ -315,6 +315,8 @@ def run_pipeline(
     include_existing: bool = False,
     scrape_only: bool = False,
     enrich_only: bool = False,
+    run_date_override: date | None = None,
+    run_slot_override: str | None = None,
 ) -> PipelineResult:
     with prevent_sleep():
         return _run_pipeline_impl(
@@ -327,6 +329,8 @@ def run_pipeline(
             include_existing=include_existing,
             scrape_only=scrape_only,
             enrich_only=enrich_only,
+            run_date_override=run_date_override,
+            run_slot_override=run_slot_override,
         )
 
 
@@ -341,9 +345,11 @@ def _run_pipeline_impl(
     include_existing: bool = False,
     scrape_only: bool = False,
     enrich_only: bool = False,
+    run_date_override: date | None = None,
+    run_slot_override: str | None = None,
 ) -> PipelineResult:
-    run_date = business_list_date()
-    run_slot = business_run_slot()
+    run_date = run_date_override or business_list_date()
+    run_slot = run_slot_override or business_run_slot()
     config = load_config(config_path)
     enrichment_cfg = config.get("enrichment", {})
 

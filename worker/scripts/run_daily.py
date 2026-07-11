@@ -165,6 +165,18 @@ def main() -> int:
         action="store_true",
         help="Archive stale job listings",
     )
+    parser.add_argument(
+        "--run-date",
+        type=str,
+        default=None,
+        help="Override list run date (YYYY-MM-DD) for CRM ingest",
+    )
+    parser.add_argument(
+        "--run-slot",
+        choices=("am", "pm"),
+        default=None,
+        help="Override run slot (am=6 AM scrape, pm=6 PM scrape)",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -172,7 +184,8 @@ def main() -> int:
 
     from datetime import date
 
-    run_date_str = date.today().isoformat()
+    run_date_override = date.fromisoformat(args.run_date) if args.run_date else None
+    run_date_str = (run_date_override or date.today()).isoformat()
     mode_suffix = ""
     if args.scrape_only:
         mode_suffix = "scrape"
@@ -278,6 +291,8 @@ def main() -> int:
                 include_existing=args.include_existing,
                 scrape_only=args.scrape_only,
                 enrich_only=args.enrich_only,
+                run_date_override=run_date_override,
+                run_slot_override=args.run_slot,
             )
         except Exception as exc:
             logger.exception("Pipeline crashed: %s", exc)
