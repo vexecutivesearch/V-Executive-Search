@@ -8,6 +8,7 @@ from typing import Any
 import requests
 
 from src.report_format import format_call_sheet_card, has_contact_data
+from src.config_loader import parse_email_recipients
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,11 @@ def send_daily_report(
         logger.warning("RESEND_API_KEY not set — skipping daily email report")
         return False
 
+    recipients = parse_email_recipients(to_email)
+    if not recipients:
+        logger.warning("No valid report recipients in %r", to_email)
+        return False
+
     if crm_data:
         summary = {
             **result_summary,
@@ -197,7 +203,7 @@ def send_daily_report(
 
     payload = {
         "from": from_email,
-        "to": [to_email],
+        "to": recipients,
         "subject": f"Call Sheet — {geo_label} — {run_date}",
         "html": html_body,
     }
@@ -229,7 +235,11 @@ def send_daily_report(
                 timeout=30,
             )
         resp.raise_for_status()
-        logger.info("Daily call sheet emailed to %s (%d leads)", to_email, len(leads))
+        logger.info(
+            "Daily call sheet emailed to %s (%d leads)",
+            ", ".join(recipients),
+            len(leads),
+        )
         return True
     except requests.RequestException as exc:
         logger.error("Failed to send daily report: %s", exc)

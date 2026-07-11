@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,14 @@ from src.crm_config import fetch_pipeline_config
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "searches.yaml"
+
+
+def parse_email_recipients(value: str | None) -> list[str]:
+    """Split comma/semicolon-separated addresses for Resend ``to`` arrays."""
+    if not value or not str(value).strip():
+        return []
+    parts = re.split(r"[,;]", str(value))
+    return [part.strip() for part in parts if part.strip() and "@" in part]
 
 
 def load_config(config_path: Path | None = None) -> dict[str, Any]:
