@@ -172,7 +172,13 @@ export async function getDailyCallSheet(): Promise<DailyCallSheet> {
     companies_enriched: run?.companiesEnriched ?? leads.length,
     credits_used: run?.creditsUsed ?? 0,
     leads,
-    backlog_leads: await getFilteredBacklogEmailLeads(),
+    backlog_leads:
+      leads.length > 0
+        ? await getFilteredBacklogEmailLeads()
+        : await getFilteredBacklogEmailLeads({
+            includeBacklogSection: true,
+            backlogLeadLimit: 10,
+          }),
   };
 }
 

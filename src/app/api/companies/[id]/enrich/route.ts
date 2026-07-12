@@ -3,7 +3,7 @@ import { revalidatePath } from "next/cache";
 import { NextRequest, NextResponse } from "next/server";
 import { enrichCompanyContacts, refreshCompanyContactsFromApollo, apolloWebhookConfigured } from "@/lib/apollo-enrich";
 import { isContactOutCreditsAvailable } from "@/lib/contactout-credits";
-import { resolveCompanyDomain } from "@/lib/domain-resolver";
+import { resolveCompanyOrg } from "@/lib/domain-resolver";
 import { syncContactPhoneFields, contactPhonesForDisplay } from "@/lib/contact-phones";
 import { refreshCompanyContactsFromContactOut } from "@/lib/refresh-company-contacts";
 import { db } from "@/lib/db";
@@ -50,34 +50,6 @@ export async function POST(
   let domain = company.domain;
   let domainConfidence = company.domainConfidence;
 
-  if (!domain) {
-    const resolved = await resolveCompanyDomain(company.name, apiKey);
-    domain = resolved.domain;
-    domainConfidence = resolved.confidence;
-    if (domain) {
-      await db
-        .update(companies)
-        .set({
-          domain,
-          domainConfidence,
-          updatedAt: new Date(),
-        })
-        .where(eq(companies.id, id));
-    }
-  }
-
-  if (!domain) {
-    return NextResponse.json(
-      { error: `Could not resolve a domain for "${company.name}"` },
-      { status: 422 },
-    );
-  }
-
-  const listings = await db
-    .select({ location: jobListings.location })
-    .from(jobListings)
-    .where(eq(jobListings.companyId, id));
-
   const existingContactRows = await db
     .select()
     .from(contacts)
@@ -87,20 +59,33 @@ export async function POST(
     (c) => c.sourceProvider === "linkedin_poster" && c.linkedinUrl,
   );
 
-  const existingApolloIds = new Set(
-    existingContactRows.map((c) => c.apolloId).filter(Boolean) as string[],
-  );
-
-  const jobLocations = listings
-    .map((l) => l.location)
-    .filter((l): l is string => Boolean(l));
-
-  const sampleLinkedIn =
-    existingContactRows.find((c) => c.linkedinUrl)?.linkedinUrl ?? null;
-
-  const contactOutAvailable = contactOutKey
-    ? await isContactOutCreditsAvailable(contactOutKey, sampleLinkedIn)
-    : false;
+  // Upgrade missing or guessed domains via Apollo org search before people lookup.
+  if (!domain || domainConfidence === "low") {
+    const resolved = await resolveCompanyOrg(company.name, apiKey);
+    const patch: Partial<typeof companies.$inferInsert> = {};
+    if (
+      resolved.domain &&
+      (!domain ||
+        (domainConfidence === "low" && resolved.confidence === "high"))
+    ) {
+      domain = resolved.domain;
+      domainConfidence = resolved.confidence;
+      patch.domain = domain;
+      patch.domainConfidence = domainConfidence;
+    }
+    if (resolved.industry && !company.industry?.trim()) {
+      patch.industry = resolved.industry;
+    }
+    if (resolved.estimatedEmployees != null && company.estimatedEmployees == null) {
+      patch.estimatedEmployees = resolved.estimatedEmployees;
+    }
+    if (Object.keys(patch).length) {
+      await db
+        .update(companies)
+        .set({ ...patch, updatedAt: new Date() })
+        .where(eq(companies.id, id));
+    }
+  }
 
   if (!domain) {
     if (posterContacts.length === 0 || !contactOutKey) {
@@ -113,6 +98,13 @@ export async function POST(
         { status: posterContacts.length ? 503 : 422 },
       );
     }
+
+    const contactOutAvailable = contactOutKey
+      ? await isContactOutCreditsAvailable(
+          contactOutKey,
+          posterContacts.find((c) => c.linkedinUrl)?.linkedinUrl ?? null,
+        )
+      : false;
 
     const refresh = await refreshCompanyContactsFromContactOut(id, contactOutKey, {
       contactOutAvailable,
@@ -154,6 +146,26 @@ export async function POST(
           : `ContactOut checked ${refresh.checked} job poster(s) — no new personal data`,
     });
   }
+
+  const listings = await db
+    .select({ location: jobListings.location })
+    .from(jobListings)
+    .where(eq(jobListings.companyId, id));
+
+  const existingApolloIds = new Set(
+    existingContactRows.map((c) => c.apolloId).filter(Boolean) as string[],
+  );
+
+  const jobLocations = listings
+    .map((l) => l.location)
+    .filter((l): l is string => Boolean(l));
+
+  const sampleLinkedIn =
+    existingContactRows.find((c) => c.linkedinUrl)?.linkedinUrl ?? null;
+
+  const contactOutAvailable = contactOutKey
+    ? await isContactOutCreditsAvailable(contactOutKey, sampleLinkedIn)
+    : false;
 
   let contactsAdded = 0;
   try {
@@ -297,13 +309,17 @@ export async function POST(
   }
 
   let message: string | undefined;
-  if (
-    contactsAdded === 0 &&
+    if (contactsAdded === 0 &&
     personalUpdated === 0 &&
     apolloPhonesAdded === 0 &&
     apolloRefreshed === 0
   ) {
     const parts = [`${existingCount} Apollo contact${existingCount === 1 ? "" : "s"} on file`];
+    if (domainConfidence === "low") {
+      parts.push(
+        "domain is unverified — Apollo may not have HR contacts for this company",
+      );
+    }
     if (apolloPhonesRequested > 0) {
       if (apolloWebhookConfigured()) {
         parts.push("waiting for Apollo phone webhook");

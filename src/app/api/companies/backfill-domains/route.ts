@@ -47,10 +47,14 @@ export async function POST(request: NextRequest) {
             backfillIndustry
               ? or(
                   isNull(companies.domain),
+                  eq(companies.domainConfidence, "low"),
                   isNull(companies.industry),
                   sql`trim(${companies.industry}) = ''`,
                 )
-              : and(eq(companies.status, "new"), isNull(companies.domain)),
+              : or(
+                  and(eq(companies.status, "new"), isNull(companies.domain)),
+                  eq(companies.domainConfidence, "low"),
+                ),
           ),
         )
         .limit(limit);
@@ -65,7 +69,11 @@ export async function POST(request: NextRequest) {
     const lookup = await resolveCompanyOrg(row.name, apiKey);
     const patch: Partial<typeof companies.$inferInsert> = {};
 
-    if (!row.domain && lookup.domain) {
+    if (
+      lookup.domain &&
+      (!row.domain ||
+        (row.domainConfidence === "low" && lookup.confidence === "high"))
+    ) {
       patch.domain = lookup.domain;
       patch.domainConfidence = lookup.confidence;
     }

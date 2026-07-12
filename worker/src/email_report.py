@@ -142,10 +142,14 @@ def send_daily_report(
     funnel = html.escape(_funnel_header(summary, leads))
 
     if not leads:
+        scraped = summary.get("listings_scraped", 0)
+        icp = summary.get("icp_match_count", 0)
         body_leads = (
             '<p style="font-size:15px;color:#4b5563;margin:24px 0">'
-            "No hot leads today — nothing above your enrichment threshold. "
-            "Check the backlog in the CRM.</p>"
+            f"No enriched call sheet today — scraped {scraped} listings, "
+            f"{icp} ICP matches in backlog. "
+            "Run <strong>Enrich contacts</strong> on /today to build tomorrow's hot leads."
+            "</p>"
         )
     else:
         body_leads = "".join(
