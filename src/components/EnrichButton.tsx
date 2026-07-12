@@ -52,7 +52,7 @@ function buildSummary(data: EnrichResponse): string {
   if (parts.length) return parts.join(" · ");
   if (data.message) return data.message;
   if ((data.existing_contacts ?? 0) > 0) {
-    return `${data.existing_contacts} Apollo contact${data.existing_contacts === 1 ? "" : "s"} on file`;
+    return `${data.existing_contacts} contact${data.existing_contacts === 1 ? "" : "s"} on file`;
   }
   return "Up to date — no new contacts or personal data";
 }

@@ -3,6 +3,7 @@ import {
   CONTACTS_PER_COMPANY,
   ENRICH_PHONE,
   FALLBACK_TITLES,
+  FALLBACK_SENIORITIES,
   TARGET_SENIORITIES,
   TARGET_TITLES,
 } from "@/lib/enrichment-config";
@@ -124,21 +125,54 @@ function personSortKey(
   return [locationRank, t, s, title];
 }
 
+async function searchPeopleByCompanyName(
+  apiKey: string,
+  companyName: string,
+  perPage: number,
+  personLocations?: string[],
+  personTitles: string[] = TARGET_TITLES,
+  personSeniorities: string[] = TARGET_SENIORITIES,
+): Promise<Record<string, unknown>[]> {
+  const payload: Record<string, unknown> = {
+    q_organization_name: companyName,
+    person_titles: personTitles,
+    include_similar_titles: true,
+    page: 1,
+    per_page: perPage,
+  };
+  if (personSeniorities.length) {
+    payload.person_seniorities = personSeniorities;
+  }
+  if (personLocations?.length) payload.person_locations = personLocations;
+
+  const resp = await fetch(`${APOLLO_BASE}/mixed_people/api_search`, {
+    method: "POST",
+    headers: apolloHeaders(apiKey),
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) return [];
+  const data = (await resp.json()) as { people?: Record<string, unknown>[] };
+  return data.people ?? [];
+}
+
 async function searchPeople(
   apiKey: string,
   domain: string,
   perPage: number,
   personLocations?: string[],
   personTitles: string[] = TARGET_TITLES,
+  personSeniorities: string[] = TARGET_SENIORITIES,
 ): Promise<Record<string, unknown>[]> {
   const payload: Record<string, unknown> = {
     q_organization_domains_list: [domain],
     person_titles: personTitles,
     include_similar_titles: true,
-    person_seniorities: TARGET_SENIORITIES,
     page: 1,
     per_page: perPage,
   };
+  if (personSeniorities.length) {
+    payload.person_seniorities = personSeniorities;
+  }
   if (personLocations?.length) payload.person_locations = personLocations;
 
   const resp = await fetch(`${APOLLO_BASE}/mixed_people/api_search`, {
@@ -197,6 +231,7 @@ function mergePeople(
 export async function enrichCompanyContacts(options: {
   apiKey: string;
   domain: string;
+  companyName?: string;
   jobLocations: string[];
   contactsPerCompany?: number;
   existingApolloIds?: Set<string>;
@@ -206,6 +241,7 @@ export async function enrichCompanyContacts(options: {
   const {
     apiKey,
     domain,
+    companyName,
     jobLocations,
     contactsPerCompany = CONTACTS_PER_COMPANY,
     existingApolloIds = new Set(),
@@ -240,7 +276,14 @@ export async function enrichCompanyContacts(options: {
 
   if (people.length === 0) {
     const fallbackLocal = apolloLocations.length
-      ? await searchPeople(apiKey, domain, perPage, apolloLocations, FALLBACK_TITLES)
+      ? await searchPeople(
+          apiKey,
+          domain,
+          perPage,
+          apolloLocations,
+          FALLBACK_TITLES,
+          FALLBACK_SENIORITIES,
+        )
       : [];
     const fallbackBroad = await searchPeople(
       apiKey,
@@ -248,8 +291,51 @@ export async function enrichCompanyContacts(options: {
       perPage,
       undefined,
       FALLBACK_TITLES,
+      FALLBACK_SENIORITIES,
     );
     people = mergePeople(fallbackLocal, fallbackBroad);
+  }
+
+  if (people.length === 0 && companyName?.trim()) {
+    const nameLocal = apolloLocations.length
+      ? await searchPeopleByCompanyName(
+          apiKey,
+          companyName,
+          perPage,
+          apolloLocations,
+          personTitles,
+        )
+      : [];
+    const nameBroad = await searchPeopleByCompanyName(
+      apiKey,
+      companyName,
+      perPage,
+      undefined,
+      personTitles,
+    );
+    let namePeople = mergePeople(nameLocal, nameBroad);
+    if (namePeople.length === 0) {
+      const nameFallbackLocal = apolloLocations.length
+        ? await searchPeopleByCompanyName(
+            apiKey,
+            companyName,
+            perPage,
+            apolloLocations,
+            FALLBACK_TITLES,
+            FALLBACK_SENIORITIES,
+          )
+        : [];
+      const nameFallbackBroad = await searchPeopleByCompanyName(
+        apiKey,
+        companyName,
+        perPage,
+        undefined,
+        FALLBACK_TITLES,
+        FALLBACK_SENIORITIES,
+      );
+      namePeople = mergePeople(nameFallbackLocal, nameFallbackBroad);
+    }
+    people = namePeople;
   }
 
   people.sort((a, b) => {

@@ -13,6 +13,17 @@ export const TARGET_TITLES = [
 
 export const TARGET_SENIORITIES = ["c_suite", "vp", "head", "director"];
 
+/** Broader seniority for SMB owner/GM fallback when HR search is empty. */
+export const FALLBACK_SENIORITIES = [
+  "c_suite",
+  "owner",
+  "founder",
+  "vp",
+  "head",
+  "director",
+  "manager",
+];
+
 /** When HR titles return nothing (typical for SMBs), try these decision-makers. */
 export const FALLBACK_TITLES = [
   "Owner",

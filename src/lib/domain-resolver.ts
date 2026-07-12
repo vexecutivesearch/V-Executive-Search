@@ -17,7 +17,7 @@ function apolloHeaders(apiKey: string): HeadersInit {
   };
 }
 
-function guessDomain(companyName: string): string | null {
+export function guessDomain(companyName: string): string | null {
   const cleaned = companyName
     .toLowerCase()
     .replace(/[^\w\s]/g, " ")
@@ -96,7 +96,16 @@ export async function resolveCompanyOrg(
     const org = data.organizations?.[0];
     if (org) {
       const parsed = parseApolloOrg(org);
-      if (parsed.domain || parsed.industry) return parsed;
+      if (parsed.domain) return parsed;
+      const guess = guessDomain(companyName);
+      if (parsed.industry || parsed.estimatedEmployees != null || guess) {
+        return {
+          domain: guess,
+          confidence: "low",
+          industry: parsed.industry,
+          estimatedEmployees: parsed.estimatedEmployees,
+        };
+      }
     }
   } catch {
     // fall through

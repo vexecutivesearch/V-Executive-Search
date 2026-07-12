@@ -13,7 +13,8 @@ import { businessListDate } from "@/lib/timezone";
 import { getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
 import { parseJobLocation } from "@/lib/location-match";
 import { contactIsCallable } from "@/lib/lead-score";
-import { getFilteredBacklogEmailLeads } from "@/lib/backlog-email";
+import { compareContactsForOutreach } from "@/lib/contact-title-priority";
+import { getFilteredBacklogEmailLeads, getTopRankedJobPosts } from "@/lib/backlog-email";
 import type { Contact } from "@/lib/db/schema";
 
 export type DailyReportPhone = SourcedPhone & {
@@ -45,6 +46,8 @@ export type DailyCallSheet = {
   companies_enriched: number;
   credits_used: number;
   leads: CallSheetLead[];
+  /** Top ranked job posts — always included, enriched or not. */
+  top_job_posts: import("@/lib/backlog-email").BacklogEmailLead[];
   backlog_leads: import("@/lib/backlog-email").BacklogEmailLead[];
 };
 
@@ -68,9 +71,8 @@ function resolveEmails(contact: {
 
 function pickBestContact(contacts: Contact[]): Contact | undefined {
   return [...contacts].sort((a, b) => {
-    if (a.locationMatched !== b.locationMatched) {
-      return a.locationMatched ? -1 : 1;
-    }
+    const titleCmp = compareContactsForOutreach(a, b);
+    if (titleCmp !== 0) return titleCmp;
     const aCallable = contactIsCallable(a);
     const bCallable = contactIsCallable(b);
     if (aCallable !== bCallable) return aCallable ? -1 : 1;
@@ -172,6 +174,7 @@ export async function getDailyCallSheet(): Promise<DailyCallSheet> {
     companies_enriched: run?.companiesEnriched ?? leads.length,
     credits_used: run?.creditsUsed ?? 0,
     leads,
+    top_job_posts: await getTopRankedJobPosts(5),
     backlog_leads:
       leads.length > 0
         ? await getFilteredBacklogEmailLeads()

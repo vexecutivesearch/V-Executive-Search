@@ -3,8 +3,8 @@ import { revalidatePath } from "next/cache";
 import { NextRequest, NextResponse } from "next/server";
 import { enrichCompanyContacts, refreshCompanyContactsFromApollo, apolloWebhookConfigured } from "@/lib/apollo-enrich";
 import { isContactOutCreditsAvailable } from "@/lib/contactout-credits";
-import { searchContactOutByDomain } from "@/lib/contactout-domain-search";
-import { resolveCompanyOrg } from "@/lib/domain-resolver";
+import { searchContactOutByDomain, searchContactOutByCompanyName } from "@/lib/contactout-domain-search";
+import { guessDomain, resolveCompanyOrg } from "@/lib/domain-resolver";
 import { syncContactPhoneFields, contactPhonesForDisplay } from "@/lib/contact-phones";
 import { refreshCompanyContactsFromContactOut } from "@/lib/refresh-company-contacts";
 import { db } from "@/lib/db";
@@ -89,12 +89,28 @@ export async function POST(
   }
 
   if (!domain) {
+    const guessed = guessDomain(company.name);
+    if (guessed) {
+      domain = guessed;
+      domainConfidence = "low";
+      await db
+        .update(companies)
+        .set({
+          domain,
+          domainConfidence: "low",
+          updatedAt: new Date(),
+        })
+        .where(eq(companies.id, id));
+    }
+  }
+
+  if (!domain) {
     if (posterContacts.length === 0 || !contactOutKey) {
       return NextResponse.json(
         {
           error: posterContacts.length
             ? "CONTACTOUT_API_KEY is not configured — needed to enrich LinkedIn job posters without a company domain."
-            : `Could not resolve a domain for "${company.name}"`,
+            : `Could not resolve a domain for "${company.name}" — try adding a domain on the company record.`,
         },
         { status: posterContacts.length ? 503 : 422 },
       );
@@ -173,6 +189,7 @@ export async function POST(
     const enriched = await enrichCompanyContacts({
       apiKey,
       domain,
+      companyName: company.name,
       jobLocations,
       existingApolloIds,
       contactOutApiKey: contactOutKey,
@@ -205,8 +222,18 @@ export async function POST(
     return NextResponse.json({ error: message }, { status: 502 });
   }
 
-  if (contactsAdded === 0 && contactOutKey && contactOutAvailable && domain) {
-    const coPeople = await searchContactOutByDomain(contactOutKey, domain, 3);
+  if (contactsAdded === 0 && contactOutKey && contactOutAvailable) {
+    let coPeople = domain
+      ? await searchContactOutByDomain(contactOutKey, domain, 3)
+      : [];
+    if (coPeople.length === 0) {
+      coPeople = await searchContactOutByCompanyName(
+        contactOutKey,
+        company.name,
+        3,
+        domain,
+      );
+    }
     const existingLinkedIn = new Set(
       existingContactRows.map((c) => c.linkedinUrl).filter(Boolean),
     );

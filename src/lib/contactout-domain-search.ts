@@ -2,6 +2,11 @@ import {
   extractContactOutPhones,
   type SourcedPhone,
 } from "@/lib/contact-phones";
+import {
+  contactTitlePriority,
+  emailMatchesCompanyDomain,
+  isExcludedContactTitle,
+} from "@/lib/contact-title-priority";
 import { isPersonalEmail } from "@/lib/phone-utils";
 import { isContactOutSampleResponse } from "@/lib/contactout-samples";
 
@@ -18,28 +23,126 @@ export type ContactOutDomainPerson = {
   phones: SourcedPhone[];
 };
 
-const TITLE_RANK: Array<[string, number]> = [
-  ["owner", 0],
-  ["founder", 1],
-  ["president", 2],
-  ["ceo", 3],
-  ["chief", 4],
-  ["general manager", 5],
-  ["office manager", 6],
-  ["practice manager", 7],
-  ["hr ", 8],
-  ["human resources", 8],
-  ["director", 9],
-  ["manager", 10],
-  ["supervisor", 11],
-];
+function profileSortKey(
+  person: ContactOutDomainPerson,
+  domain: string,
+): [number, number, number] {
+  const title = contactTitlePriority(person.title);
+  const domainEmail =
+    emailMatchesCompanyDomain(person.workEmail, domain) ||
+    emailMatchesCompanyDomain(person.personalEmail, domain)
+      ? 0
+      : 1;
+  const hasChannel =
+    person.workEmail || person.personalEmail || person.phone ? 0 : 1;
+  return [title, domainEmail, hasChannel];
+}
 
-function titleRank(title: string): number {
-  const lower = title.toLowerCase();
-  for (const [keyword, rank] of TITLE_RANK) {
-    if (lower.includes(keyword)) return rank;
+function hasCredibleCompanyAffiliation(
+  person: ContactOutDomainPerson,
+  domain: string | null,
+): boolean {
+  if (!domain) {
+    return contactTitlePriority(person.title) <= 30;
   }
-  return 50;
+  if (
+    emailMatchesCompanyDomain(person.workEmail, domain) ||
+    emailMatchesCompanyDomain(person.personalEmail, domain)
+  ) {
+    return true;
+  }
+  if (
+    person.workEmail &&
+    !emailMatchesCompanyDomain(person.workEmail, domain) &&
+    contactTitlePriority(person.title) > 22
+  ) {
+    return false;
+  }
+  return contactTitlePriority(person.title) <= 30;
+}
+
+async function searchContactOutPeople(
+  apiKey: string,
+  body: Record<string, unknown>,
+  domainForSort: string | null,
+  limit: number,
+): Promise<ContactOutDomainPerson[]> {
+  const resp = await fetch(CONTACTOUT_SEARCH_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      token: apiKey,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok) return [];
+  const data = (await resp.json()) as Record<string, unknown>;
+  if (isContactOutSampleResponse(data)) return [];
+
+  const profiles = (data.profiles ?? {}) as Record<string, Record<string, unknown>>;
+  const parsed: ContactOutDomainPerson[] = [];
+
+  for (const [linkedinUrl, profile] of Object.entries(profiles)) {
+    const person = parseProfile(linkedinUrl, profile);
+    if (person && hasCredibleCompanyAffiliation(person, domainForSort)) {
+      parsed.push(person);
+    }
+  }
+
+  const sortDomain = domainForSort ?? "";
+  return parsed
+    .sort((a, b) => {
+      const ka = profileSortKey(a, sortDomain);
+      const kb = profileSortKey(b, sortDomain);
+      return ka[0] - kb[0] || ka[1] - kb[1] || ka[2] - kb[2];
+    })
+    .slice(0, limit);
+}
+
+/** Domain search — used when Apollo HR title search returns no contacts. */
+export async function searchContactOutByDomain(
+  apiKey: string,
+  domain: string,
+  limit = 3,
+): Promise<ContactOutDomainPerson[]> {
+  const normalized = domain.replace(/^https?:\/\//, "").replace(/^www\./, "");
+  return searchContactOutPeople(
+    apiKey,
+    {
+      page: 1,
+      page_size: Math.max(limit * 8, 25),
+      domain: [normalized],
+      data_types: ["personal_email", "work_email", "phone"],
+      reveal_info: true,
+      current_company_only: true,
+    },
+    normalized,
+    limit,
+  );
+}
+
+/** Company-name search when domain is missing or guessed. */
+export async function searchContactOutByCompanyName(
+  apiKey: string,
+  companyName: string,
+  limit = 3,
+  domainForSort: string | null = null,
+): Promise<ContactOutDomainPerson[]> {
+  return searchContactOutPeople(
+    apiKey,
+    {
+      page: 1,
+      page_size: Math.max(limit * 8, 25),
+      company: [companyName.trim()],
+      data_types: ["personal_email", "work_email", "phone"],
+      reveal_info: true,
+      current_company_only: true,
+    },
+    domainForSort,
+    limit,
+  );
 }
 
 function parseProfile(
@@ -48,7 +151,7 @@ function parseProfile(
 ): ContactOutDomainPerson | null {
   const name = String(profile.full_name ?? "").trim();
   const title = String(profile.title ?? profile.headline ?? "").trim();
-  if (!name) return null;
+  if (!name || isExcludedContactTitle(title)) return null;
 
   const contactInfo = (profile.contact_info ?? {}) as Record<string, unknown>;
   const workEmails = (contactInfo.work_emails as string[] | undefined) ?? [];
@@ -87,44 +190,4 @@ function parseProfile(
     personalPhone,
     phones,
   };
-}
-
-/** Domain search — used when Apollo HR title search returns no contacts. */
-export async function searchContactOutByDomain(
-  apiKey: string,
-  domain: string,
-  limit = 3,
-): Promise<ContactOutDomainPerson[]> {
-  const resp = await fetch(CONTACTOUT_SEARCH_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      token: apiKey,
-    },
-    body: JSON.stringify({
-      page: 1,
-      page_size: Math.max(limit * 3, 10),
-      domain: [domain.replace(/^https?:\/\//, "").replace(/^www\./, "")],
-      data_types: ["personal_email", "work_email", "phone"],
-      reveal_info: true,
-      current_company_only: true,
-    }),
-  });
-
-  if (!resp.ok) return [];
-  const data = (await resp.json()) as Record<string, unknown>;
-  if (isContactOutSampleResponse(data)) return [];
-
-  const profiles = (data.profiles ?? {}) as Record<string, Record<string, unknown>>;
-  const parsed: ContactOutDomainPerson[] = [];
-
-  for (const [linkedinUrl, profile] of Object.entries(profiles)) {
-    const person = parseProfile(linkedinUrl, profile);
-    if (person) parsed.push(person);
-  }
-
-  return parsed
-    .sort((a, b) => titleRank(a.title) - titleRank(b.title))
-    .slice(0, limit);
 }

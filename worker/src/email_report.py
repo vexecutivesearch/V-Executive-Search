@@ -147,14 +147,40 @@ def send_daily_report(
         body_leads = (
             '<p style="font-size:15px;color:#4b5563;margin:24px 0">'
             f"No enriched call sheet today — scraped {scraped} listings, "
-            f"{icp} ICP matches in backlog. "
-            "Run <strong>Enrich contacts</strong> on /today to build tomorrow's hot leads."
+            f"{icp} ICP matches. Top job posts are below — hit "
+            "<strong>Enrich contacts</strong> in the CRM to unlock phones and emails."
             "</p>"
         )
     else:
         body_leads = "".join(
             format_call_sheet_card(lead, CRM_BASE_URL) for lead in leads
         )
+
+    top_job_posts = (crm_data or {}).get("top_job_posts") or []
+    if top_job_posts:
+        top_cards = []
+        for job in top_job_posts:
+            company = html.escape(str(job.get("company", "")))
+            title = html.escape(str(job.get("job_title") or "—"))
+            loc = html.escape(str(job.get("job_location") or ""))
+            ind = html.escape(str(job.get("industry") or ""))
+            sal = html.escape(str(job.get("salary_text") or ""))
+            rank = job.get("rank", "?")
+            score = job.get("score", 0)
+            meta = " · ".join(p for p in [ind, loc, sal] if p)
+            top_cards.append(
+                f'<div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin:8px 0">'
+                f'<strong>#{rank} {company}</strong> <span style="color:#6b7280">({score} pts)</span>'
+                f'<div style="font-size:13px;margin-top:4px">{title}</div>'
+                f'<div style="font-size:12px;color:#6b7280;margin-top:2px">{meta}</div>'
+                f"</div>"
+            )
+        body_top_jobs = (
+            '<h3 style="margin:28px 0 12px;font-size:16px">Top job posts today</h3>'
+            + "".join(top_cards)
+        )
+    else:
+        body_top_jobs = ""
 
     backlog_leads = (crm_data or {}).get("backlog_leads") or []
     if backlog_leads:
@@ -190,6 +216,7 @@ def send_daily_report(
       <p style="margin:0 0 4px;color:#6b7280;font-size:14px">Run date: {run_date}</p>
       <p style="margin:0 0 20px;font-size:14px;font-weight:600;color:#111827">{funnel}</p>
       {body_leads}
+      {body_top_jobs}
       {body_backlog}
       <p style="margin-top:28px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:13px">
         <a href="{CRM_BASE_URL}/today" style="color:#2563eb;font-weight:600">

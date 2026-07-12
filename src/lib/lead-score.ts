@@ -10,6 +10,7 @@ import { jobLocationInFocus } from "@/lib/geo-focus";
 import { signalScoreBonus } from "@/lib/hiring-signals";
 import { icpDeprioritizeScore } from "@/lib/icp-filter";
 import { isPersonalEmail } from "@/lib/phone-utils";
+import { compareContactsForOutreach } from "@/lib/contact-title-priority";
 
 export function contactIsCallable(contact: Contact): boolean {
   return Boolean(
@@ -107,9 +108,8 @@ export function scoreLead(company: CompanyCardData): LeadScoreBreakdown {
       : baseScore;
 
   const ranked = [...contacts].sort((a, b) => {
-    if (a.locationMatched !== b.locationMatched) {
-      return a.locationMatched ? -1 : 1;
-    }
+    const titleCmp = compareContactsForOutreach(a, b);
+    if (titleCmp !== 0) return titleCmp;
     const aCallable = contactIsCallable(a);
     const bCallable = contactIsCallable(b);
     if (aCallable !== bCallable) return aCallable ? -1 : 1;

@@ -1,4 +1,4 @@
-import { getBacklogCompanies } from "@/lib/queries";
+import { getBacklogCompanies, getTopRankedLeads } from "@/lib/queries";
 import {
   DEFAULT_EMAIL_REPORT_PREFERENCES,
   normalizeEmailReportPreferences,
@@ -20,6 +20,43 @@ export type BacklogEmailLead = {
   salary_text: string | null;
   search_name: string | null;
 };
+
+function companyToBacklogEmailLead(
+  company: Awaited<ReturnType<typeof getBacklogCompanies>>[number],
+  rank: number,
+): BacklogEmailLead {
+  const job = company.jobListings[0];
+  const salaryText =
+    job?.salaryText ??
+    (job && listingHasSalary(job)
+      ? listingSalaryMax(job) != null
+        ? `$${listingSalaryMax(job)!.toLocaleString()}+`
+        : null
+      : null);
+
+  return {
+    rank,
+    score: company.leadScore ?? 0,
+    company: company.name,
+    company_id: company.id,
+    industry: company.industry ?? null,
+    job_title: job?.title ?? null,
+    job_location:
+      (job?.location && parseJobLocation(job.location)?.label) ||
+      job?.location ||
+      null,
+    salary_text: salaryText,
+    search_name: job?.searchName ?? null,
+  };
+}
+
+/** Always-on top job posts for the daily email — enriched or not. */
+export async function getTopRankedJobPosts(limit = 5): Promise<BacklogEmailLead[]> {
+  const ranked = await getTopRankedLeads(limit);
+  return ranked.map((company, index) =>
+    companyToBacklogEmailLead(company, index + 1),
+  );
+}
 
 export async function getFilteredBacklogEmailLeads(
   prefs?: EmailReportPreferences,
@@ -44,28 +81,7 @@ export async function getFilteredBacklogEmailLeads(
     const job = company.jobListings[0];
     if (!job) continue;
     rank += 1;
-    const salaryText =
-      job.salaryText ??
-      (listingHasSalary(job)
-        ? listingSalaryMax(job) != null
-          ? `$${listingSalaryMax(job)!.toLocaleString()}+`
-          : null
-        : null);
-
-    leads.push({
-      rank,
-      score: company.leadScore ?? 0,
-      company: company.name,
-      company_id: company.id,
-      industry: company.industry ?? null,
-      job_title: job.title ?? null,
-      job_location:
-        (job.location && parseJobLocation(job.location)?.label) ||
-        job.location ||
-        null,
-      salary_text: salaryText,
-      search_name: job.searchName ?? null,
-    });
+    leads.push(companyToBacklogEmailLead(company, rank));
   }
 
   return leads;

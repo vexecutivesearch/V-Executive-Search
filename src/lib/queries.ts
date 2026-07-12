@@ -183,6 +183,42 @@ export async function getBacklogCompanies(
     .sort((a, b) => (b.leadScore ?? 0) - (a.leadScore ?? 0));
 }
 
+/** Top scored in-focus leads — enriched or not (daily email job preview). */
+export async function getTopRankedLeads(limit = 5): Promise<CompanyCardData[]> {
+  const geoSettings = await getGeoFocusSettings();
+
+  const companiesRows = await db
+    .select()
+    .from(companies)
+    .where(
+      and(
+        eq(companies.status, "new"),
+        or(
+          ne(companies.icpStatus, "fail"),
+          sql`EXISTS (
+            SELECT 1 FROM contacts AS ct
+            WHERE ct.company_id = ${companies.id}
+              AND ct.source_provider = 'linkedin_poster'
+          )`,
+        ),
+        not(ilike(companies.name, "(Listing)%")),
+      ),
+    )
+    .orderBy(desc(companies.leadScore), desc(companies.updatedAt))
+    .limit(150);
+
+  const enriched = await enrichCompanies(companiesRows, geoSettings);
+  return enriched
+    .filter(
+      (c) =>
+        !isStaffingAgency(c.name) &&
+        c.jobListings.length > 0 &&
+        c.jobListings.some((j) => jobLocationInFocus(j.location, geoSettings)),
+    )
+    .sort((a, b) => (b.leadScore ?? 0) - (a.leadScore ?? 0))
+    .slice(0, limit);
+}
+
 export async function getBacklogForDateRange(
   range: ListDateRange,
 ): Promise<CompanyCardData[]> {
