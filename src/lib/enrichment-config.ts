@@ -13,6 +13,19 @@ export const TARGET_TITLES = [
 
 export const TARGET_SENIORITIES = ["c_suite", "vp", "head", "director"];
 
+/** When HR titles return nothing (typical for SMBs), try these decision-makers. */
+export const FALLBACK_TITLES = [
+  "Owner",
+  "President",
+  "General Manager",
+  "Office Manager",
+  "Practice Manager",
+  "Managing Director",
+  "Founder",
+  "CEO",
+  "Operations Manager",
+];
+
 export const CONTACTS_PER_COMPANY = 3;
 
 export const ENRICH_PHONE = true;

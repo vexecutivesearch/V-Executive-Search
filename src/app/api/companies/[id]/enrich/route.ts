@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { NextRequest, NextResponse } from "next/server";
 import { enrichCompanyContacts, refreshCompanyContactsFromApollo, apolloWebhookConfigured } from "@/lib/apollo-enrich";
 import { isContactOutCreditsAvailable } from "@/lib/contactout-credits";
+import { searchContactOutByDomain } from "@/lib/contactout-domain-search";
 import { resolveCompanyOrg } from "@/lib/domain-resolver";
 import { syncContactPhoneFields, contactPhonesForDisplay } from "@/lib/contact-phones";
 import { refreshCompanyContactsFromContactOut } from "@/lib/refresh-company-contacts";
@@ -204,6 +205,43 @@ export async function POST(
     return NextResponse.json({ error: message }, { status: 502 });
   }
 
+  if (contactsAdded === 0 && contactOutKey && contactOutAvailable && domain) {
+    const coPeople = await searchContactOutByDomain(contactOutKey, domain, 3);
+    const existingLinkedIn = new Set(
+      existingContactRows.map((c) => c.linkedinUrl).filter(Boolean),
+    );
+    const existingEmails = new Set(
+      existingContactRows
+        .flatMap((c) => [c.email, c.workEmail, c.personalEmail])
+        .filter(Boolean)
+        .map((e) => e!.toLowerCase()),
+    );
+
+    for (const person of coPeople) {
+      if (person.linkedinUrl && existingLinkedIn.has(person.linkedinUrl)) continue;
+      const emails = [person.workEmail, person.personalEmail].filter(Boolean);
+      if (emails.some((e) => existingEmails.has(e!.toLowerCase()))) continue;
+
+      const email = person.workEmail ?? person.personalEmail ?? null;
+      await db.insert(contacts).values({
+        companyId: id,
+        name: person.name,
+        title: person.title || null,
+        email,
+        workEmail: person.workEmail,
+        personalEmail: person.personalEmail,
+        phone: person.phone,
+        personalPhone: person.personalPhone,
+        phones: person.phones,
+        linkedinUrl: person.linkedinUrl || null,
+        sourceProvider: "contactout",
+      });
+      contactsAdded += 1;
+      if (person.linkedinUrl) existingLinkedIn.add(person.linkedinUrl);
+      for (const e of emails) existingEmails.add(e!.toLowerCase());
+    }
+  }
+
   let personalUpdated = 0;
   let contactoutChecked = 0;
   let contactoutPhoneLocked = false;
@@ -314,7 +352,7 @@ export async function POST(
     apolloPhonesAdded === 0 &&
     apolloRefreshed === 0
   ) {
-    const parts = [`${existingCount} Apollo contact${existingCount === 1 ? "" : "s"} on file`];
+    const parts = [`${existingCount} contact${existingCount === 1 ? "" : "s"} on file`];
     if (domainConfidence === "low") {
       parts.push(
         "domain is unverified — Apollo may not have HR contacts for this company",

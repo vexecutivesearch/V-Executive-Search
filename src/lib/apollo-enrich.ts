@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import {
   CONTACTS_PER_COMPANY,
   ENRICH_PHONE,
+  FALLBACK_TITLES,
   TARGET_SENIORITIES,
   TARGET_TITLES,
 } from "@/lib/enrichment-config";
@@ -235,7 +236,23 @@ export async function enrichCompanyContacts(options: {
     undefined,
     personTitles,
   );
-  const people = mergePeople(localPeople, broadPeople).sort((a, b) => {
+  let people = mergePeople(localPeople, broadPeople);
+
+  if (people.length === 0) {
+    const fallbackLocal = apolloLocations.length
+      ? await searchPeople(apiKey, domain, perPage, apolloLocations, FALLBACK_TITLES)
+      : [];
+    const fallbackBroad = await searchPeople(
+      apiKey,
+      domain,
+      perPage,
+      undefined,
+      FALLBACK_TITLES,
+    );
+    people = mergePeople(fallbackLocal, fallbackBroad);
+  }
+
+  people.sort((a, b) => {
     const ka = personSortKey(a, parsedLocations);
     const kb = personSortKey(b, parsedLocations);
     return ka[0] - kb[0] || ka[1] - kb[1] || ka[2] - kb[2];
