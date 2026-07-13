@@ -219,6 +219,81 @@ export async function getTopRankedLeads(limit = 5): Promise<CompanyCardData[]> {
     .slice(0, limit);
 }
 
+/** Scraped companies + in-focus jobs active or first-seen in the list window (CSV export). */
+export async function getScrapedCompaniesForExport(
+  range: ListDateRange,
+): Promise<CompanyCardData[]> {
+  const geoSettings = await getGeoFocusSettings();
+  const { from, to } = range;
+
+  const rows = await db
+    .select()
+    .from(companies)
+    .where(
+      and(
+        not(ilike(companies.name, "(Listing)%")),
+        lte(companies.firstSeen, to),
+        or(
+          ne(companies.icpStatus, "fail"),
+          sql`EXISTS (
+            SELECT 1 FROM contacts AS ct
+            WHERE ct.company_id = ${companies.id}
+              AND ct.source_provider = 'linkedin_poster'
+          )`,
+        ),
+      ),
+    )
+    .orderBy(desc(companies.leadScore), desc(companies.updatedAt));
+
+  const enriched = await enrichCompanies(rows, geoSettings, {
+    asOfDate: range.snapshotDate,
+  });
+
+  return enriched
+    .filter((company) => {
+      if (isStaffingAgency(company.name)) return false;
+      const companyFirstSeenInRange =
+        company.firstSeen >= from && company.firstSeen <= to;
+      const inFocusJobs = company.jobListings.filter((listing) =>
+        jobLocationInFocus(listing.location, geoSettings),
+      );
+      if (!inFocusJobs.length) return false;
+
+      const jobSeenInRange = inFocusJobs.some((listing) => {
+        const lastSeen =
+          listing.lastSeenRunDate ?? etDateFromTimestamp(listing.lastSeenAt);
+        return lastSeen >= from && lastSeen <= to;
+      });
+      const jobActiveOnSnapshot = inFocusJobs.some((listing) =>
+        jobActiveOnDate(listing, range.snapshotDate),
+      );
+
+      if (range.isToday && range.mode === "single") {
+        return jobActiveOnSnapshot || companyFirstSeenInRange;
+      }
+      return companyFirstSeenInRange || jobSeenInRange;
+    })
+    .map((company) => {
+      const inFocusJobs = company.jobListings.filter((listing) =>
+        jobLocationInFocus(listing.location, geoSettings),
+      );
+      const companyFirstSeenInRange =
+        company.firstSeen >= from && company.firstSeen <= to;
+      const filteredJobs = inFocusJobs.filter((listing) => {
+        if (companyFirstSeenInRange) return true;
+        const lastSeen =
+          listing.lastSeenRunDate ?? etDateFromTimestamp(listing.lastSeenAt);
+        if (range.isToday && range.mode === "single") {
+          return jobActiveOnDate(listing, range.snapshotDate);
+        }
+        return lastSeen >= from && lastSeen <= to;
+      });
+      return { ...company, jobListings: filteredJobs };
+    })
+    .filter((company) => company.jobListings.length > 0)
+    .sort((a, b) => (b.leadScore ?? 0) - (a.leadScore ?? 0));
+}
+
 export async function getBacklogForDateRange(
   range: ListDateRange,
 ): Promise<CompanyCardData[]> {

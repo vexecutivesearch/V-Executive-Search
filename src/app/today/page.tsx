@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { TodayListView } from "@/components/TodayListView";
 import { TodayDatePicker } from "@/components/TodayDatePicker";
+import { ExportCsvButtons } from "@/components/ExportCsvButtons";
 import {
   countCallableCompanies,
   getBacklogForDateRange,
@@ -113,6 +114,7 @@ export default async function TodayPage({
             currentBusinessDate={currentBusinessDate}
           />
         </Suspense>
+        <ExportCsvButtons range={listRange} />
       </div>
 
       <div className="flex flex-wrap gap-2 mb-4">
