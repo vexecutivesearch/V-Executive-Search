@@ -114,10 +114,10 @@ export default async function TodayPage({
             currentBusinessDate={currentBusinessDate}
           />
         </Suspense>
-        <ExportCsvButtons range={listRange} />
       </div>
 
-      <div className="flex flex-wrap gap-2 mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div className="flex flex-wrap gap-2">
         <Link
           href={tabHref("call-sheet")}
           className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
@@ -138,6 +138,12 @@ export default async function TodayPage({
         >
           Backlog ({backlogCompanies.length})
         </Link>
+        </div>
+        <ExportCsvButtons
+          range={listRange}
+          backlogCount={backlogCompanies.length}
+          callSheetCount={callSheetCompanies.length}
+        />
       </div>
 
       {companies.length === 0 ? (

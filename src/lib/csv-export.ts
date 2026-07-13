@@ -10,8 +10,8 @@ import {
 } from "@/lib/contact-phones";
 import type { ListDateRange } from "@/lib/list-date-range";
 import {
+  getBacklogForDateRange,
   getCallSheetCompanies,
-  getScrapedCompaniesForExport,
 } from "@/lib/queries";
 
 export type ScrapeCsvRow = {
@@ -206,18 +206,18 @@ const CONTACT_HEADERS: (keyof ContactCsvRow)[] = [
   "location_matched",
 ];
 
-export async function buildScrapeCsv(range: ListDateRange): Promise<string> {
-  const companies = await getScrapedCompaniesForExport(range);
+export async function buildBacklogCsv(range: ListDateRange): Promise<string> {
+  const companies = await getBacklogForDateRange(range);
   return rowsToCsv(SCRAPE_HEADERS, companiesToScrapeRows(companies));
 }
 
-export async function buildContactsCsv(range: ListDateRange): Promise<string> {
+export async function buildCallSheetCsv(range: ListDateRange): Promise<string> {
   const companies = await getCallSheetCompanies(range);
   return rowsToCsv(CONTACT_HEADERS, companiesToContactRows(companies));
 }
 
 export function exportFilename(
-  kind: "scrape" | "contacts",
+  kind: "backlog" | "call-sheet",
   range: ListDateRange,
 ): string {
   const suffix =

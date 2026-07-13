@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  buildContactsCsv,
-  buildScrapeCsv,
+  buildBacklogCsv,
+  buildCallSheetCsv,
   exportFilename,
 } from "@/lib/csv-export";
 import { resolveListDateRange } from "@/lib/list-date-range";
@@ -9,13 +9,21 @@ import { resolveListDateRange } from "@/lib/list-date-range";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Download scrape list or enriched contacts for a date range as CSV. */
+type ExportType = "backlog" | "call-sheet";
+
+function parseExportType(raw: string | null): ExportType | null {
+  if (raw === "backlog" || raw === "scrape") return "backlog";
+  if (raw === "call-sheet" || raw === "contacts") return "call-sheet";
+  return null;
+}
+
+/** Download backlog or call sheet for a date range as CSV. */
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
-  const type = params.get("type");
-  if (type !== "scrape" && type !== "contacts") {
+  const type = parseExportType(params.get("type"));
+  if (!type) {
     return NextResponse.json(
-      { error: "Query param type must be scrape or contacts" },
+      { error: "Query param type must be backlog or call-sheet" },
       { status: 400 },
     );
   }
@@ -28,9 +36,9 @@ export async function GET(request: NextRequest) {
 
   try {
     const csv =
-      type === "scrape"
-        ? await buildScrapeCsv(range)
-        : await buildContactsCsv(range);
+      type === "backlog"
+        ? await buildBacklogCsv(range)
+        : await buildCallSheetCsv(range);
 
     return new NextResponse(csv, {
       status: 200,
