@@ -117,13 +117,18 @@ export function TodayListView({
 
       if (!term) return true;
 
-      const primaryJob = company.jobListings[0];
+      const listingText = company.jobListings
+        .map(
+          (j) =>
+            `${j.title ?? ""} ${j.location ?? ""} ${j.searchName ?? ""}`,
+        )
+        .join(" ");
       const haystack = [
         company.name,
         company.domain ?? "",
         company.reasonToCall ?? "",
-        primaryJob?.title ?? "",
-        primaryJob?.location ?? "",
+        company.industry ?? "",
+        listingText,
         ...company.contacts.map((c) => `${c.name} ${c.title ?? ""}`),
       ]
         .join(" ")

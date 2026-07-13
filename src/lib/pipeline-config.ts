@@ -10,8 +10,10 @@ import {
 import { backfillLinkedinDistanceDefaults } from "@/lib/search-profile-defaults";
 
 /**
- * Broad geo hiring signals for JobSpy — not contact titles.
- * Space term = location-first "all roles" pull; others fill common buckets.
+ * Broad geo hiring signals for JobSpy/SerpAPI — not contact titles.
+ * Space term = location-first "all roles" pull; named buckets pull top results
+ * for that query per city (SerpAPI ~30/page-cap). Niche roles like paralegal
+ * will NOT reliably appear in blank Market scan — they need their own profile.
  */
 const DEFAULT_SEARCHES = [
   {
@@ -67,6 +69,20 @@ const DEFAULT_SEARCHES = [
     name: "Sales",
     searchTerm: "sales",
     sortOrder: 7,
+    linkedinDistance: 25,
+    resultsWanted: 50,
+  },
+  {
+    name: "Paralegal",
+    searchTerm: "paralegal",
+    sortOrder: 8,
+    linkedinDistance: 25,
+    resultsWanted: 50,
+  },
+  {
+    name: "Attorney",
+    searchTerm: "attorney",
+    sortOrder: 9,
     linkedinDistance: 25,
     resultsWanted: 50,
   },
@@ -162,6 +178,30 @@ export async function migrateLegacyContactTitleSearches(): Promise<boolean> {
   return true;
 }
 
+/** Insert any DEFAULT_SEARCHES missing from DB (e.g. Paralegal / Attorney). */
+export async function backfillMissingDefaultSearchProfiles(): Promise<number> {
+  const existing = await db.select().from(searchProfiles);
+  const have = new Set(
+    existing.map((r) => r.searchTerm.trim().toLowerCase() || " "),
+  );
+  const missing = DEFAULT_SEARCHES.filter((s) => {
+    const key = s.searchTerm.trim().toLowerCase() || " ";
+    return !have.has(key);
+  });
+  if (!missing.length) return 0;
+  await db.insert(searchProfiles).values(
+    missing.map((s) => ({
+      name: s.name,
+      searchTerm: s.searchTerm,
+      isActive: true,
+      sortOrder: s.sortOrder,
+      linkedinDistance: s.linkedinDistance,
+      resultsWanted: s.resultsWanted,
+    })),
+  );
+  return missing.length;
+}
+
 export async function getOrCreateSettings() {
   let [settings] = await db.select().from(pipelineSettings).limit(1);
 
@@ -217,6 +257,7 @@ export async function getOrCreateSettings() {
     );
   } else {
     await migrateLegacyContactTitleSearches();
+    await backfillMissingDefaultSearchProfiles();
   }
 
   await dedupeSearchProfiles();
