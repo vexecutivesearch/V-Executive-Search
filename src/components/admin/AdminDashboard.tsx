@@ -563,6 +563,47 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
       </section>
 
       <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
+        <h2 className="font-semibold text-lg">Daily email — Hot Listings</h2>
+        <p className="text-sm text-gray-500">
+          On by default for 6 AM and 6 PM sends. Uses the same Hot Listings filter
+          as the Today tab (mid-size, role families, geo, exclusions).
+        </p>
+
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <input
+            type="checkbox"
+            checked={emailPrefs.includeHotListingsSection !== false}
+            onChange={(e) =>
+              setEmailPrefs((p) => ({
+                ...p,
+                includeHotListingsSection: e.target.checked,
+              }))
+            }
+          />
+          Include Hot Listings section in daily email
+        </label>
+
+        {emailPrefs.includeHotListingsSection !== false && (
+          <label className="block text-sm">
+            <span className="text-gray-500">Max hot listings in email</span>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={emailPrefs.hotListingsLimit ?? 15}
+              onChange={(e) =>
+                setEmailPrefs((p) => ({
+                  ...p,
+                  hotListingsLimit: parseInt(e.target.value, 10) || 15,
+                }))
+              }
+              className="mt-1 block w-28 text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900"
+            />
+          </label>
+        )}
+      </section>
+
+      <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Daily email — backlog section</h2>
         <p className="text-sm text-gray-500">
           Optional. When off, the daily email is call-sheet only (recommended until

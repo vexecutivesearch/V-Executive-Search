@@ -42,7 +42,10 @@ def _funnel_header(summary: dict[str, Any], leads: list[dict[str, Any]]) -> str:
     icp = summary.get("icp_match_count", 0)
     enriched = summary.get("companies_enriched", 0)
     credits = summary.get("credits_used", 0)
-    hot = sum(
+    hot_listings = summary.get("hot_listings_count")
+    if hot_listings is None and summary.get("hot_listings_included") is not False:
+        hot_listings = len(summary.get("hot_listings") or [])
+    reason_hot = sum(
         1
         for lead in leads
         if lead.get("reason_to_call") or lead.get("reasonToCall")
@@ -51,13 +54,17 @@ def _funnel_header(summary: dict[str, Any], leads: list[dict[str, Any]]) -> str:
         f"Scraped {scraped} → ICP match {icp} → Enriched today {enriched}"
         f" · Credits used {credits}"
     )
+    if hot_listings is not None:
+        base = f"{base} · Hot listings: {hot_listings}"
+    elif reason_hot:
+        base = f"{base} · {reason_hot} hot signals"
     if leads:
         top = leads[:3]
         names = ", ".join(
             f"#{lead.get('rank', '?')} {lead.get('company', '')}"
             for lead in top
         )
-        return f"{base} · {hot} hot · Call first: {names}"
+        return f"{base} · Call first: {names}"
     return base
 
 
@@ -132,6 +139,9 @@ def send_daily_report(
             "credits_used": crm_data.get(
                 "credits_used", result_summary.get("credits_used", 0)
             ),
+            "hot_listings": crm_data.get("hot_listings") or [],
+            "hot_listings_count": crm_data.get("hot_listings_count", 0),
+            "hot_listings_included": crm_data.get("hot_listings_included", True),
         }
     else:
         summary = result_summary
@@ -182,6 +192,66 @@ def send_daily_report(
     else:
         body_top_jobs = ""
 
+    # Hot Listings — default ON from CRM; never silently blank the section.
+    hot_included = (crm_data or {}).get("hot_listings_included", True)
+    if hot_included is False:
+        body_hot = ""
+    else:
+        hot_listings = (crm_data or {}).get("hot_listings") or []
+        hot_total = (crm_data or {}).get("hot_listings_count", len(hot_listings))
+        if hot_listings:
+            hot_cards = []
+            for item in hot_listings:
+                headline = html.escape(
+                    str(item.get("headline") or item.get("job_title") or "")
+                )
+                family = html.escape(str(item.get("role_family") or ""))
+                rank = item.get("rank", "?")
+                score = item.get("score", 0)
+                board = html.escape(str(item.get("board") or ""))
+                meta = " · ".join(p for p in [family, board, f"{score} pts"] if p)
+                hot_cards.append(
+                    f'<div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin:8px 0">'
+                    f'<div style="font-size:12px;color:#6b7280;margin-bottom:4px">'
+                    f"#{rank} · {meta}</div>"
+                    f'<div style="font-size:14px;line-height:1.4">{headline}</div>'
+                    f"</div>"
+                )
+            more = ""
+            if isinstance(hot_total, int) and hot_total > len(hot_listings):
+                more = (
+                    f'<p style="font-size:13px;margin:8px 0 0">'
+                    f'<a href="{CRM_BASE_URL}/today?tab=hot-listings" '
+                    f'style="color:#2563eb;font-weight:600">'
+                    f"See all {hot_total} hot listings in CRM →</a></p>"
+                )
+            else:
+                more = (
+                    f'<p style="font-size:13px;margin:8px 0 0">'
+                    f'<a href="{CRM_BASE_URL}/today?tab=hot-listings" '
+                    f'style="color:#2563eb;font-weight:600">'
+                    f"Open Hot Listings in CRM →</a></p>"
+                )
+            body_hot = (
+                '<h3 style="margin:28px 0 12px;font-size:16px">Hot Listings</h3>'
+                '<p style="font-size:13px;color:#6b7280;margin:0 0 8px">'
+                "Mid-size, in-focus openings worth pitching — same set as the CRM tab."
+                "</p>"
+                + "".join(hot_cards)
+                + more
+            )
+        else:
+            body_hot = (
+                '<h3 style="margin:28px 0 12px;font-size:16px">Hot Listings</h3>'
+                '<p style="font-size:14px;color:#4b5563;margin:0 0 8px">'
+                "No hot listings today."
+                "</p>"
+                f'<p style="font-size:13px;margin:0">'
+                f'<a href="{CRM_BASE_URL}/today?tab=hot-listings" '
+                f'style="color:#2563eb;font-weight:600">'
+                f"Open Hot Listings in CRM →</a></p>"
+            )
+
     backlog_leads = (crm_data or {}).get("backlog_leads") or []
     if backlog_leads:
         backlog_cards = []
@@ -216,6 +286,7 @@ def send_daily_report(
       <p style="margin:0 0 4px;color:#6b7280;font-size:14px">Run date: {run_date}</p>
       <p style="margin:0 0 20px;font-size:14px;font-weight:600;color:#111827">{funnel}</p>
       {body_leads}
+      {body_hot}
       {body_top_jobs}
       {body_backlog}
       <p style="margin-top:28px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:13px">

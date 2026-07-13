@@ -13,6 +13,8 @@ export interface CompanyCardData {
   status: CompanyStatus;
   firstSeen: string;
   industry?: string | null;
+  /** Apollo estimated headcount — required for Hot Listings mid-size band. */
+  estimatedEmployees?: number | null;
   leadScore?: number;
   hiringSignals?: Record<string, boolean | number>;
   reasonToCall?: string | null;

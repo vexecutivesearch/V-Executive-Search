@@ -15,11 +15,31 @@ describe("email report preferences", () => {
     );
   });
 
-  it("only enables when explicitly true", () => {
+  it("only enables backlog when explicitly true", () => {
     expect(
       normalizeEmailReportPreferences({
         includeBacklogSection: true,
       }).includeBacklogSection,
     ).toBe(true);
+  });
+
+  it("defaults Hot Listings email section to on", () => {
+    expect(DEFAULT_EMAIL_REPORT_PREFERENCES.includeHotListingsSection).toBe(
+      true,
+    );
+    expect(
+      normalizeEmailReportPreferences(null).includeHotListingsSection,
+    ).toBe(true);
+    expect(normalizeEmailReportPreferences({}).includeHotListingsSection).toBe(
+      true,
+    );
+  });
+
+  it("disables Hot Listings only when explicitly false", () => {
+    expect(
+      normalizeEmailReportPreferences({
+        includeHotListingsSection: false,
+      }).includeHotListingsSection,
+    ).toBe(false);
   });
 });

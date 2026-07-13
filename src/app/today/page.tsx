@@ -3,6 +3,7 @@ import Link from "next/link";
 import { TodayListView } from "@/components/TodayListView";
 import { TodayDatePicker } from "@/components/TodayDatePicker";
 import { ExportCsvButtons } from "@/components/ExportCsvButtons";
+import { HotListingsView } from "@/components/HotListingsView";
 import {
   countCallableCompanies,
   getBacklogForDateRange,
@@ -11,6 +12,8 @@ import {
   getTodayGeoLabel,
 } from "@/lib/queries";
 import { getTodayFilterOptions } from "@/lib/filter-options";
+import { getHotListingCompanies } from "@/lib/hot-listings-query";
+import { buildHotListings } from "@/lib/hot-listings";
 import {
   backlogSummaryLabel,
   listDateRangeLabel,
@@ -20,7 +23,7 @@ import { businessListDate } from "@/lib/timezone";
 
 export const dynamic = "force-dynamic";
 
-type ListTab = "call-sheet" | "backlog";
+type ListTab = "call-sheet" | "backlog" | "hot-listings";
 
 export default async function TodayPage({
   searchParams,
@@ -29,7 +32,12 @@ export default async function TodayPage({
 }) {
   const params = await searchParams;
   const { date: dateParam, from: fromParam, to: toParam, tab: tabParam } = params;
-  const tab: ListTab = tabParam === "backlog" ? "backlog" : "call-sheet";
+  const tab: ListTab =
+    tabParam === "backlog"
+      ? "backlog"
+      : tabParam === "hot-listings"
+        ? "hot-listings"
+        : "call-sheet";
   const listRange = resolveListDateRange({
     date: dateParam,
     from: fromParam,
@@ -40,14 +48,22 @@ export default async function TodayPage({
 
   let callSheetCompanies;
   let backlogCompanies;
+  let hotCompanies;
   let runStats;
   let geoLabel = "your focus area";
   let filterOptions;
   try {
-    [callSheetCompanies, backlogCompanies, runStats, geoLabel, filterOptions] =
-      await Promise.all([
+    [
+      callSheetCompanies,
+      backlogCompanies,
+      hotCompanies,
+      runStats,
+      geoLabel,
+      filterOptions,
+    ] = await Promise.all([
       getCallSheetCompanies(listRange),
       getBacklogForDateRange(listRange),
+      getHotListingCompanies(listRange),
       getLatestRunStats(listRange.snapshotDate),
       getTodayGeoLabel(),
       getTodayFilterOptions(),
@@ -67,6 +83,10 @@ export default async function TodayPage({
     );
   }
 
+  const hotCount = buildHotListings(hotCompanies, {
+    listDate: listRange.snapshotDate,
+  }).listings.length;
+
   const companies = tab === "backlog" ? backlogCompanies : callSheetCompanies;
   const callableCount = countCallableCompanies(callSheetCompanies);
   const backlogLabel = backlogSummaryLabel(listRange, backlogCompanies.length);
@@ -80,11 +100,19 @@ export default async function TodayPage({
       qs.set("date", listRange.from);
     }
     if (nextTab === "backlog") qs.set("tab", "backlog");
+    if (nextTab === "hot-listings") qs.set("tab", "hot-listings");
     const s = qs.toString();
     return s ? `/today?${s}` : "/today";
   }
 
   const callSheetTabLabel = `Call sheet (${callSheetCompanies.length})`;
+
+  const tabClass = (active: boolean) =>
+    `px-3 py-1.5 rounded-full text-sm border transition-colors ${
+      active
+        ? "bg-gray-900 text-white border-gray-900 dark:bg-white dark:text-gray-900"
+        : "border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800"
+    }`;
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
@@ -106,7 +134,7 @@ export default async function TodayPage({
             </>
           )}
           {" "}
-          · {backlogLabel} · {geoLabel}
+          · {backlogLabel} · {hotCount} hot · {geoLabel}
         </p>
         <Suspense fallback={null}>
           <TodayDatePicker
@@ -118,26 +146,18 @@ export default async function TodayPage({
 
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div className="flex flex-wrap gap-2">
-        <Link
-          href={tabHref("call-sheet")}
-          className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
-            tab === "call-sheet"
-              ? "bg-gray-900 text-white border-gray-900 dark:bg-white dark:text-gray-900"
-              : "border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800"
-          }`}
-        >
-          {callSheetTabLabel}
-        </Link>
-        <Link
-          href={tabHref("backlog")}
-          className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
-            tab === "backlog"
-              ? "bg-gray-900 text-white border-gray-900 dark:bg-white dark:text-gray-900"
-              : "border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800"
-          }`}
-        >
-          Backlog ({backlogCompanies.length})
-        </Link>
+          <Link href={tabHref("call-sheet")} className={tabClass(tab === "call-sheet")}>
+            {callSheetTabLabel}
+          </Link>
+          <Link href={tabHref("backlog")} className={tabClass(tab === "backlog")}>
+            Backlog ({backlogCompanies.length})
+          </Link>
+          <Link
+            href={tabHref("hot-listings")}
+            className={tabClass(tab === "hot-listings")}
+          >
+            Hot listings ({hotCount})
+          </Link>
         </div>
         <ExportCsvButtons
           range={listRange}
@@ -146,7 +166,9 @@ export default async function TodayPage({
         />
       </div>
 
-      {companies.length === 0 ? (
+      {tab === "hot-listings" ? (
+        <HotListingsView companies={hotCompanies} listRange={listRange} />
+      ) : companies.length === 0 ? (
         <div className="text-center py-16 text-gray-400">
           <p className="text-lg">
             {tab === "backlog"

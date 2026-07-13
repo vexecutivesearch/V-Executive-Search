@@ -9,6 +9,13 @@ export type EmailReportPreferences = {
   /** Top-N ranked backlog rows after filters (default 25) */
   backlogLeadLimit?: number;
   includeBacklogSection?: boolean;
+  /**
+   * Hot Listings section in daily email. Default ON.
+   * Explicit false disables; null/undefined/true keep it on.
+   */
+  includeHotListingsSection?: boolean;
+  /** Top-N hot listings in email (default from HOT_EMAIL_LIMIT / 15). */
+  hotListingsLimit?: number;
 };
 
 export const DEFAULT_EMAIL_REPORT_PREFERENCES: EmailReportPreferences = {
@@ -19,6 +26,8 @@ export const DEFAULT_EMAIL_REPORT_PREFERENCES: EmailReportPreferences = {
   backlogLeadLimit: 25,
   /** Off until explicitly enabled in Admin — unfinished filter UX must not ship in email. */
   includeBacklogSection: false,
+  includeHotListingsSection: true,
+  hotListingsLimit: 15,
 };
 
 export function normalizeEmailReportPreferences(
@@ -36,5 +45,10 @@ export function normalizeEmailReportPreferences(
       raw.backlogLeadLimit ?? DEFAULT_EMAIL_REPORT_PREFERENCES.backlogLeadLimit,
     // Explicit true only — null/undefined stays off
     includeBacklogSection: raw.includeBacklogSection === true,
+    // Default ON — only explicit false disables
+    includeHotListingsSection: raw.includeHotListingsSection !== false,
+    hotListingsLimit:
+      raw.hotListingsLimit ??
+      DEFAULT_EMAIL_REPORT_PREFERENCES.hotListingsLimit,
   };
 }

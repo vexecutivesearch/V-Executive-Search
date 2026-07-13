@@ -555,6 +555,7 @@ async function enrichCompanies(
       status: company.status,
       firstSeen: company.firstSeen,
       industry: company.industry,
+      estimatedEmployees: company.estimatedEmployees,
       leadScore: company.leadScore ?? 0,
       hiringSignals: company.hiringSignals ?? {},
       reasonToCall: company.reasonToCall,
