@@ -8,14 +8,14 @@ import {
   DEFAULT_WPB_METRO_CITIES,
 } from "@/lib/metro-defaults";
 import { backfillLinkedinDistanceDefaults } from "@/lib/search-profile-defaults";
+import { SUGGESTED_FOCUS_KEYWORDS } from "@/lib/scrape-keyword-suggestions";
 
 /**
  * Broad geo hiring signals for JobSpy/SerpAPI — not contact titles.
- * Space term = location-first "all roles" pull; named buckets pull top results
- * for that query per city (SerpAPI ~30/page-cap). Niche roles like paralegal
- * will NOT reliably appear in blank Market scan — they need their own profile.
+ * Space term = location-first "all roles" pull; named buckets fill common roles.
+ * Focus keywords (Legal / Marketing / …) are additive OR queries on top of these.
  */
-const DEFAULT_SEARCHES = [
+const BROAD_BUCKET_SEARCHES = [
   {
     name: "Market scan",
     searchTerm: " ",
@@ -72,22 +72,20 @@ const DEFAULT_SEARCHES = [
     linkedinDistance: 25,
     resultsWanted: 50,
   },
-  {
-    name: "Paralegal",
-    searchTerm: "paralegal",
-    sortOrder: 8,
-    linkedinDistance: 25,
-    resultsWanted: 50,
-  },
-  {
-    name: "Attorney",
-    searchTerm: "attorney",
-    sortOrder: 9,
-    linkedinDistance: 25,
-    resultsWanted: 50,
-  },
-];
+] as const;
 
+/** Focus keywords — run in addition to broad buckets (OR, never replaces them). */
+const FOCUS_KEYWORD_SEARCHES = SUGGESTED_FOCUS_KEYWORDS.map((s, i) => ({
+  name: s.name,
+  searchTerm: s.searchTerm,
+  sortOrder: 20 + i,
+  linkedinDistance: 25,
+  resultsWanted: 50,
+}));
+
+const DEFAULT_SEARCHES = [...BROAD_BUCKET_SEARCHES, ...FOCUS_KEYWORD_SEARCHES];
+
+export { BROAD_BUCKET_SEARCHES, FOCUS_KEYWORD_SEARCHES, DEFAULT_SEARCHES };
 /** Old Admin profiles that were contact titles misused as scrape queries. */
 const LEGACY_CONTACT_AS_SEARCH = new Set([
   "hr director",

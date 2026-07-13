@@ -20,6 +20,7 @@ import {
   US_STATES,
 } from "@/lib/locations";
 import { DEFAULT_WPB_METRO_ALIASES } from "@/lib/metro-defaults";
+import { SUGGESTED_FOCUS_KEYWORDS } from "@/lib/scrape-keyword-suggestions";
 
 const SCOPES: { value: GeographicScope; label: string }[] = [
   { value: "national", label: "National (United States)" },
@@ -129,6 +130,9 @@ export function AdminDashboard({
     ).join("\n"),
   });
   const [profiles, setProfiles] = useState(initialProfiles);
+  const [customKeyword, setCustomKeyword] = useState("");
+  const [customLabel, setCustomLabel] = useState("");
+  const [addingKeyword, setAddingKeyword] = useState(false);
   const [emailPrefs, setEmailPrefs] = useState<EmailReportPreferences>(() =>
     normalizeEmailReportPreferences(settings.emailReportPreferences),
   );
@@ -199,6 +203,82 @@ export function AdminDashboard({
       ),
     );
   }
+
+  function profileTermKey(term: string) {
+    return term.trim().toLowerCase() || " ";
+  }
+
+  async function addFocusKeyword(name: string, searchTerm: string) {
+    const term = searchTerm.trim().toLowerCase().replace(/\s+/g, " ");
+    if (!term) {
+      setMessage("Enter a keyword to scrape.");
+      return;
+    }
+    if (profiles.some((p) => profileTermKey(p.searchTerm) === term)) {
+      setMessage(`Keyword “${term}” is already in your scrape list.`);
+      return;
+    }
+    setAddingKeyword(true);
+    const res = await fetch("/api/admin/search-profiles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: name.trim() || term,
+        search_term: term,
+        is_active: true,
+        results_wanted: 50,
+        hours_old: 168,
+        linkedin_distance: 25,
+      }),
+    });
+    setAddingKeyword(false);
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      setMessage(data.error || "Failed to add keyword.");
+      return;
+    }
+    const data = (await res.json()) as { profile: SearchProfile };
+    setProfiles((p) => [...p, data.profile]);
+    setCustomKeyword("");
+    setCustomLabel("");
+    setMessage(`Added scrape keyword “${term}” (runs on all active boards).`);
+    router.refresh();
+  }
+
+  const broadProfiles = useMemo(
+    () =>
+      profiles.filter((p) => {
+        const term = profileTermKey(p.searchTerm);
+        return (
+          term === " " ||
+          [
+            "manager",
+            "director",
+            "coordinator",
+            "specialist",
+            "assistant",
+            "analyst",
+            "sales",
+          ].includes(term)
+        );
+      }),
+    [profiles],
+  );
+
+  const focusProfiles = useMemo(
+    () =>
+      profiles.filter(
+        (p) => !broadProfiles.some((b) => b.id === p.id),
+      ),
+    [profiles, broadProfiles],
+  );
+
+  const missingSuggestions = useMemo(() => {
+    const have = new Set(profiles.map((p) => profileTermKey(p.searchTerm)));
+    return SUGGESTED_FOCUS_KEYWORDS.filter(
+      (s) => !have.has(s.searchTerm.trim().toLowerCase()),
+    );
+  }, [profiles]);
 
   async function saveEmailPreferences() {
     setSaving(true);
@@ -501,65 +581,205 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
         </button>
       </section>
 
-      <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
-        <h2 className="font-semibold text-lg">Market scan queries</h2>
-        <p className="text-sm text-gray-500">
-          Broad hiring signals scraped in your geo (open roles across common job
-          buckets — not the contact titles above). LinkedIn radius (miles) is per
-          query; blank = wide.
-        </p>
-        <ul className="space-y-2">
-          {profiles.map((p) => (
-            <li
-              key={p.id}
-              className="flex flex-wrap items-center justify-between gap-3 text-sm border rounded-lg px-3 py-2 dark:border-gray-800"
-            >
-              <span className="font-medium">
-                {p.name}
-                <span className="ml-2 text-xs font-normal text-gray-500">
-                  ({p.searchTerm.trim() || "all roles"})
+      <section className="border rounded-xl p-5 space-y-4 dark:border-gray-800">
+        <div>
+          <h2 className="font-semibold text-lg">Daily scrape queries</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Additive <strong>OR</strong> queries across Indeed, LinkedIn, Google
+            Jobs (SerpAPI), and other active boards. Broad buckets stay on —
+            focus keywords run <em>on top</em> of them. Turning a keyword off
+            never removes Market scan.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            Broad market (always keep these for hiring-signal coverage)
+          </h3>
+          <ul className="space-y-2">
+            {broadProfiles.map((p) => (
+              <li
+                key={p.id}
+                className="flex flex-wrap items-center justify-between gap-3 text-sm border rounded-lg px-3 py-2 dark:border-gray-800"
+              >
+                <span className="font-medium">
+                  {p.name}
+                  <span className="ml-2 text-xs font-normal text-gray-500">
+                    ({p.searchTerm.trim() || "all roles"})
+                  </span>
                 </span>
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-2 text-xs text-gray-500">
+                    LI radius (mi)
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      placeholder="wide"
+                      className="w-16 border rounded px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900"
+                      value={p.linkedinDistance ?? ""}
+                      onChange={(e) =>
+                        setProfiles((rows) =>
+                          rows.map((x) =>
+                            x.id === p.id
+                              ? {
+                                  ...x,
+                                  linkedinDistance:
+                                    e.target.value === ""
+                                      ? null
+                                      : parseInt(e.target.value, 10) || null,
+                                }
+                              : x,
+                          ),
+                        )
+                      }
+                      onBlur={(e) =>
+                        updateProfileDistance(p.id, e.target.value)
+                      }
+                    />
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={p.isActive}
+                      onChange={(e) => toggleProfile(p.id, e.target.checked)}
+                    />
+                    Active
+                  </label>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="space-y-2 border-t pt-4 dark:border-gray-800">
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            Focus keywords (Legal · Marketing · Construction · HR · Finance)
+          </h3>
+          <p className="text-xs text-gray-500">
+            Each active keyword is scraped daily in your geo. White-label ready —
+            enable suggestions or add custom terms below.
+          </p>
+
+          {missingSuggestions.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {missingSuggestions.map((s) => (
+                <button
+                  key={s.searchTerm}
+                  type="button"
+                  disabled={addingKeyword}
+                  onClick={() => addFocusKeyword(s.name, s.searchTerm)}
+                  className="text-xs px-2.5 py-1 rounded-full border border-dashed border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50"
+                  title={`Add “${s.searchTerm}” scrape (${s.family})`}
+                >
+                  + {s.name}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <ul className="space-y-2">
+            {focusProfiles.length === 0 ? (
+              <li className="text-sm text-gray-400">
+                No focus keywords yet — click a suggestion above or add a custom
+                keyword.
+              </li>
+            ) : (
+              focusProfiles.map((p) => (
+                <li
+                  key={p.id}
+                  className="flex flex-wrap items-center justify-between gap-3 text-sm border rounded-lg px-3 py-2 dark:border-gray-800"
+                >
+                  <span className="font-medium">
+                    {p.name}
+                    <span className="ml-2 text-xs font-normal text-gray-500">
+                      query: “{p.searchTerm.trim()}”
+                    </span>
+                  </span>
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 text-xs text-gray-500">
+                      LI radius (mi)
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        placeholder="wide"
+                        className="w-16 border rounded px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900"
+                        value={p.linkedinDistance ?? ""}
+                        onChange={(e) =>
+                          setProfiles((rows) =>
+                            rows.map((x) =>
+                              x.id === p.id
+                                ? {
+                                    ...x,
+                                    linkedinDistance:
+                                      e.target.value === ""
+                                        ? null
+                                        : parseInt(e.target.value, 10) || null,
+                                  }
+                                : x,
+                            ),
+                          )
+                        }
+                        onBlur={(e) =>
+                          updateProfileDistance(p.id, e.target.value)
+                        }
+                      />
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={p.isActive}
+                        onChange={(e) => toggleProfile(p.id, e.target.checked)}
+                      />
+                      Active
+                    </label>
+                  </div>
+                </li>
+              ))
+            )}
+          </ul>
+
+          <div className="flex flex-wrap items-end gap-2 pt-2">
+            <label className="text-sm">
+              <span className="text-xs text-gray-500 block mb-1">
+                Custom keyword
               </span>
-              <div className="flex items-center gap-4">
-                <label className="flex items-center gap-2 text-xs text-gray-500">
-                  LI radius (mi)
-                  <input
-                    type="number"
-                    min={1}
-                    max={100}
-                    placeholder="wide"
-                    className="w-16 border rounded px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900"
-                    value={p.linkedinDistance ?? ""}
-                    onChange={(e) =>
-                      setProfiles((rows) =>
-                        rows.map((x) =>
-                          x.id === p.id
-                            ? {
-                                ...x,
-                                linkedinDistance:
-                                  e.target.value === ""
-                                    ? null
-                                    : parseInt(e.target.value, 10) || null,
-                              }
-                            : x,
-                        ),
-                      )
-                    }
-                    onBlur={(e) => updateProfileDistance(p.id, e.target.value)}
-                  />
-                </label>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={p.isActive}
-                    onChange={(e) => toggleProfile(p.id, e.target.checked)}
-                  />
-                  Active
-                </label>
-              </div>
-            </li>
-          ))}
-        </ul>
+              <input
+                type="text"
+                value={customKeyword}
+                onChange={(e) => setCustomKeyword(e.target.value)}
+                placeholder="e.g. bookkeeper"
+                className="border rounded-lg px-3 py-1.5 text-sm dark:border-gray-700 dark:bg-gray-900 min-w-[10rem]"
+              />
+            </label>
+            <label className="text-sm">
+              <span className="text-xs text-gray-500 block mb-1">
+                Label (optional)
+              </span>
+              <input
+                type="text"
+                value={customLabel}
+                onChange={(e) => setCustomLabel(e.target.value)}
+                placeholder="Display name"
+                className="border rounded-lg px-3 py-1.5 text-sm dark:border-gray-700 dark:bg-gray-900 min-w-[10rem]"
+              />
+            </label>
+            <button
+              type="button"
+              disabled={addingKeyword || !customKeyword.trim()}
+              onClick={() =>
+                addFocusKeyword(
+                  customLabel.trim() || customKeyword.trim(),
+                  customKeyword.trim(),
+                )
+              }
+              className="bg-gray-900 text-white dark:bg-white dark:text-gray-900 px-4 py-1.5 rounded-lg text-sm font-medium disabled:opacity-50"
+            >
+              {addingKeyword ? "Adding…" : "Add keyword"}
+            </button>
+          </div>
+        </div>
       </section>
 
       <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
