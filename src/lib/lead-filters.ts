@@ -22,7 +22,11 @@ export const DEFAULT_LEAD_FILTER: LeadFilterState = {
   industry: "",
   salaryFilter: "any",
   salaryMinUsd: 80000,
-  includeUnknownIndustry: true,
+  /**
+   * When a sector is selected, unknown industry must NOT pass.
+   * Blank industries were leaking into every sector filter (e.g. Crumbl under Financial Services).
+   */
+  includeUnknownIndustry: false,
   includeUnknownSalary: true,
 };
 
@@ -151,7 +155,7 @@ export function companyMatchesLeadFilters(
     !companyMatchesIndustryFilters(
       company.industry,
       filters.industry.trim() ? [filters.industry.trim()] : [],
-      filters.includeUnknownIndustry !== false,
+      filters.includeUnknownIndustry === true,
     )
   ) {
     return false;

@@ -120,16 +120,67 @@ describe("companyMatchesLeadFilters", () => {
     ).toBe(true);
   });
 
-  it("includes unknown industry by default when filtering", () => {
+  it("excludes unknown industry by default when a sector is selected", () => {
     expect(
       companyMatchesLeadFilters(
         { industry: null, jobListings: company.jobListings },
         {
           jobTitle: "",
-          industry: "health",
+          industry: "Financial Services",
+          salaryFilter: "any",
+          salaryMinUsd: 80000,
+          includeUnknownIndustry: false,
+          includeUnknownSalary: true,
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("can optionally include unknown industry when opted in", () => {
+    expect(
+      companyMatchesLeadFilters(
+        { industry: null, jobListings: company.jobListings },
+        {
+          jobTitle: "",
+          industry: "Financial Services",
           salaryFilter: "any",
           salaryMinUsd: 80000,
           includeUnknownIndustry: true,
+          includeUnknownSalary: true,
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("never includes a different known sector", () => {
+    expect(
+      companyMatchesLeadFilters(
+        {
+          industry: "restaurants",
+          jobListings: company.jobListings,
+        },
+        {
+          jobTitle: "",
+          industry: "Financial Services",
+          salaryFilter: "any",
+          salaryMinUsd: 80000,
+          includeUnknownIndustry: false,
+          includeUnknownSalary: true,
+        },
+      ),
+    ).toBe(false);
+    expect(
+      companyMatchesLeadFilters(
+        {
+          industry: "banking",
+          jobListings: company.jobListings,
+        },
+        {
+          jobTitle: "",
+          industry: "Financial Services",
+          salaryFilter: "any",
+          salaryMinUsd: 80000,
+          includeUnknownIndustry: false,
           includeUnknownSalary: true,
         },
       ),
