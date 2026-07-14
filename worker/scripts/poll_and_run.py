@@ -14,8 +14,13 @@ sys.path.insert(0, str(WORKER_ROOT))
 load_dotenv(WORKER_ROOT / ".env")
 
 from src.caffeinate_guard import prevent_sleep  # noqa: E402
-from src.crm_config import get_pipeline_status, post_pipeline_status  # noqa: E402
+from src.crm_config import (  # noqa: E402
+    claim_pipeline_run_request,
+    get_pipeline_status,
+    post_pipeline_status,
+)
 from src.pipeline import run_pipeline  # noqa: E402
+from src.worker_identity import worker_status_payload  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,7 +31,17 @@ logging.basicConfig(
 def main() -> int:
     if sys.platform == "darwin":
         try:
-            post_pipeline_status("worker_heartbeat")
+            identity = worker_status_payload()
+            post_pipeline_status(
+                "worker_heartbeat",
+                {
+                    "commit_sha": identity.get("commit_sha"),
+                    "branch": identity.get("branch"),
+                    "dirty": identity.get("dirty"),
+                    "agent_summary": identity.get("agent_summary"),
+                    "status_payload": identity,
+                },
+            )
         except Exception:
             pass
 
@@ -60,11 +75,16 @@ def main() -> int:
         logging.info("No run requested — exiting")
         return 0
 
+    claim = claim_pipeline_run_request()
+    if not claim.get("claimed"):
+        logging.info("Run request not claimed — %s", claim.get("reason", "unknown"))
+        return 0
+
     logging.info("Run requested from admin — starting pipeline")
     exit_code = 0
     with prevent_sleep():
         try:
-            result = run_pipeline(skip_email=True)
+            result = run_pipeline(skip_email=True, scrape_only=True)
             if result.errors and result.listings_scraped == 0 and result.companies_found == 0:
                 exit_code = 1
             elif not result.errors or result.listings_scraped > 0 or result.companies_enriched > 0:
@@ -77,14 +97,6 @@ def main() -> int:
                         if spec and spec.loader:
                             mod = importlib.util.module_from_spec(spec)
                             spec.loader.exec_module(mod)
-                            co_n = mod.run_contactout_backfill(
-                                limit=max(10, result.contacts_enriched * 2),
-                            )
-                            if co_n:
-                                logging.info(
-                                    "ContactOut dashboard backfill updated %d contact(s)",
-                                    co_n,
-                                )
                             mod.run_presence_checks()
                     except Exception as exc:
                         logging.warning("Post-enrich presence/backfill failed (non-fatal): %s", exc)

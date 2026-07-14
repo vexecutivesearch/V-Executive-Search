@@ -1,6 +1,6 @@
 # V Executive Search — Worker
 
-Daily pipeline: **JobSpy scrape** (configurable boards) → dedupe → **Apollo** + **ContactOut API** → CRM + email + iMessage tags.
+Daily pipeline: **JobSpy scrape** (configurable boards) → dedupe → jobs-only CRM ingest → free scoring/email. **Apollo** + **ContactOut** run only from an explicit per-company manual Enrich action.
 
 ## Setup
 
@@ -17,11 +17,10 @@ cp .env.example .env
 
 ```bash
 source .venv/bin/activate
-python scripts/run_daily.py              # full pipeline
+python scripts/run_daily.py              # scrape + ingest; scheduled enrich is disabled by default
 python scripts/run_daily.py --dry-run    # scrape only (no Apollo credits)
-python scripts/run_daily.py --limit 3    # test with 3 companies
-python scripts/health_check.py           # smoke test all integrations
-python scripts/test_contactout_hybrid.py # ContactOut API only
+python scripts/run_daily.py --scrape-only
+python scripts/health_check.py           # smoke test; live Apollo probes are blocked
 ```
 
 ### After CRM deploys (industry fix, etc.)
@@ -31,10 +30,11 @@ The worker does **not** auto-update. From the repo root on the Mac:
 ```bash
 git pull origin main
 cd worker && source .venv/bin/activate
-python scripts/health_check.py   # Apollo check must show industry field
+python scripts/health_check.py   # must report worker/API health without paid egress
 ```
 
-Until you pull, new scrapes still use the old Apollo endpoint and will get **null industry**.
+Until you pull, the mini can keep running stale code. The Admin worker status
+shows the mini's reported git SHA and flags drift from `origin/main`.
 
 ## Schedule on Mac (one machine only)
 
@@ -50,8 +50,14 @@ chmod +x scripts/install_launchd.sh && ./scripts/install_launchd.sh
 
 | Agent | Schedule | Purpose |
 |-------|----------|---------|
-| `com.vexecsearch.daily` | 6:00 AM & 6:00 PM | Scrape → enrich → CRM → iMessage → email |
-| `com.vexecsearch.poll` | Every 5 minutes | Admin **Run now** |
+| `com.vexecsearch.scrape` | 6:00 AM | Scrape → jobs-only CRM ingest |
+| `com.vexecsearch.hygiene` | 6:15 AM | Archive stale listings |
+| `com.vexecsearch.rescore` | 6:30 AM | Re-score backlog |
+| `com.vexecsearch.presence` | 7:30 AM | iMessage + email MX checks |
+| `com.vexecsearch.email` | 7:45 AM | Daily email |
+| `com.vexecsearch.scrape-pm` | 6:00 PM | Evening scrape → jobs-only CRM ingest |
+| `com.vexecsearch.rescore-pm` | 6:30 PM | Evening re-score |
+| `com.vexecsearch.poll` | Every 5 minutes | Admin **Run now**, scrape-only by default |
 
 ```bash
 launchctl list | grep vexecsearch
@@ -62,7 +68,13 @@ tail -f logs/poll_stdout.log
 Unload when moving to a new Mac:
 
 ```bash
-launchctl bootout gui/$(id -u)/com.vexecsearch.daily
+launchctl bootout gui/$(id -u)/com.vexecsearch.scrape
+launchctl bootout gui/$(id -u)/com.vexecsearch.hygiene
+launchctl bootout gui/$(id -u)/com.vexecsearch.rescore
+launchctl bootout gui/$(id -u)/com.vexecsearch.presence
+launchctl bootout gui/$(id -u)/com.vexecsearch.email
+launchctl bootout gui/$(id -u)/com.vexecsearch.scrape-pm
+launchctl bootout gui/$(id -u)/com.vexecsearch.rescore-pm
 launchctl bootout gui/$(id -u)/com.vexecsearch.poll
 # Remove legacy keepalive if present:
 launchctl bootout gui/$(id -u)/com.vexecsearch.contactout-keepalive 2>/dev/null || true

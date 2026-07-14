@@ -5,7 +5,8 @@ import { enrichCompanyContacts, refreshCompanyContactsFromApollo, apolloWebhookC
 import { isContactOutCreditsAvailable } from "@/lib/contactout-credits";
 import { searchContactOutByDomain, searchContactOutByCompanyName } from "@/lib/contactout-domain-search";
 import { guessDomain, resolveCompanyOrg } from "@/lib/domain-resolver";
-import { syncContactPhoneFields, contactPhonesForDisplay } from "@/lib/contact-phones";
+import { normalizeContactChannels } from "@/lib/contact-enrichment-limits";
+import { contactPhonesForDisplay } from "@/lib/contact-phones";
 import { refreshCompanyContactsFromContactOut } from "@/lib/refresh-company-contacts";
 import { db } from "@/lib/db";
 import { companies, contacts, jobListings } from "@/lib/db/schema";
@@ -14,6 +15,7 @@ import { requestImessageCheck } from "@/lib/imessage-check";
 import { contactIsCallable } from "@/lib/lead-score";
 import { recomputeCompanyScores } from "@/lib/recompute-company-scores";
 import { businessListDate } from "@/lib/timezone";
+import { manualEnrichContext } from "@/lib/paid-egress";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,6 +39,7 @@ export async function POST(
 
   const contactOutKey = process.env.CONTACTOUT_API_KEY;
   const { id } = await params;
+  const egressContext = manualEnrichContext(id);
 
   const [company] = await db
     .select()
@@ -62,7 +65,7 @@ export async function POST(
 
   // Upgrade missing or guessed domains via Apollo org search before people lookup.
   if (!domain || domainConfidence === "low") {
-    const resolved = await resolveCompanyOrg(company.name, apiKey);
+    const resolved = await resolveCompanyOrg(company.name, apiKey, egressContext);
     const patch: Partial<typeof companies.$inferInsert> = {};
     if (
       resolved.domain &&
@@ -125,6 +128,7 @@ export async function POST(
 
     const refresh = await refreshCompanyContactsFromContactOut(id, contactOutKey, {
       contactOutAvailable,
+      context: egressContext,
     });
 
     const finalContacts = await db
@@ -194,20 +198,23 @@ export async function POST(
       existingApolloIds,
       contactOutApiKey: contactOutKey,
       contactOutAvailable,
+      context: egressContext,
+      companyId: id,
     });
 
     for (const c of enriched) {
+      const channels = normalizeContactChannels(c);
       await db.insert(contacts).values({
         companyId: id,
         name: c.name,
         title: c.title,
-        email: c.email,
-        workEmail: c.workEmail,
-        personalEmail: c.personalEmail,
-        phone: c.phone,
-        personalPhone: c.personalPhone,
-        companyPhone: c.companyPhone,
-        phones: c.phones,
+        email: channels.email,
+        workEmail: channels.workEmail,
+        personalEmail: channels.personalEmail,
+        phone: channels.phone,
+        personalPhone: channels.personalPhone,
+        companyPhone: channels.companyPhone,
+        phones: channels.phones,
         linkedinUrl: c.linkedinUrl,
         apolloId: c.apolloId,
         sourceProvider: c.sourceProvider,
@@ -224,7 +231,7 @@ export async function POST(
 
   if (contactsAdded === 0 && contactOutKey && contactOutAvailable) {
     let coPeople = domain
-      ? await searchContactOutByDomain(contactOutKey, domain, 3)
+      ? await searchContactOutByDomain(contactOutKey, domain, 3, egressContext, id)
       : [];
     if (coPeople.length === 0) {
       coPeople = await searchContactOutByCompanyName(
@@ -232,6 +239,8 @@ export async function POST(
         company.name,
         3,
         domain,
+        egressContext,
+        id,
       );
     }
     const existingLinkedIn = new Set(
@@ -250,16 +259,26 @@ export async function POST(
       if (emails.some((e) => existingEmails.has(e!.toLowerCase()))) continue;
 
       const email = person.workEmail ?? person.personalEmail ?? null;
+      const channels = normalizeContactChannels({
+        workEmail: person.workEmail,
+        personalEmail: person.personalEmail,
+        email,
+        phone: person.phone,
+        personalPhone: person.personalPhone,
+        phones: person.phones,
+        sourceProvider: "contactout",
+      });
       await db.insert(contacts).values({
         companyId: id,
         name: person.name,
         title: person.title || null,
-        email,
-        workEmail: person.workEmail,
-        personalEmail: person.personalEmail,
-        phone: person.phone,
-        personalPhone: person.personalPhone,
-        phones: person.phones,
+        email: channels.email,
+        workEmail: channels.workEmail,
+        personalEmail: channels.personalEmail,
+        phone: channels.phone,
+        personalPhone: channels.personalPhone,
+        companyPhone: channels.companyPhone,
+        phones: channels.phones,
         linkedinUrl: person.linkedinUrl || null,
         sourceProvider: "contactout",
       });
@@ -269,9 +288,9 @@ export async function POST(
     }
   }
 
-  let personalUpdated = 0;
+  const personalUpdated = 0;
   let contactoutChecked = 0;
-  let contactoutPhoneLocked = false;
+  const contactoutPhoneLocked = false;
   let apolloRefreshed = 0;
   let apolloPhonesRequested = 0;
   let apolloPhonesAdded = 0;
@@ -280,18 +299,14 @@ export async function POST(
     id,
     apiKey,
     contactOutAvailable,
+    egressContext,
   );
   apolloRefreshed = apolloRefresh.updated;
   apolloPhonesRequested = apolloRefresh.phonesRequested;
   apolloPhonesAdded = apolloRefresh.phonesAdded;
 
   if (contactOutKey && contactOutAvailable) {
-    const refresh = await refreshCompanyContactsFromContactOut(id, contactOutKey, {
-      contactOutAvailable,
-    });
-    personalUpdated = refresh.updated;
-    contactoutChecked = refresh.checked;
-    contactoutPhoneLocked = refresh.phoneApiLocked;
+    contactoutChecked = existingContactRows.filter((c) => c.linkedinUrl).length;
   }
 
   // Backfill phones json from legacy phone fields (e.g. Apollo webhook async delivery).
@@ -301,18 +316,24 @@ export async function POST(
     .where(eq(contacts.companyId, id));
   let phonesBackfilled = 0;
   for (const contact of allContacts) {
-    const synced = syncContactPhoneFields(contact);
+    const normalized = normalizeContactChannels(contact);
     if (
-      synced.phones.length > 0 &&
-      JSON.stringify(synced.phones) !== JSON.stringify(contact.phones ?? [])
+      JSON.stringify(normalized.phones) !== JSON.stringify(contact.phones ?? []) ||
+      normalized.phone !== contact.phone ||
+      normalized.personalPhone !== contact.personalPhone ||
+      normalized.workEmail !== contact.workEmail ||
+      normalized.personalEmail !== contact.personalEmail
     ) {
       await db
         .update(contacts)
         .set({
-          phones: synced.phones,
-          phone: synced.phone ?? contact.phone,
-          personalPhone: synced.personalPhone ?? contact.personalPhone,
-          companyPhone: synced.companyPhone ?? contact.companyPhone,
+          phones: normalized.phones,
+          phone: normalized.phone ?? contact.phone,
+          personalPhone: normalized.personalPhone ?? contact.personalPhone,
+          companyPhone: normalized.companyPhone ?? contact.companyPhone,
+          workEmail: normalized.workEmail,
+          personalEmail: normalized.personalEmail,
+          email: normalized.email ?? contact.email,
         })
         .where(eq(contacts.id, contact.id));
       phonesBackfilled += 1;

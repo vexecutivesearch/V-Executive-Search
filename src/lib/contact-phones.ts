@@ -9,6 +9,9 @@ export type SourcedPhone = {
   kind?: PhoneKind;
 };
 
+/** Max personal/direct-dial numbers stored or shown per contact. */
+export const MAX_PERSONAL_PHONES_PER_CONTACT = 3;
+
 export function phoneKindLabel(kind?: PhoneKind): string {
   if (kind === "mobile") return "Mobile";
   if (kind === "work") return "Work";
@@ -123,6 +126,19 @@ export function extractContactOutPhones(raw: unknown[]): SourcedPhone[] {
   return dedupeSourcedPhones(out);
 }
 
+/** Keep the best N personal/direct numbers — ContactOut often returns many. */
+export function trimPhonesForContact(
+  phones: SourcedPhone[],
+  maxPersonal = MAX_PERSONAL_PHONES_PER_CONTACT,
+): SourcedPhone[] {
+  const sorted = sortPhonesForDisplay(dedupeSourcedPhones(phones));
+  const direct = sorted.filter((p) => p.kind !== "company");
+  const company = sorted.find((p) => p.kind === "company");
+  const trimmed = direct.slice(0, maxPersonal);
+  if (company && trimmed.length === 0) trimmed.push(company);
+  return trimmed;
+}
+
 export function dedupeSourcedPhones(phones: SourcedPhone[]): SourcedPhone[] {
   const seen = new Set<string>();
   const out: SourcedPhone[] = [];
@@ -140,7 +156,9 @@ export function dedupeSourcedPhones(phones: SourcedPhone[]): SourcedPhone[] {
 export function mergeSourcedPhones(
   ...groups: (SourcedPhone[] | null | undefined)[]
 ): SourcedPhone[] {
-  return dedupeSourcedPhones(groups.flatMap((g) => g ?? []));
+  return trimPhonesForContact(
+    dedupeSourcedPhones(groups.flatMap((g) => g ?? [])),
+  );
 }
 
 /**
@@ -252,7 +270,7 @@ export function contactPhonesForDisplay(contact: {
   sourceProvider?: string | null;
 }): SourcedPhone[] {
   if (contact.phones?.length) {
-    return contact.phones;
+    return trimPhonesForContact(contact.phones);
   }
   const legacy: SourcedPhone[] = [];
   if (contact.personalPhone) {

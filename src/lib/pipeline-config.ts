@@ -476,6 +476,21 @@ export async function buildPipelineConfig() {
       target_seniorities: targetSeniorities,
       enrich_phone: true,
       daily_credit_cap: 200,
+      apollo_daily_credit_cap: Number.parseInt(
+        process.env.APOLLO_DAILY_CREDIT_CAP ?? "200",
+        10,
+      ),
+      contactout_daily_credit_cap: Number.parseInt(
+        process.env.CONTACTOUT_DAILY_CREDIT_CAP ?? "50",
+        10,
+      ),
+      paid_egress_enabled:
+        process.env.PAID_EGRESS_ENABLED !== "false" &&
+        process.env.APOLLO_EGRESS_ENABLED !== "false" &&
+        process.env.APOLLO_PAID_EGRESS_ENABLED !== "false" &&
+        process.env.CONTACTOUT_EGRESS_ENABLED !== "false" &&
+        process.env.CONTACTOUT_PAID_EGRESS_ENABLED !== "false",
+      scheduled_enrich_enabled: process.env.ENABLE_SCHEDULED_ENRICH === "true",
       daily_enrich_quota: settings.dailyEnrichQuota ?? 25,
       min_score_for_enrich: settings.minScoreForEnrich ?? 60,
       min_score_for_phone: settings.minScoreForPhone ?? 75,

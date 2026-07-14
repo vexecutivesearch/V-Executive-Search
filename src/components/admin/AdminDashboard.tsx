@@ -139,6 +139,24 @@ export function AdminDashboard({
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
+  const workerPayload = settings.workerStatusPayload ?? {};
+  const workerOriginMainSha =
+    typeof workerPayload.origin_main_sha === "string"
+      ? workerPayload.origin_main_sha
+      : null;
+  const workerDriftReasons = [
+    !settings.workerCommitSha ? "unknown SHA" : null,
+    settings.workerDirty ? "dirty worktree" : null,
+    settings.workerBranch && settings.workerBranch !== "main"
+      ? `branch ${settings.workerBranch}`
+      : null,
+    workerOriginMainSha &&
+    settings.workerCommitSha &&
+    workerOriginMainSha !== settings.workerCommitSha
+      ? "not at origin/main"
+      : null,
+  ].filter(Boolean);
+
   const cityOptions = useMemo(
     () => getCitiesForState(form.focus_state),
     [form.focus_state],
@@ -332,6 +350,47 @@ export function AdminDashboard({
           run <code className="text-xs">./scripts/install_launchd.sh</code>.
         </p>
         <div className="text-sm text-gray-700 dark:text-gray-300 space-y-2">
+          <div className="rounded-lg border border-amber-200 dark:border-amber-900 bg-white/70 dark:bg-gray-950/40 p-3 space-y-1">
+            <p className="font-medium">Worker code status</p>
+            <p className="text-xs text-gray-600 dark:text-gray-400">
+              Last heartbeat:{" "}
+              {settings.workerLastSeenAt
+                ? new Date(settings.workerLastSeenAt).toLocaleString()
+                : "never"}
+            </p>
+            <p className="text-xs text-gray-600 dark:text-gray-400">
+              Running SHA:{" "}
+              <code className="text-[11px]">
+                {settings.workerCommitSha ?? "unknown"}
+              </code>
+            </p>
+            <p className="text-xs text-gray-600 dark:text-gray-400">
+              Branch: {settings.workerBranch ?? "unknown"} · Dirty:{" "}
+              {settings.workerDirty ? "yes" : "no"}
+            </p>
+            {settings.workerAgentSummary && (
+              <p className="text-xs text-gray-600 dark:text-gray-400">
+                Agents: {settings.workerAgentSummary}
+              </p>
+            )}
+            {workerOriginMainSha && (
+              <p className="text-xs text-gray-600 dark:text-gray-400">
+                origin/main:{" "}
+                <code className="text-[11px]">{workerOriginMainSha}</code>
+              </p>
+            )}
+            <p
+              className={`text-xs font-medium ${
+                workerDriftReasons.length
+                  ? "text-red-700 dark:text-red-300"
+                  : "text-green-700 dark:text-green-300"
+              }`}
+            >
+              {workerDriftReasons.length
+                ? `Drift alarm: ${workerDriftReasons.join(", ")}`
+                : "Worker SHA matches origin/main and worktree is clean."}
+            </p>
+          </div>
           <p className="font-medium">LinkedIn hiring team (optional)</p>
           <p className="text-gray-600 dark:text-gray-400">
             Public job pages only expose a &quot;job poster&quot; on ~5–10% of
@@ -965,9 +1024,9 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
       <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Run pipeline</h2>
         <p className="text-sm text-gray-500">
-          Trigger a scrape + enrich from your phone or browser. Your home Mac worker
-          polls every 5 minutes and runs when requested. Only the top-N ranked backlog
-          companies are enriched (not all net-new).
+          Trigger a scrape-only/jobs-only ingest from your phone or browser. Your
+          home Mac worker polls every 5 minutes and runs when requested. Paid
+          Apollo/ContactOut enrichment stays manual per company.
         </p>
         <button
           onClick={triggerRun}

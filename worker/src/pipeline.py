@@ -8,14 +8,16 @@ from pathlib import Path
 from typing import Any
 
 from src.config_loader import load_config, get_notification_email
+from src.coarse_sector import apply_coarse_sectors
 from src.crm_config import post_pipeline_status
 from src.crm_client import CRMClient
 from src.dedupe import collapse_to_companies, normalize_company_name
-from src.domain_resolver import _search_org, resolve_domains
+from src.domain_resolver import _guess_domain, _search_org
 from src.enrich import get_provider
 from src.enrich.contactout import get_contactout_client
 from src.enrich.waterfall import WaterfallProvider
 from src.models import CompanyRecord, DomainConfidence, EnrichedCompany, JobListing, PipelineResult
+from src.paid_egress import PaidEgressBlocked
 from src.scrape import scrape_all
 from src.timezone import business_list_date, business_run_slot
 from src.contact_phones import contact_phones_for_display
@@ -401,7 +403,7 @@ def _run_pipeline_impl(
     result.listings_scraped = len(listings)
     result.scrape_funnel = scrape_funnel
 
-    # Stage 2: Build batch and resolve domains (free)
+    # Stage 2: Build batch and assign free coarse sectors.
     logger.info("=== Stage 2: Building company batch (jobs-only ingest) ===")
     companies = collapse_to_companies(listings)
     result.companies_found = len(companies)
@@ -410,7 +412,7 @@ def _run_pipeline_impl(
         result.errors.append("No companies from scrape")
         return result
 
-    companies = resolve_domains(companies)
+    companies = apply_coarse_sectors(companies)
 
     if limit is not None:
         companies = companies[:limit]
@@ -437,6 +439,10 @@ def _run_pipeline_impl(
             result.listings_scraped,
             result.companies_found,
         )
+        return result
+
+    if os.environ.get("ENABLE_SCHEDULED_ENRICH") != "true":
+        logger.info("Scheduled enrichment skipped — paid egress requires explicit approval")
         return result
 
     return _enrich_call_sheet(
@@ -485,9 +491,12 @@ def _enrich_call_sheet(
         if not crm.check_pipeline_ready():
             result.errors.append("CRM v2 pipeline not ready — deploy CRM first")
             return result
-        backfill = crm.backfill_domains(limit=queue_limit * 3)
-        if backfill.get("updated"):
-            logger.info("Domain backfill updated %s companies", backfill.get("updated"))
+        if os.environ.get("ENABLE_SCHEDULED_DOMAIN_BACKFILL") == "true":
+            backfill = crm.backfill_domains(limit=queue_limit * 3)
+            if backfill.get("updated"):
+                logger.info("Domain backfill updated %s companies", backfill.get("updated"))
+        else:
+            logger.info("Domain backfill skipped — paid egress disabled for scheduled pipeline")
 
     queue_items = crm.get_enrichment_queue(limit=queue_limit) if crm.is_configured else []
     companies = [_company_from_queue(item) for item in queue_items]
@@ -512,18 +521,30 @@ def _enrich_call_sheet(
         provider = get_provider(provider_name)
 
     enriched: list[EnrichedCompany] = []
+    org_search_credits = 0
     for company in companies:
         if not company.domain:
-            lookup = _search_org(company.name)
-            if lookup.domain:
-                company.domain = lookup.domain
-                company.domain_confidence = lookup.confidence
-            else:
+            guessed = _guess_domain(company.name)
+            if guessed:
+                company.domain = guessed
+                company.domain_confidence = DomainConfidence.LOW
+            elif os.environ.get("ENABLE_SCHEDULED_DOMAIN_BACKFILL") != "true":
                 result.errors.append(f"No domain for {company.name}")
                 enriched.append(EnrichedCompany(company=company))
                 continue
+        if company.domain_confidence == DomainConfidence.LOW and os.environ.get("ENABLE_SCHEDULED_DOMAIN_BACKFILL") == "true":
+            try:
+                lookup = _search_org(company.name, context="scheduled_pipeline")
+            except PaidEgressBlocked as exc:
+                result.errors.append(str(exc))
+                enriched.append(EnrichedCompany(company=company))
+                continue
+            org_search_credits += 1
+            if lookup.domain:
+                company.domain = lookup.domain
+                company.domain_confidence = lookup.confidence
 
-        if provider.credits_used >= daily_credit_cap:
+        if provider.credits_used + org_search_credits >= daily_credit_cap:
             result.errors.append(f"Credit cap reached at {daily_credit_cap}")
             result.companies_deferred += 1
             break
@@ -553,7 +574,7 @@ def _enrich_call_sheet(
             result.companies_enriched += 1
             result.contacts_enriched += len([c for c in item.contacts if c.enriched])
 
-    result.credits_used = provider.credits_used
+    result.credits_used = provider.credits_used + org_search_credits
     result.rows = _rows_from_enriched(enriched)
 
     csv_path = _write_csv(result.rows, result.run_date, result.run_slot)

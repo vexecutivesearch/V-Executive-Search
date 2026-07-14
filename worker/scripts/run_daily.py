@@ -19,6 +19,7 @@ from src.caffeinate_guard import prevent_sleep  # noqa: E402
 from src.crm_client import CRMClient  # noqa: E402
 from src.crm_config import post_pipeline_status  # noqa: E402
 from src.pipeline import LOG_DIR, run_pipeline  # noqa: E402
+from src.worker_identity import worker_status_payload  # noqa: E402
 
 
 def setup_logging(run_date_str: str, verbose: bool, suffix: str = "") -> Path:
@@ -207,7 +208,17 @@ def main() -> int:
 
     with prevent_sleep():
         try:
-            post_pipeline_status("worker_heartbeat")
+            identity = worker_status_payload()
+            post_pipeline_status(
+                "worker_heartbeat",
+                {
+                    "commit_sha": identity.get("commit_sha"),
+                    "branch": identity.get("branch"),
+                    "dirty": identity.get("dirty"),
+                    "agent_summary": identity.get("agent_summary"),
+                    "status_payload": identity,
+                },
+            )
         except Exception:
             pass
 
@@ -306,7 +317,12 @@ def main() -> int:
                 send_failure_alert("\n".join(result.errors))
                 return 1
 
-        if not args.dry_run and not args.skip_crm and not args.scrape_only:
+        if (
+            not args.dry_run
+            and not args.skip_crm
+            and not args.scrape_only
+            and os.environ.get("ENABLE_CONTACTOUT_DASHBOARD_BACKFILL") == "true"
+        ):
             if result.contacts_enriched > 0 or args.enrich_only:
                 try:
                     co_n = run_contactout_backfill(

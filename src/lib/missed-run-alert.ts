@@ -58,6 +58,29 @@ export async function checkMissedPipelineRun(): Promise<{
     );
   }
 
+  const workerPayload = settings.workerStatusPayload ?? {};
+  const originMainSha =
+    typeof workerPayload.origin_main_sha === "string"
+      ? workerPayload.origin_main_sha
+      : null;
+  const expectedSha = process.env.WORKER_EXPECTED_SHA || originMainSha;
+  const expectedBranch = process.env.WORKER_EXPECTED_BRANCH || "main";
+  const workerDrift =
+    Boolean(settings.workerDirty) ||
+    Boolean(settings.workerBranch && settings.workerBranch !== expectedBranch) ||
+    Boolean(
+      expectedSha &&
+        settings.workerCommitSha &&
+        settings.workerCommitSha !== expectedSha,
+    ) ||
+    !settings.workerCommitSha;
+
+  if (workerDrift) {
+    issues.push(
+      `Worker code drift detected (sha: ${settings.workerCommitSha ?? "unknown"}, branch: ${settings.workerBranch ?? "unknown"}, dirty: ${settings.workerDirty ? "yes" : "no"}, expected: ${expectedSha ?? expectedBranch}).`,
+    );
+  }
+
   const toEmail = settings.notificationEmail;
   const sent = await sendAlertEmail({
     toEmail,

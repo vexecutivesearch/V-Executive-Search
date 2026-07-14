@@ -106,12 +106,12 @@ Think of it as three layers:
 - Job board toggles (A/B which sources produce net-new companies)
 - Active title searches
 - **Enrichment quotas:** daily N, min score to enrich, min score for phone
-- **Run now** — triggers scrape → rescore → enrich from anywhere; worker polls every 5 minutes
+- **Run now** — triggers scrape-only/jobs-only ingest from anywhere; worker polls every 5 minutes
 
 ### Hygiene (automatic)
 
-- **02:15** — archive job listings not seen in 45+ days
-- **02:30** — rescore entire backlog (free)
+- **06:15** — archive job listings not seen in 45+ days
+- **06:30 / 18:30** — rescore entire backlog (free)
 - Credit alerts when ContactOut phone API locks
 - Pipeline health check before enrich (won't run against stale CRM)
 
@@ -404,13 +404,18 @@ Design rules:
 
 | Time | Job | Cost |
 |---|---|---|
-| 02:00 | Scrape all boards → store | free |
-| 02:15 | Archive stale listings | free |
-| 02:30 | Filter ICP + re-score full backlog | free |
-| 03:00 | Select top-N → enrich via Apollo → ContactOut | credits |
-| 03:30 | Presence check (iMessage + email MX) | free |
-| 06:00 | Build + send daily call sheet email | free |
-| every 5 min | Admin "Run now" poll | free |
+| 06:00 | Scrape all boards → jobs-only ingest | free |
+| 06:15 | Archive stale listings | free |
+| 06:30 | Filter ICP + re-score full backlog | free |
+| 07:30 | Presence check (iMessage + email MX) | free |
+| 07:45 | Build + send daily call sheet email | free |
+| 18:00 | Scrape all boards → jobs-only ingest | free |
+| 18:30 | Filter ICP + re-score full backlog | free |
+| every 5 min | Admin "Run now" poll, scrape-only by default | free |
+
+Enrichment is manual only. Apollo and ContactOut paid egress must carry an
+explicit per-company manual enrich context; scheduled jobs must not call paid
+provider APIs.
 
 ---
 
@@ -439,7 +444,7 @@ The daily call sheet is *internal*. When you add outbound email to prospects, ke
 
 | Spec item | Status |
 |-----------|--------|
-| JIT scrape → score → enrich top-N | ✅ Live |
+| JIT scrape → score → manual enrich | ✅ Live |
 | ICP filter + hiring signals | ✅ Live |
 | Call sheet + backlog CRM tabs | ✅ Live |
 | Ranked email with funnel header | ✅ Live |

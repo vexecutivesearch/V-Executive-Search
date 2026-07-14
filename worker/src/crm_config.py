@@ -53,15 +53,18 @@ def get_pipeline_status() -> dict[str, Any]:
         return {}
 
 
-def post_pipeline_status(action: str) -> bool:
+def post_pipeline_status(action: str, payload: dict[str, Any] | None = None) -> bool:
     base = _base()
     if not base:
         return False
     try:
+        body = {"action": action}
+        if payload:
+            body.update(payload)
         resp = requests.post(
             f"{base}/api/pipeline/status",
             headers=_headers(),
-            json={"action": action},
+            json=body,
             timeout=15,
         )
         resp.raise_for_status()
@@ -69,3 +72,21 @@ def post_pipeline_status(action: str) -> bool:
     except requests.RequestException as exc:
         logger.warning("Pipeline status update failed: %s", exc)
         return False
+
+
+def claim_pipeline_run_request() -> dict[str, Any]:
+    base = _base()
+    if not base:
+        return {"ok": False, "claimed": False, "reason": "missing_crm_api_url"}
+    try:
+        resp = requests.post(
+            f"{base}/api/pipeline/status",
+            headers=_headers(),
+            json={"action": "claim_run_request"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as exc:
+        logger.warning("Pipeline run claim failed: %s", exc)
+        return {"ok": False, "claimed": False, "reason": "request_failed"}

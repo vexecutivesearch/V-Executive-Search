@@ -69,7 +69,7 @@ async function main() {
   for (const row of rows) {
     if (isListingPseudoCompany(row.name)) continue;
 
-    const lookup = await resolveCompanyOrg(row.name, apiKey);
+    const lookup = await resolveCompanyOrg(row.name, apiKey, "manual_script");
     const patch: Partial<typeof companies.$inferInsert> = {};
 
     if (!row.domain && lookup.domain) {

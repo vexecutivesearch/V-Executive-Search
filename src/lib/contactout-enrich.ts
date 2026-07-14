@@ -1,18 +1,34 @@
 import { isPersonalEmail } from "@/lib/phone-utils";
 import {
   extractContactOutPhones,
+  mergeSourcedPhones,
   type SourcedPhone,
 } from "@/lib/contact-phones";
+import {
+  pickPersonalEmailFromList,
+  pickWorkEmail,
+} from "@/lib/contact-enrichment-limits";
 import { isContactOutSampleResponse } from "@/lib/contactout-samples";
+import {
+  assertPaidEgressAllowed,
+  recordProviderUsageEvent,
+  type PaidEgressContext,
+} from "@/lib/paid-egress";
 
 const CONTACTOUT_LINKEDIN_URL = "https://api.contactout.com/v1/people/linkedin";
 
 export type ContactOutData = {
   personalEmail: string | null;
+  workEmail: string | null;
   personalPhone: string | null;
-  workEmails: string[];
   phones: SourcedPhone[];
   phoneApiLocked: boolean;
+};
+
+export type ContactOutEnrichOptions = {
+  needPersonalEmail?: boolean;
+  needWorkEmail?: boolean;
+  needPhone?: boolean;
 };
 
 function normalizeLinkedIn(url: string): string {
@@ -22,9 +38,10 @@ function normalizeLinkedIn(url: string): string {
 }
 
 function pickPersonalEmail(emails: unknown[]): string | null {
+  const strings: string[] = [];
   for (const entry of emails) {
     if (typeof entry === "string") {
-      if (isPersonalEmail(entry)) return entry;
+      strings.push(entry);
       continue;
     }
     if (!entry || typeof entry !== "object") continue;
@@ -32,16 +49,12 @@ function pickPersonalEmail(emails: unknown[]): string | null {
     const email = obj.email || obj.value || obj.address;
     if (!email) continue;
     const type = (obj.type || obj.label || "").toLowerCase();
-    if (type.includes("personal") || isPersonalEmail(email)) return email;
-  }
-  for (const entry of emails) {
-    if (typeof entry === "string") return entry;
-    if (entry && typeof entry === "object") {
-      const email = (entry as Record<string, string>).email;
-      if (email) return email;
+    if (type.includes("personal") || isPersonalEmail(email)) {
+      return email;
     }
+    strings.push(email);
   }
-  return null;
+  return pickPersonalEmailFromList(strings);
 }
 
 function collectProfileLists(
@@ -61,8 +74,8 @@ function parseContactOutPayload(data: Record<string, unknown>): ContactOutData {
   if (isContactOutSampleResponse(data)) {
     return {
       personalEmail: null,
+      workEmail: null,
       personalPhone: null,
-      workEmails: [],
       phones: [],
       phoneApiLocked: true,
     };
@@ -81,7 +94,7 @@ function parseContactOutPayload(data: Record<string, unknown>): ContactOutData {
     "mobile",
     "personal_phone",
   ]);
-  const workEmails = collectProfileLists(profile, [
+  const workEmailsRaw = collectProfileLists(profile, [
     "work_email",
     "work_emails",
   ]).map(String);
@@ -92,8 +105,8 @@ function parseContactOutPayload(data: Record<string, unknown>): ContactOutData {
 
   return {
     personalEmail: pickPersonalEmail(emailsRaw),
+    workEmail: pickWorkEmail(workEmailsRaw),
     personalPhone,
-    workEmails,
     phones,
     phoneApiLocked: false,
   };
@@ -105,9 +118,9 @@ function mergeContactOutData(
 ): ContactOutData {
   return {
     personalEmail: base.personalEmail ?? phones.personalEmail,
+    workEmail: base.workEmail ?? phones.workEmail,
     personalPhone: phones.personalPhone ?? base.personalPhone,
-    workEmails: base.workEmails.length ? base.workEmails : phones.workEmails,
-    phones: [...base.phones, ...phones.phones],
+    phones: mergeSourcedPhones(base.phones, phones.phones),
     phoneApiLocked: base.phoneApiLocked || phones.phoneApiLocked,
   };
 }
@@ -115,7 +128,14 @@ function mergeContactOutData(
 async function contactOutGet(
   apiKey: string,
   params: Record<string, string>,
+  context?: PaidEgressContext,
+  companyId?: string,
 ): Promise<Record<string, unknown> | null> {
+  await assertPaidEgressAllowed("contactout", "people/linkedin", context, {
+    companyId,
+    estimatedCost: 1,
+    metadata: { params },
+  });
   const resp = await fetch(
     `${CONTACTOUT_LINKEDIN_URL}?${new URLSearchParams(params)}`,
     {
@@ -128,41 +148,75 @@ async function contactOutGet(
   );
   if (resp.status === 404) return null;
   if (!resp.ok) return null;
-  return (await resp.json()) as Record<string, unknown>;
+  const data = (await resp.json()) as Record<string, unknown>;
+  await recordProviderUsageEvent("contactout", "people/linkedin", context ?? "automated_scrape", {
+    companyId,
+    recordsReturned: data ? 1 : 0,
+    estimatedCost: 1,
+    metadata: { params },
+  });
+  return data;
 }
 
 export async function enrichFromContactOut(
   linkedinUrl: string,
   apiKey: string,
+  options: ContactOutEnrichOptions = {},
+  context?: PaidEgressContext,
+  companyId?: string,
 ): Promise<ContactOutData | null> {
+  const needPersonalEmail = options.needPersonalEmail ?? true;
+  const needWorkEmail = options.needWorkEmail ?? true;
+  const needPhone = options.needPhone ?? true;
+
+  if (!needPersonalEmail && !needWorkEmail && !needPhone) {
+    return null;
+  }
+
   const profile = normalizeLinkedIn(linkedinUrl);
+  let base: ContactOutData | null = null;
 
-  const emailData = await contactOutGet(apiKey, {
-    profile,
-    email_type: "personal,work",
-  });
-  if (!emailData) return null;
+  if (needPersonalEmail || needWorkEmail) {
+    const emailTypes: string[] = [];
+    if (needPersonalEmail) emailTypes.push("personal");
+    if (needWorkEmail) emailTypes.push("work");
+    const emailData = await contactOutGet(apiKey, {
+      profile,
+      email_type: emailTypes.join(","),
+    }, context, companyId);
+    if (!emailData) return null;
+    base = parseContactOutPayload(emailData);
+    if (base.phoneApiLocked) return base;
+  }
 
-  const base = parseContactOutPayload(emailData);
-  if (base.phoneApiLocked) return base;
+  if (!needPhone) {
+    if (base?.personalEmail || base?.workEmail) return base;
+    return null;
+  }
 
   const phoneData = await contactOutGet(apiKey, {
     profile,
     include_phone: "true",
     email_type: "none",
-  });
+  }, context, companyId);
   if (!phoneData) {
-    if (base.personalEmail || base.workEmails.length) return base;
+    if (base?.personalEmail || base?.workEmail) return base;
     return null;
   }
 
   const phoneResult = parseContactOutPayload(phoneData);
   if (phoneResult.phoneApiLocked) {
-    return base.personalEmail || base.workEmails.length ? base : null;
+    if (base?.personalEmail || base?.workEmail) {
+      return { ...base, phoneApiLocked: true };
+    }
+    return phoneResult;
   }
 
-  const merged = mergeContactOutData(base, phoneResult);
-  if (merged.personalEmail || merged.phones.length || merged.workEmails.length) {
+  const merged = base
+    ? mergeContactOutData(base, phoneResult)
+    : phoneResult;
+
+  if (merged.personalEmail || merged.workEmail || merged.phones.length) {
     return merged;
   }
   return null;

@@ -11,6 +11,12 @@ from src.contact_phones import extract_contactout_phones
 from src.enrich.contactout_base import ContactOutResult, normalize_linkedin
 from src.enrich.contactout_rate_limit import is_rate_limited, mark_rate_limited
 from src.enrich.contactout_samples import is_contactout_sample_response
+from src.paid_egress import (
+    PaidEgressBlocked,
+    assert_paid_egress_allowed,
+    default_context,
+    record_provider_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -114,12 +120,9 @@ def _parse_payload(data: dict[str, Any]) -> ContactOutResult:
 
 
 def _merge_results(base: ContactOutResult, phones: ContactOutResult) -> ContactOutResult:
-    merged_phones = list(base.phones or [])
-    for phone in phones.phones or []:
-        key = f"{phone.get('source')}:{phone.get('number')}"
-        if not any(f"{p.get('source')}:{p.get('number')}" == key for p in merged_phones):
-            merged_phones.append(phone)
+    from src.contact_phones import merge_sourced_phones
 
+    merged_phones = merge_sourced_phones(base.phones, phones.phones)
     personal_phone = phones.personal_phone or base.personal_phone
     return replace(
         base,
@@ -134,6 +137,7 @@ class ContactOutApiClient:
     def __init__(self) -> None:
         self._api_key = os.environ.get("CONTACTOUT_API_KEY", "")
         self.credits_used = 0
+        self._context = default_context()
 
     @property
     def is_configured(self) -> bool:
@@ -150,6 +154,13 @@ class ContactOutApiClient:
         headers = _headers(self._api_key)
 
         try:
+            email_ctx = assert_paid_egress_allowed(
+                "contactout",
+                "people/linkedin",
+                context=self._context,
+                estimated_cost=1,
+                metadata={"profile": url, "kind": "email"},
+            )
             email_resp = requests.get(
                 CONTACTOUT_LINKEDIN_URL,
                 headers=headers,
@@ -165,6 +176,14 @@ class ContactOutApiClient:
                 return None
             email_resp.raise_for_status()
             base = _parse_payload(email_resp.json())
+            record_provider_usage(
+                "contactout",
+                "people/linkedin",
+                email_ctx,
+                records_returned=1,
+                estimated_cost=1,
+                metadata={"profile": url, "kind": "email"},
+            )
             if base.phone_api_locked:
                 logger.warning(
                     "ContactOut API placeholder response for %s — check plan/credits",
@@ -172,6 +191,13 @@ class ContactOutApiClient:
                 )
                 return ContactOutResult(phone_api_locked=True)
 
+            phone_ctx = assert_paid_egress_allowed(
+                "contactout",
+                "people/linkedin",
+                context=self._context,
+                estimated_cost=1,
+                metadata={"profile": url, "kind": "phone"},
+            )
             phone_resp = requests.get(
                 CONTACTOUT_LINKEDIN_URL,
                 headers=headers,
@@ -188,6 +214,14 @@ class ContactOutApiClient:
 
             phone_resp.raise_for_status()
             phone_result = _parse_payload(phone_resp.json())
+            record_provider_usage(
+                "contactout",
+                "people/linkedin",
+                phone_ctx,
+                records_returned=1,
+                estimated_cost=1,
+                metadata={"profile": url, "kind": "phone"},
+            )
             if phone_result.phone_api_locked:
                 logger.info("ContactOut API phone credits unavailable for %s — emails only", url)
                 self.credits_used += base.credits_used
@@ -197,6 +231,9 @@ class ContactOutApiClient:
             self.credits_used += merged.credits_used
             if merged.personal_email or merged.phones or merged.work_emails:
                 return merged
+        except PaidEgressBlocked as exc:
+            logger.warning("%s", exc)
+            return None
         except requests.RequestException as exc:
             detail = ""
             if hasattr(exc, "response") and exc.response is not None:

@@ -9,6 +9,12 @@ from typing import Any
 import requests
 
 from src.models import CompanyRecord, DomainConfidence
+from src.paid_egress import (
+    PaidEgressBlocked,
+    assert_paid_egress_allowed,
+    default_context,
+    record_provider_usage,
+)
 
 LISTING_PSEUDO_PREFIX = "(Listing)"
 
@@ -77,13 +83,20 @@ def _parse_org(org: dict[str, Any]) -> OrgLookupResult:
     )
 
 
-def _search_org(company_name: str) -> OrgLookupResult:
+def _search_org(company_name: str, context: str | None = None) -> OrgLookupResult:
     api_key = os.environ.get("APOLLO_API_KEY")
     if not api_key:
         guess = _guess_domain(company_name)
         return OrgLookupResult(guess, DomainConfidence.LOW)
 
     try:
+        ctx = assert_paid_egress_allowed(
+            "apollo",
+            "organizations/search",
+            context=context,
+            estimated_cost=1,
+            metadata={"company_name": company_name},
+        )
         # organizations/search returns industry; mixed_companies/search does not.
         resp = requests.post(
             f"{APOLLO_BASE}/organizations/search",
@@ -98,10 +111,20 @@ def _search_org(company_name: str) -> OrgLookupResult:
         resp.raise_for_status()
         data = resp.json()
         orgs: list[dict[str, Any]] = data.get("organizations") or []
+        record_provider_usage(
+            "apollo",
+            "organizations/search",
+            ctx,
+            records_returned=len(orgs),
+            estimated_cost=1,
+            metadata={"company_name": company_name},
+        )
         if orgs:
             parsed = _parse_org(orgs[0])
             if parsed.domain or parsed.industry:
                 return parsed
+    except PaidEgressBlocked:
+        raise
     except requests.RequestException as exc:
         logger.warning("Apollo org search failed for '%s': %s", company_name, exc)
 
@@ -109,7 +132,11 @@ def _search_org(company_name: str) -> OrgLookupResult:
     return OrgLookupResult(guess, DomainConfidence.LOW)
 
 
-def resolve_domains(companies: list[CompanyRecord]) -> list[CompanyRecord]:
+def resolve_domains(
+    companies: list[CompanyRecord],
+    context: str | None = None,
+) -> list[CompanyRecord]:
+    ctx = context or default_context()
     for company in companies:
         if is_listing_pseudo_company(company.name):
             logger.info("Skipping org lookup for listing pseudo-company '%s'", company.name)
@@ -120,7 +147,7 @@ def resolve_domains(companies: list[CompanyRecord]) -> list[CompanyRecord]:
         if has_domain and has_employees and has_industry:
             continue
 
-        lookup = _search_org(company.name)
+        lookup = _search_org(company.name, context=ctx)
         if not company.domain and lookup.domain:
             company.domain = lookup.domain
             company.domain_confidence = lookup.confidence

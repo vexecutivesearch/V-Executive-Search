@@ -1,4 +1,7 @@
-import { enrichFromContactOut } from "@/lib/contactout-enrich";
+import { eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { pipelineSettings } from "@/lib/db/schema";
+import { getOrCreateSettings } from "@/lib/pipeline-config";
 
 let cachedApiKey: string | null = null;
 let creditsAvailable: boolean | null = null;
@@ -10,35 +13,40 @@ function syncCacheForApiKey(apiKey: string): void {
   }
 }
 
-/** Probe ContactOut once per process + API key; cache when API returns sample/locked responses. */
+/** Avoid burning ContactOut credits on probe calls — mark exhausted only after a locked response. */
 export async function isContactOutCreditsAvailable(
   apiKey: string,
-  sampleLinkedIn?: string | null,
+  _sampleLinkedIn?: string | null,
 ): Promise<boolean> {
   syncCacheForApiKey(apiKey);
   if (creditsAvailable !== null) return creditsAvailable;
-  if (!apiKey) {
-    creditsAvailable = false;
-    return false;
+  const settings = await getOrCreateSettings();
+  if (settings.contactoutCreditsExhaustedAt) {
+    const exhaustedMs = settings.contactoutCreditsExhaustedAt.getTime();
+    const lockedForMs = Date.now() - exhaustedMs;
+    if (lockedForMs < 24 * 60 * 60 * 1000) {
+      creditsAvailable = false;
+      return creditsAvailable;
+    }
   }
-  if (!sampleLinkedIn) {
-    return true;
-  }
-
-  const probe = await enrichFromContactOut(sampleLinkedIn, apiKey);
-  if (probe?.phoneApiLocked) {
-    creditsAvailable = false;
-    return false;
-  }
-
-  creditsAvailable = true;
-  return true;
+  creditsAvailable = Boolean(apiKey);
+  return creditsAvailable;
 }
 
-export function markContactOutCreditsExhausted(): void {
+export async function markContactOutCreditsExhausted(): Promise<void> {
   creditsAvailable = false;
+  const settings = await getOrCreateSettings();
+  await db
+    .update(pipelineSettings)
+    .set({ contactoutCreditsExhaustedAt: new Date(), updatedAt: new Date() })
+    .where(eq(pipelineSettings.id, settings.id));
 }
 
-export function resetContactOutCreditsCache(): void {
+export async function resetContactOutCreditsCache(): Promise<void> {
   creditsAvailable = null;
+  const settings = await getOrCreateSettings();
+  await db
+    .update(pipelineSettings)
+    .set({ contactoutCreditsExhaustedAt: null, updatedAt: new Date() })
+    .where(eq(pipelineSettings.id, settings.id));
 }

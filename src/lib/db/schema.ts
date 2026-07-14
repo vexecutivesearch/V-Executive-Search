@@ -76,13 +76,21 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   /** Decision-maker titles for Apollo/ContactOut — not scrape search terms. */
   contactTitles: jsonb("contact_titles").$type<string[]>().default([]),
   runRequestedAt: timestamp("run_requested_at"),
+  runClaimedAt: timestamp("run_claimed_at"),
   contactoutSyncRequestedAt: timestamp("contactout_sync_requested_at"),
+  contactoutCreditsExhaustedAt: timestamp("contactout_credits_exhausted_at"),
   imessageCheckRequestedAt: timestamp("imessage_check_requested_at"),
   dailyEnrichQuota: integer("daily_enrich_quota").default(25).notNull(),
   minScoreForEnrich: integer("min_score_for_enrich").default(60).notNull(),
   minScoreForPhone: integer("min_score_for_phone").default(75).notNull(),
   lastRunAt: timestamp("last_run_at"),
   workerLastSeenAt: timestamp("worker_last_seen_at"),
+  workerCommitSha: text("worker_commit_sha"),
+  workerBranch: text("worker_branch"),
+  workerDirty: boolean("worker_dirty").default(false),
+  workerAgentSummary: text("worker_agent_summary"),
+  workerStatusPayload: jsonb("worker_status_payload").$type<Record<string, unknown>>(),
+  workerStatusAt: timestamp("worker_status_at"),
   missedRunAlertSlot: text("missed_run_alert_slot"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -190,6 +198,25 @@ export const contacts = pgTable("contacts", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const providerUsageEvents = pgTable("provider_usage_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  provider: text("provider").notNull(),
+  endpoint: text("endpoint").notNull(),
+  egressContext: text("egress_context").notNull(),
+  triggerSource: text("trigger_source").notNull(),
+  companyId: uuid("company_id").references(() => companies.id, {
+    onDelete: "set null",
+  }),
+  contactId: uuid("contact_id").references(() => contacts.id, {
+    onDelete: "set null",
+  }),
+  recordsReturned: integer("records_returned").default(0).notNull(),
+  estimatedCost: integer("estimated_cost").default(0).notNull(),
+  blocked: boolean("blocked").default(false).notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const jobListings = pgTable("job_listings", {
   id: uuid("id").defaultRandom().primaryKey(),
   companyId: uuid("company_id")
@@ -239,6 +266,7 @@ export type JobListing = typeof jobListings.$inferSelect;
 export type CompanyActivity = typeof companyActivities.$inferSelect;
 export type ActivityType = (typeof activityTypeEnum.enumValues)[number];
 export type DailyRun = typeof dailyRuns.$inferSelect;
+export type ProviderUsageEvent = typeof providerUsageEvents.$inferSelect;
 export type PipelineSettings = typeof pipelineSettings.$inferSelect;
 export type SearchProfile = typeof searchProfiles.$inferSelect;
 export type CompanyStatus = (typeof companyStatusEnum.enumValues)[number];

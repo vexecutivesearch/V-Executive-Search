@@ -21,6 +21,12 @@ from src.location import (
     person_matches_location,
 )
 from src.models import CompanyRecord, ContactRecord, EnrichedCompany
+from src.paid_egress import (
+    PaidEgressBlocked,
+    assert_paid_egress_allowed,
+    default_context,
+    record_provider_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +99,7 @@ class ApolloProvider:
     def __init__(self) -> None:
         self._credits_used = 0
         self._api_key = os.environ.get("APOLLO_API_KEY", "")
+        self._context = default_context()
 
     @property
     def credits_used(self) -> int:
@@ -139,6 +146,13 @@ class ApolloProvider:
             payload["person_locations"] = person_locations
 
         try:
+            ctx = assert_paid_egress_allowed(
+                "apollo",
+                "mixed_people/api_search",
+                context=self._context,
+                estimated_cost=1,
+                metadata={"domain": domain, "person_locations": person_locations},
+            )
             resp = requests.post(
                 f"{APOLLO_BASE}/mixed_people/api_search",
                 headers=self._headers(),
@@ -148,6 +162,15 @@ class ApolloProvider:
             resp.raise_for_status()
             data = resp.json()
             people = data.get("people") or []
+            record_provider_usage(
+                "apollo",
+                "mixed_people/api_search",
+                ctx,
+                records_returned=len(people),
+                estimated_cost=1,
+                metadata={"domain": domain, "person_locations": person_locations},
+            )
+            self._credits_used += 1
             if person_locations:
                 logger.info(
                     "Apollo location search (%s): %d candidates for %s",
@@ -156,6 +179,9 @@ class ApolloProvider:
                     domain,
                 )
             return people
+        except PaidEgressBlocked as exc:
+            logger.warning("%s", exc)
+            return []
         except requests.RequestException as exc:
             logger.error("Apollo people search failed for %s: %s", domain, exc)
             return []
@@ -188,6 +214,14 @@ class ApolloProvider:
                 params["webhook_url"] = webhook
 
         try:
+            estimated_cost = PHONE_CREDIT_COST if enrich_phone else EMAIL_CREDIT_COST
+            ctx = assert_paid_egress_allowed(
+                "apollo",
+                "people/match",
+                context=self._context,
+                estimated_cost=estimated_cost,
+                metadata={"person_id": person_id, "enrich_phone": enrich_phone},
+            )
             resp = requests.post(
                 f"{APOLLO_BASE}/people/match?{urlencode(params)}",
                 headers=self._headers(),
@@ -197,6 +231,14 @@ class ApolloProvider:
             resp.raise_for_status()
             data = resp.json()
             person = data.get("person")
+            record_provider_usage(
+                "apollo",
+                "people/match",
+                ctx,
+                records_returned=1 if person else 0,
+                estimated_cost=estimated_cost,
+                metadata={"person_id": person_id, "enrich_phone": enrich_phone},
+            )
             if person:
                 self._credits_used += EMAIL_CREDIT_COST
                 if enrich_phone and params.get("reveal_phone_number"):
@@ -206,6 +248,9 @@ class ApolloProvider:
                         person_id,
                     )
             return person
+        except PaidEgressBlocked as exc:
+            logger.warning("%s", exc)
+            return None
         except requests.RequestException as exc:
             detail = ""
             if hasattr(exc, "response") and exc.response is not None:

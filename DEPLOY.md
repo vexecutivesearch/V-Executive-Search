@@ -63,20 +63,21 @@ Use this guide when standing up a **new Vercel environment**, **new Neon databas
 
 ## Daily pipeline (JIT enrichment — Eastern Time)
 
-The worker runs **staged jobs twice daily** (6 AM and 6 PM scrape) instead of enriching every net-new company:
+The worker runs **staged free jobs twice daily** (6 AM and 6 PM scrape) instead of enriching every net-new company:
 
 | Time (ET) | Job | Credits |
 |-----------|-----|---------|
 | 06:00 | Scrape → `jobs_only` ingest (+ LinkedIn posters) | Free |
 | 06:15 | Archive stale listings | Free |
 | 06:30 | Rescore backlog | Free |
-| 07:00 | Enrich top-N call sheet (default N=25) | Paid |
 | 07:30 | iMessage + email MX presence checks | Free |
 | 07:45 | Build + send ranked call sheet email | Free |
 | 18:00 | Evening scrape → `jobs_only` ingest (+ LinkedIn posters) | Free |
 | 18:30 | Evening rescore backlog | Free |
 
-Admin **Run now** (5-min poll) runs scrape → rescore → enrich top-N — not enrich-all.
+Admin **Run now** (5-min poll) runs scrape-only/jobs-only ingest by default.
+Apollo and ContactOut paid egress are manual-only and require a per-company
+manual enrich context.
 
 Configure **N** and score thresholds in `/admin` → Enrichment quotas.
 
@@ -196,7 +197,13 @@ launchctl list | grep vexecsearch
 
 | Agent | Schedule |
 |-------|----------|
-| `com.vexecsearch.daily` | 6:00 AM & 6:00 PM |
+| `com.vexecsearch.scrape` | 6:00 AM |
+| `com.vexecsearch.hygiene` | 6:15 AM |
+| `com.vexecsearch.rescore` | 6:30 AM |
+| `com.vexecsearch.presence` | 7:30 AM |
+| `com.vexecsearch.email` | 7:45 AM |
+| `com.vexecsearch.scrape-pm` | 6:00 PM |
+| `com.vexecsearch.rescore-pm` | 6:30 PM |
 | `com.vexecsearch.poll` | Every 5 minutes |
 
 ---
