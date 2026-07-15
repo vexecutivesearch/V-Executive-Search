@@ -51,6 +51,7 @@ TMP_CHECKOUT="${RELEASE_CHECKOUT}.tmp-${TARGET_SHA:0:12}"
 
 echo "→ Preparing clean release checkout: $RELEASE_CHECKOUT @ $TARGET_SHA"
 git -C "$SOURCE_REPO_ROOT" worktree prune
+git -C "$SOURCE_REPO_ROOT" worktree remove --force "$TMP_CHECKOUT" 2>/dev/null || true
 rm -rf "$TMP_CHECKOUT"
 git -C "$SOURCE_REPO_ROOT" worktree add --detach "$TMP_CHECKOUT" "$TARGET_SHA"
 
