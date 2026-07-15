@@ -30,10 +30,15 @@ function workerDriftStatus(settings: Awaited<ReturnType<typeof getOrCreateSettin
 
   if (!settings.workerCommitSha) reasons.push("unknown_sha");
   if (settings.workerDirty) reasons.push("dirty_worktree");
+  const commitMatchesExpected =
+    Boolean(expectedSha) &&
+    Boolean(settings.workerCommitSha) &&
+    settings.workerCommitSha === expectedSha;
   if (
     expectedBranch &&
     settings.workerBranch &&
-    settings.workerBranch !== expectedBranch
+    settings.workerBranch !== expectedBranch &&
+    !(settings.workerBranch === "HEAD" && commitMatchesExpected)
   ) {
     reasons.push(`branch:${settings.workerBranch}`);
   }
