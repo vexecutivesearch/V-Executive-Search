@@ -9,8 +9,6 @@ import sys
 from email.mime.text import MIMEText
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 # Allow running as `python scripts/run_daily.py` from worker/
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
@@ -18,7 +16,9 @@ sys.path.insert(0, str(WORKER_ROOT))
 from src.caffeinate_guard import prevent_sleep  # noqa: E402
 from src.crm_client import CRMClient  # noqa: E402
 from src.crm_config import post_pipeline_status  # noqa: E402
+from src.env_loader import load_worker_env  # noqa: E402
 from src.pipeline import LOG_DIR, run_pipeline  # noqa: E402
+from src.worker_self_sync import ensure_worker_release, self_sync_enabled  # noqa: E402
 from src.worker_identity import worker_status_payload  # noqa: E402
 
 
@@ -181,7 +181,7 @@ def main() -> int:
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
-    load_dotenv(WORKER_ROOT / ".env")
+    load_worker_env()
 
     from datetime import date
 
@@ -205,6 +205,13 @@ def main() -> int:
 
     log_path = setup_logging(run_date_str, args.verbose, mode_suffix)
     logger = logging.getLogger(__name__)
+
+    if self_sync_enabled() and not ensure_worker_release(logger):
+        send_failure_alert(
+            "Worker self-sync failed or installed a new promoted release; "
+            "scheduled run skipped to avoid stale or half-updated code."
+        )
+        return 1
 
     with prevent_sleep():
         try:

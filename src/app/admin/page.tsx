@@ -3,6 +3,7 @@ import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { AdminDashboard } from "@/components/admin/AdminDashboard";
 import { getAllSearchProfiles, getOrCreateSettings } from "@/lib/pipeline-config";
 import { getTodayFilterOptions } from "@/lib/filter-options";
+import { getAllStateGeoConfigs } from "@/lib/state-geo-config-store";
 
 export const dynamic = "force-dynamic";
 
@@ -14,12 +15,14 @@ export default async function AdminPage() {
   const settings = await getOrCreateSettings();
   const profiles = await getAllSearchProfiles();
   const filterOptions = await getTodayFilterOptions();
+  const geoConfigs = await getAllStateGeoConfigs();
 
   return (
     <AdminDashboard
       settings={settings}
       profiles={profiles}
       filterOptions={filterOptions}
+      geoConfigs={geoConfigs}
     />
   );
 }

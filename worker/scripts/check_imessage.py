@@ -17,10 +17,11 @@ import time
 from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
 
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
+
+from src.env_loader import load_worker_env  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ def run_imessage_checks(*, limit: int = 50, delay: float = 2.0) -> int:
         logger.info("Skipping iMessage checks (not macOS)")
         return 0
 
-    load_dotenv(WORKER_ROOT / ".env")
+    load_worker_env()
     base_url = os.environ.get("CRM_API_URL", "")
     api_key = os.environ.get("CRM_API_KEY", "")
     if not base_url or not api_key:

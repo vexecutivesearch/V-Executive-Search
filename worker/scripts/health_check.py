@@ -8,12 +8,13 @@ import sys
 from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
 
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
 
-load_dotenv(WORKER_ROOT / ".env")
+from src.env_loader import load_worker_env  # noqa: E402
+
+load_worker_env()
 from src.paid_egress import PaidEgressBlocked, assert_paid_egress_allowed  # noqa: E402
 
 PASS = 0

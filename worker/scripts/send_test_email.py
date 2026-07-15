@@ -9,11 +9,13 @@ import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
-load_dotenv(WORKER_ROOT / ".env")
+
+from dotenv import load_dotenv
+from src.env_loader import load_worker_env  # noqa: E402
+
+load_worker_env()
 load_dotenv(WORKER_ROOT.parent / ".env.local", override=False)
 
 from src.config_loader import load_config  # noqa: E402

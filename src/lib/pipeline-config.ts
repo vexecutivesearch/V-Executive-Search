@@ -3,12 +3,15 @@ import { db } from "@/lib/db";
 import { pipelineSettings, searchProfiles } from "@/lib/db/schema";
 import { TARGET_TITLES } from "@/lib/enrichment-config";
 import { DEFAULT_JOB_BOARDS, resolveJobBoards } from "@/lib/job-boards";
-import {
-  DEFAULT_WPB_METRO_ALIASES,
-  DEFAULT_WPB_METRO_CITIES,
-} from "@/lib/metro-defaults";
 import { backfillLinkedinDistanceDefaults } from "@/lib/search-profile-defaults";
 import { SUGGESTED_FOCUS_KEYWORDS } from "@/lib/scrape-keyword-suggestions";
+import {
+  getDefaultGeoSelection,
+  getStateAbbreviation,
+  getStateGeoConfig,
+  type StateGeoConfig,
+} from "@/lib/state-geo-config";
+import { getStateGeoConfigForState } from "@/lib/state-geo-config-store";
 
 /**
  * Broad geo hiring signals for JobSpy/SerpAPI — not contact titles.
@@ -97,6 +100,12 @@ export type GeoZone = {
   label: string;
   location: string;
   googleSuffix: string;
+};
+
+export type PipelineSettingsWithGeoConfig = Awaited<
+  ReturnType<typeof getOrCreateSettings>
+> & {
+  stateGeoConfig?: StateGeoConfig | null;
 };
 
 function normalizeList(values: string[] | null | undefined): string[] {
@@ -202,6 +211,7 @@ export async function backfillMissingDefaultSearchProfiles(): Promise<number> {
 
 export async function getOrCreateSettings() {
   let [settings] = await db.select().from(pipelineSettings).limit(1);
+  const floridaDefaults = getDefaultGeoSelection("Florida");
 
   if (!settings) {
     [settings] = await db
@@ -210,20 +220,22 @@ export async function getOrCreateSettings() {
         geographicScope: "city",
         focusState: "Florida",
         focusCity: "West Palm Beach",
-        focusCities: ["West Palm Beach"],
-        metroCities: [...DEFAULT_WPB_METRO_CITIES],
-        metroAliases: [...DEFAULT_WPB_METRO_ALIASES],
+        focusCities: floridaDefaults.focusCities,
+        focusCounties: floridaDefaults.focusCounties,
+        metroCities: floridaDefaults.metroCities,
+        metroAliases: floridaDefaults.metroAliases,
         notificationEmail: "hello@proventheory.co",
         jobBoards: [...DEFAULT_JOB_BOARDS],
         contactTitles: [...TARGET_TITLES],
       })
       .returning();
   } else if (!normalizeList(settings.metroCities).length) {
+    const defaults = getDefaultGeoSelection(settings.focusState ?? "Florida");
     [settings] = await db
       .update(pipelineSettings)
       .set({
-        metroCities: [...DEFAULT_WPB_METRO_CITIES],
-        metroAliases: [...DEFAULT_WPB_METRO_ALIASES],
+        metroCities: defaults.metroCities,
+        metroAliases: defaults.metroAliases,
         updatedAt: new Date(),
       })
       .where(eq(pipelineSettings.id, settings.id))
@@ -289,9 +301,11 @@ export async function getAllSearchProfiles() {
 
 /** Build geographic zones from settings (multi-select geofence). */
 export function buildGeoZones(
-  settings: Awaited<ReturnType<typeof getOrCreateSettings>>,
+  settings: PipelineSettingsWithGeoConfig,
+  stateGeoConfig: StateGeoConfig = getStateGeoConfig(settings.focusState),
 ): GeoZone[] {
   const state = settings.focusState || "Florida";
+  const config = settings.stateGeoConfig ?? stateGeoConfig;
   const zones: GeoZone[] = [];
 
   if (settings.geographicScope === "national") {
@@ -318,7 +332,7 @@ export function buildGeoZones(
     const list = counties.length ? counties : legacy ? [legacy] : [];
 
     for (const county of list) {
-      const loc = formatBoardLocation(`${county} County`, state);
+      const loc = formatBoardLocation(`${county} County`, state, config);
       zones.push({
         label: loc,
         location: loc,
@@ -343,13 +357,14 @@ export function buildGeoZones(
   const focus = normalizeList(settings.focusCities);
   const legacyCity = settings.focusCity?.trim();
   const metro = normalizeList(settings.metroCities);
+  const defaults = getDefaultGeoSelection(state, legacyCity, [config]);
   const focusList = focus.length
     ? focus
     : legacyCity
       ? [legacyCity]
       : metro.length
         ? [metro[0]]
-        : ["West Palm Beach"];
+        : defaults.focusCities;
   const ordered: string[] = [];
   for (const city of [...focusList, ...metro]) {
     const key = city.trim().toLowerCase();
@@ -360,7 +375,7 @@ export function buildGeoZones(
   const list = ordered.slice(0, MAX_SCRAPE_CITY_ZONES);
 
   for (const city of list) {
-    const loc = formatBoardLocation(city, state);
+    const loc = formatBoardLocation(city, state, config);
     zones.push({
       label: loc,
       location: loc,
@@ -372,18 +387,18 @@ export function buildGeoZones(
 }
 
 /** USPS-style place for JobSpy / Google NL ("West Palm Beach, FL"). */
-const STATE_ABBR: Record<string, string> = {
-  Florida: "FL",
-  florida: "FL",
-  FL: "FL",
-  fl: "FL",
-};
-
-export function formatBoardLocation(cityOrPlace: string, state: string): string {
-  const place = cityOrPlace.trim().replace(/,?\s*(FL|Florida)\s*$/i, "");
-  const abbr =
-    STATE_ABBR[state.trim()] ??
-    (state.trim().length === 2 ? state.trim().toUpperCase() : state.trim());
+export function formatBoardLocation(
+  cityOrPlace: string,
+  state: string,
+  stateGeoConfig?: StateGeoConfig | null,
+): string {
+  const abbr = getStateAbbreviation(
+    state,
+    stateGeoConfig ? [stateGeoConfig] : undefined,
+  );
+  const place = cityOrPlace
+    .trim()
+    .replace(new RegExp(`,?\\s*(${abbr}|${state})\\s*$`, "i"), "");
   if (!place) return abbr;
   // Already "City, ST"
   if (/,\s*[A-Z]{2}$/i.test(place)) return place;
@@ -423,8 +438,9 @@ export function googleSearchTerm(
 
 export async function buildPipelineConfig() {
   const settings = await getOrCreateSettings();
+  const stateGeoConfig = await getStateGeoConfigForState(settings.focusState);
   const profiles = await getActiveSearchProfiles();
-  const zones = buildGeoZones(settings);
+  const zones = buildGeoZones(settings, stateGeoConfig);
 
   const targetTitles = normalizeContactTitles(settings.contactTitles);
   const targetSeniorities = ["c_suite", "vp", "head", "director"];
@@ -462,6 +478,7 @@ export async function buildPipelineConfig() {
       focus_counties: normalizeList(settings.focusCounties),
       metro_cities: normalizeList(settings.metroCities),
       metro_aliases: normalizeList(settings.metroAliases),
+      state_geo_config: stateGeoConfig,
       notification_email: settings.notificationEmail,
       geo_label: zones.map((z) => z.label).join("; "),
       job_boards: resolveJobBoards(settings.jobBoards),

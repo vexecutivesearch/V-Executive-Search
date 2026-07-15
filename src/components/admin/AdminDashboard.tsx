@@ -2,7 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { GeographicScope, PipelineSettings, SearchProfile } from "@/lib/db/schema";
+import type {
+  GeographicScope,
+  PipelineSettings,
+  SearchProfile,
+} from "@/lib/db/schema";
 import type { EmailReportPreferences } from "@/lib/email-report-preferences";
 import {
   normalizeEmailReportPreferences,
@@ -19,8 +23,13 @@ import {
   getMetroCitiesForState,
   US_STATES,
 } from "@/lib/locations";
-import { DEFAULT_WPB_METRO_ALIASES } from "@/lib/metro-defaults";
 import { SUGGESTED_FOCUS_KEYWORDS } from "@/lib/scrape-keyword-suggestions";
+import {
+  DEFAULT_STATE_GEO_CONFIGS,
+  getDefaultGeoSelection,
+  getStateGeoConfig,
+  type StateGeoConfig,
+} from "@/lib/state-geo-config";
 
 const SCOPES: { value: GeographicScope; label: string }[] = [
   { value: "national", label: "National (United States)" },
@@ -87,34 +96,45 @@ export function AdminDashboard({
   settings,
   profiles: initialProfiles,
   filterOptions,
+  geoConfigs = DEFAULT_STATE_GEO_CONFIGS,
 }: {
   settings: PipelineSettings;
   profiles: SearchProfile[];
   filterOptions: TodayFilterOptions;
+  geoConfigs?: StateGeoConfig[];
 }) {
   const router = useRouter();
+  const initialState = settings.focusState ?? "Florida";
+  const initialDefaults = getDefaultGeoSelection(initialState, null, geoConfigs);
   const initialCities =
     settings.focusCities?.length
       ? settings.focusCities
       : settings.focusCity
         ? [settings.focusCity]
-        : [];
+        : initialDefaults.focusCities;
   const initialCounties =
     settings.focusCounties?.length
       ? settings.focusCounties
       : settings.focusCounty
         ? [settings.focusCounty]
-        : [];
+        : initialDefaults.focusCounties;
 
   const initialMetro =
-    settings.metroCities?.length ? settings.metroCities : [];
+    settings.metroCities?.length
+      ? settings.metroCities
+      : initialDefaults.metroCities;
+  const initialAliases =
+    settings.metroAliases?.length
+      ? settings.metroAliases
+      : initialDefaults.metroAliases;
 
   const [form, setForm] = useState({
     geographic_scope: settings.geographicScope,
-    focus_state: settings.focusState ?? "Florida",
+    focus_state: initialState,
     focus_cities: initialCities,
     focus_counties: initialCounties,
     metro_cities: initialMetro,
+    metro_aliases: initialAliases,
     notification_email: settings.notificationEmail,
     job_boards: resolveJobBoards(settings.jobBoards),
     daily_enrich_quota: settings.dailyEnrichQuota ?? 25,
@@ -140,35 +160,85 @@ export function AdminDashboard({
   const [saving, setSaving] = useState(false);
 
   const workerPayload = settings.workerStatusPayload ?? {};
-  const workerOriginMainSha =
-    typeof workerPayload.origin_main_sha === "string"
-      ? workerPayload.origin_main_sha
+  const workerReleaseSha =
+    typeof workerPayload.worker_release_sha === "string"
+      ? workerPayload.worker_release_sha
       : null;
+  const workerReleaseRef =
+    typeof workerPayload.worker_release_ref === "string"
+      ? workerPayload.worker_release_ref
+      : "origin/worker-production";
   const workerDriftReasons = [
     !settings.workerCommitSha ? "unknown SHA" : null,
     settings.workerDirty ? "dirty worktree" : null,
-    settings.workerBranch && settings.workerBranch !== "main"
+    settings.workerBranch &&
+    workerReleaseRef.startsWith("origin/") &&
+    settings.workerBranch !== workerReleaseRef.replace(/^origin\//, "")
       ? `branch ${settings.workerBranch}`
       : null,
-    workerOriginMainSha &&
+    workerReleaseSha &&
     settings.workerCommitSha &&
-    workerOriginMainSha !== settings.workerCommitSha
-      ? "not at origin/main"
+    workerReleaseSha !== settings.workerCommitSha
+      ? `not at ${workerReleaseRef}`
       : null,
   ].filter(Boolean);
 
   const cityOptions = useMemo(
-    () => getCitiesForState(form.focus_state),
-    [form.focus_state],
+    () => getCitiesForState(form.focus_state, geoConfigs),
+    [form.focus_state, geoConfigs],
   );
   const metroOptions = useMemo(
-    () => getMetroCitiesForState(form.focus_state),
-    [form.focus_state],
+    () => getMetroCitiesForState(form.focus_state, geoConfigs),
+    [form.focus_state, geoConfigs],
   );
   const countyOptions = useMemo(
-    () => getCountiesForState(form.focus_state),
-    [form.focus_state],
+    () => getCountiesForState(form.focus_state, geoConfigs),
+    [form.focus_state, geoConfigs],
   );
+  const activeGeoConfig = useMemo(
+    () => getStateGeoConfig(form.focus_state, geoConfigs),
+    [form.focus_state, geoConfigs],
+  );
+
+  function applyStateDefaults(state: string) {
+    const defaults = getDefaultGeoSelection(state, null, geoConfigs);
+    setForm((prev) => ({
+      ...prev,
+      focus_state: state,
+      focus_cities: defaults.focusCities,
+      focus_counties: defaults.focusCounties,
+      metro_cities: defaults.metroCities,
+      metro_aliases: defaults.metroAliases,
+    }));
+  }
+
+  function applyFocusCities(focus_cities: string[]) {
+    if (!focus_cities.length) {
+      const defaults = getDefaultGeoSelection(form.focus_state, null, geoConfigs);
+      setForm({
+        ...form,
+        focus_cities: defaults.focusCities,
+        focus_counties: defaults.focusCounties,
+        metro_cities: defaults.metroCities,
+        metro_aliases: defaults.metroAliases,
+      });
+      return;
+    }
+
+    const primaryCity = focus_cities[0];
+    const defaults = getDefaultGeoSelection(
+      form.focus_state,
+      primaryCity,
+      geoConfigs,
+    );
+    setForm({
+      ...form,
+      focus_cities,
+      focus_counties: defaults.focusCounties,
+      metro_cities: defaults.metroCities,
+      metro_aliases: defaults.metroAliases,
+    });
+  }
 
   async function saveSettings() {
     if (form.job_boards.length === 0) {
@@ -373,10 +443,10 @@ export function AdminDashboard({
                 Agents: {settings.workerAgentSummary}
               </p>
             )}
-            {workerOriginMainSha && (
+            {workerReleaseSha && (
               <p className="text-xs text-gray-600 dark:text-gray-400">
-                origin/main:{" "}
-                <code className="text-[11px]">{workerOriginMainSha}</code>
+                {workerReleaseRef}:{" "}
+                <code className="text-[11px]">{workerReleaseSha}</code>
               </p>
             )}
             <p
@@ -388,7 +458,7 @@ export function AdminDashboard({
             >
               {workerDriftReasons.length
                 ? `Drift alarm: ${workerDriftReasons.join(", ")}`
-                : "Worker SHA matches origin/main and worktree is clean."}
+                : `Worker SHA matches ${workerReleaseRef} and worktree is clean.`}
             </p>
           </div>
           <p className="font-medium">LinkedIn hiring team (optional)</p>
@@ -443,14 +513,7 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
             State
             <select
               value={form.focus_state}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  focus_state: e.target.value,
-                  focus_cities: [],
-                  focus_counties: [],
-                })
-              }
+              onChange={(e) => applyStateDefaults(e.target.value)}
               className="mt-1 w-full border rounded-lg px-3 py-2 dark:bg-gray-900 dark:border-gray-700"
             >
               {US_STATES.map((state) => (
@@ -468,19 +531,23 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
               label="Cities (select all that apply)"
               options={cityOptions}
               selected={form.focus_cities}
-              onChange={(focus_cities) => setForm({ ...form, focus_cities })}
-              emptyHint="City dropdowns are available for Florida. Add more states in locations.ts as you expand."
+              onChange={applyFocusCities}
+              emptyHint="No city presets are configured for this state yet."
             />
             <MultiSelect
               label="Metro expansion cities (nearby scrape hubs + accept in ICP)"
               options={metroOptions}
               selected={form.metro_cities}
               onChange={(metro_cities) => setForm({ ...form, metro_cities })}
-              emptyHint="Metro list available for Florida WPB market."
+              emptyHint="No metro expansion presets are configured for this state yet."
             />
             <p className="text-xs text-gray-500">
               Focus cities scrape first; metro cities are added as nearby hubs
-              (capped). Also matches: {DEFAULT_WPB_METRO_ALIASES.join(", ")}
+              (capped). Also matches:{" "}
+              {(form.metro_aliases.length
+                ? form.metro_aliases
+                : activeGeoConfig.defaultMetroAliases
+              ).join(", ")}
             </p>
           </>
         )}
@@ -491,7 +558,7 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
             options={countyOptions}
             selected={form.focus_counties}
             onChange={(focus_counties) => setForm({ ...form, focus_counties })}
-            emptyHint="County dropdowns are available for Florida."
+            emptyHint="No county presets are configured for this state yet."
           />
         )}
 

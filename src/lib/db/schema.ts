@@ -95,6 +95,53 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+export const stateGeoConfigs = pgTable(
+  "state_geo_configs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    stateName: text("state_name").notNull(),
+    stateAbbr: text("state_abbr").notNull(),
+    cities: jsonb("cities").$type<string[]>().default([]).notNull(),
+    counties: jsonb("counties").$type<string[]>().default([]).notNull(),
+    defaultFocusCities: jsonb("default_focus_cities")
+      .$type<string[]>()
+      .default([])
+      .notNull(),
+    defaultFocusCounties: jsonb("default_focus_counties")
+      .$type<string[]>()
+      .default([])
+      .notNull(),
+    defaultMetroCities: jsonb("default_metro_cities")
+      .$type<string[]>()
+      .default([])
+      .notNull(),
+    defaultMetroAliases: jsonb("default_metro_aliases")
+      .$type<string[]>()
+      .default([])
+      .notNull(),
+    cityCountyMap: jsonb("city_county_map")
+      .$type<Record<string, string[]>>()
+      .default({})
+      .notNull(),
+    metroPresets: jsonb("metro_presets")
+      .$type<
+        Record<
+          string,
+          {
+            metroCities?: string[];
+            metroAliases?: string[];
+            focusCounties?: string[];
+          }
+        >
+      >()
+      .default({})
+      .notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("state_geo_configs_state_name_uq").on(table.stateName)],
+);
+
 export const searchProfiles = pgTable(
   "search_profiles",
   {
@@ -268,6 +315,7 @@ export type ActivityType = (typeof activityTypeEnum.enumValues)[number];
 export type DailyRun = typeof dailyRuns.$inferSelect;
 export type ProviderUsageEvent = typeof providerUsageEvents.$inferSelect;
 export type PipelineSettings = typeof pipelineSettings.$inferSelect;
+export type StateGeoConfigRow = typeof stateGeoConfigs.$inferSelect;
 export type SearchProfile = typeof searchProfiles.$inferSelect;
 export type CompanyStatus = (typeof companyStatusEnum.enumValues)[number];
 export type GeographicScope = (typeof geographicScopeEnum.enumValues)[number];

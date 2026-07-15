@@ -6,12 +6,8 @@ import logging
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
-
-load_dotenv(WORKER_ROOT / ".env")
 
 from src.caffeinate_guard import prevent_sleep  # noqa: E402
 from src.crm_config import (  # noqa: E402
@@ -19,13 +15,17 @@ from src.crm_config import (  # noqa: E402
     get_pipeline_status,
     post_pipeline_status,
 )
+from src.env_loader import load_worker_env  # noqa: E402
 from src.pipeline import run_pipeline  # noqa: E402
+from src.worker_self_sync import ensure_worker_release, self_sync_enabled  # noqa: E402
 from src.worker_identity import worker_status_payload  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+
+load_worker_env()
 
 
 def main() -> int:
@@ -74,6 +74,10 @@ def main() -> int:
     if not status.get("run_requested_at"):
         logging.info("No run requested — exiting")
         return 0
+
+    if self_sync_enabled() and not ensure_worker_release(logging.getLogger(__name__)):
+        logging.error("Run request skipped because worker self-sync did not complete")
+        return 1
 
     claim = claim_pipeline_run_request()
     if not claim.get("claimed"):

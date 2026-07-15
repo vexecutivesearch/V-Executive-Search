@@ -14,15 +14,27 @@ function runRequestTtlMs(): number {
 
 function workerDriftStatus(settings: Awaited<ReturnType<typeof getOrCreateSettings>>) {
   const payload = settings.workerStatusPayload ?? {};
-  const originMainSha =
-    typeof payload.origin_main_sha === "string" ? payload.origin_main_sha : null;
-  const expectedSha = process.env.WORKER_EXPECTED_SHA || originMainSha;
-  const expectedBranch = process.env.WORKER_EXPECTED_BRANCH || "main";
+  const releaseSha =
+    typeof payload.worker_release_sha === "string"
+      ? payload.worker_release_sha
+      : null;
+  const releaseRef =
+    typeof payload.worker_release_ref === "string"
+      ? payload.worker_release_ref
+      : "origin/worker-production";
+  const expectedSha = process.env.WORKER_EXPECTED_SHA || releaseSha;
+  const expectedBranch =
+    process.env.WORKER_EXPECTED_BRANCH ||
+    (releaseRef.startsWith("origin/") ? releaseRef.slice("origin/".length) : null);
   const reasons: string[] = [];
 
   if (!settings.workerCommitSha) reasons.push("unknown_sha");
   if (settings.workerDirty) reasons.push("dirty_worktree");
-  if (settings.workerBranch && settings.workerBranch !== expectedBranch) {
+  if (
+    expectedBranch &&
+    settings.workerBranch &&
+    settings.workerBranch !== expectedBranch
+  ) {
     reasons.push(`branch:${settings.workerBranch}`);
   }
   if (
@@ -38,6 +50,7 @@ function workerDriftStatus(settings: Awaited<ReturnType<typeof getOrCreateSettin
     reasons,
     expected_sha: expectedSha ?? null,
     expected_branch: expectedBranch,
+    expected_ref: releaseRef,
   };
 }
 

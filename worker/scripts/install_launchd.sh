@@ -3,7 +3,9 @@
 set -euo pipefail
 
 WORKER_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$WORKER_ROOT/.." && pwd)"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
+WORKER_ENV_FILE="${WORKER_ENV_FILE:-$HOME/.vsearch/worker.env}"
 EXPAT_LIB="${HOMEBREW_PREFIX:-/opt/homebrew}/opt/expat/lib"
 DYLD_EXPAT=""
 if [[ -d "$EXPAT_LIB" ]]; then
@@ -14,6 +16,25 @@ PYTHON="$WORKER_ROOT/.venv/bin/python"
 if [[ ! -x "$PYTHON" ]]; then
   echo "Missing venv at $PYTHON — run: cd worker && python3 -m venv .venv && pip install -e ."
   exit 1
+fi
+
+if [[ ! -f "$WORKER_ENV_FILE" ]]; then
+  echo "Missing canonical worker env at $WORKER_ENV_FILE"
+  echo "Create it from the current worker/.env before installing launchd."
+  exit 1
+fi
+
+if git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if [[ "${WORKER_ALLOW_DIRTY_INSTALL:-false}" != "true" ]]; then
+    dirty_tracked="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)"
+    if [[ -n "$dirty_tracked" ]]; then
+      echo "Refusing to install launchd from a checkout with tracked modifications:"
+      echo "$dirty_tracked"
+      echo ""
+      echo "Install from the clean release checkout, or set WORKER_ALLOW_DIRTY_INSTALL=true only for emergency containment."
+      exit 1
+    fi
+  fi
 fi
 
 mkdir -p "$WORKER_ROOT/logs" "$LAUNCH_AGENTS"
@@ -70,6 +91,8 @@ EOF
         <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
         <key>TZ</key>
         <string>America/New_York</string>
+        <key>WORKER_ENV_FILE</key>
+        <string>${WORKER_ENV_FILE}</string>
 EOF
   if [[ -n "$DYLD_EXPAT" ]]; then
     cat >> "$plist_path" <<EOF
@@ -123,6 +146,8 @@ write_interval_plist() {
         <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
         <key>TZ</key>
         <string>America/New_York</string>
+        <key>WORKER_ENV_FILE</key>
+        <string>${WORKER_ENV_FILE}</string>
 EOF
   if [[ -n "$DYLD_EXPAT" ]]; then
     cat >> "$plist_path" <<EOF

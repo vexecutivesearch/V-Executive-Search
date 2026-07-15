@@ -43,10 +43,13 @@ def _launchd_agents() -> str | None:
 
 def worker_status_payload() -> dict[str, Any]:
     status = _run_git("status", "--porcelain")
+    release_ref = _run_git("config", "--get", "vexecsearch.releaseRef") or "origin/worker-production"
     return {
         "commit_sha": _run_git("rev-parse", "HEAD"),
         "branch": _run_git("rev-parse", "--abbrev-ref", "HEAD"),
         "dirty": bool(status),
         "origin_main_sha": _run_git("rev-parse", "origin/main"),
+        "worker_release_ref": release_ref,
+        "worker_release_sha": _run_git("rev-parse", release_ref),
         "agent_summary": _launchd_agents(),
     }

@@ -11,11 +11,10 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
 
+from src.env_loader import load_worker_env  # noqa: E402
 from src.scrape import DEFAULT_BOARDS, normalize_boards  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -189,7 +188,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
-    load_dotenv(WORKER_ROOT / ".env")
+    load_worker_env()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     boards = [b.strip() for b in args.boards.split(",") if b.strip()]
