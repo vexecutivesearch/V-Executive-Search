@@ -168,12 +168,17 @@ export function AdminDashboard({
     typeof workerPayload.worker_release_ref === "string"
       ? workerPayload.worker_release_ref
       : "origin/worker-production";
+  const workerCommitMatchesRelease =
+    Boolean(workerReleaseSha) &&
+    Boolean(settings.workerCommitSha) &&
+    workerReleaseSha === settings.workerCommitSha;
   const workerDriftReasons = [
     !settings.workerCommitSha ? "unknown SHA" : null,
     settings.workerDirty ? "dirty worktree" : null,
     settings.workerBranch &&
     workerReleaseRef.startsWith("origin/") &&
-    settings.workerBranch !== workerReleaseRef.replace(/^origin\//, "")
+    settings.workerBranch !== workerReleaseRef.replace(/^origin\//, "") &&
+    !(settings.workerBranch === "HEAD" && workerCommitMatchesRelease)
       ? `branch ${settings.workerBranch}`
       : null,
     workerReleaseSha &&
