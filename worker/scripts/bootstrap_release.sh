@@ -9,6 +9,11 @@ RELEASE_CHECKOUT="${WORKER_RELEASE_CHECKOUT:-${SOURCE_REPO_ROOT}-release}"
 PREVIOUS_CHECKOUT="${WORKER_PREVIOUS_RELEASE_CHECKOUT:-${RELEASE_CHECKOUT}-previous}"
 RUNTIME_ENV_FILE="${WORKER_RUNTIME_ENV_FILE:-${WORKER_ENV_FILE:-$HOME/.vsearch/worker.env}}"
 BOOTSTRAP_PYTHON="${WORKER_BOOTSTRAP_PYTHON:-python3}"
+EXPAT_LIB="${HOMEBREW_PREFIX:-/opt/homebrew}/opt/expat/lib"
+PY_ENV=()
+if [[ -d "$EXPAT_LIB" ]]; then
+  PY_ENV=(env "DYLD_LIBRARY_PATH=${EXPAT_LIB}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}")
+fi
 LABELS=(
   com.vexecsearch.hygiene
   com.vexecsearch.scrape
@@ -66,9 +71,9 @@ echo "→ Copying worker runtime env"
 ln -s "$RUNTIME_ENV_FILE" "$TMP_CHECKOUT/worker/.env"
 
 echo "→ Creating release venv"
-"$BOOTSTRAP_PYTHON" -m venv "$TMP_CHECKOUT/worker/.venv"
-"$TMP_CHECKOUT/worker/.venv/bin/python" -m pip install -q --upgrade pip setuptools wheel
-"$TMP_CHECKOUT/worker/.venv/bin/python" -m pip install -q -e "$TMP_CHECKOUT/worker"
+"${PY_ENV[@]}" "$BOOTSTRAP_PYTHON" -m venv "$TMP_CHECKOUT/worker/.venv"
+"${PY_ENV[@]}" "$TMP_CHECKOUT/worker/.venv/bin/python" -m pip install -q --upgrade pip setuptools wheel
+"${PY_ENV[@]}" "$TMP_CHECKOUT/worker/.venv/bin/python" -m pip install -q -e "$TMP_CHECKOUT/worker"
 
 echo "→ Swapping release checkout"
 rm -rf "$PREVIOUS_CHECKOUT"

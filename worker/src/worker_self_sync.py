@@ -82,6 +82,15 @@ def _runtime_env_source() -> Path:
     return Path.home() / ".vsearch" / "worker.env"
 
 
+def _python_bootstrap_env() -> dict[str, str]:
+    expat_lib = Path(os.environ.get("HOMEBREW_PREFIX", "/opt/homebrew")) / "opt" / "expat" / "lib"
+    if not expat_lib.exists():
+        return {}
+    current = os.environ.get("DYLD_LIBRARY_PATH")
+    value = str(expat_lib) if not current else f"{expat_lib}:{current}"
+    return {"DYLD_LIBRARY_PATH": value}
+
+
 def _remove_path(path: Path) -> None:
     if not path.exists() and not path.is_symlink():
         return
@@ -131,13 +140,15 @@ def prepare_release_runtime(release_root: Path) -> None:
 
     venv_python = worker_root / ".venv" / "bin" / "python"
     bootstrap_python = os.environ.get("WORKER_BOOTSTRAP_PYTHON") or sys.executable
-    _run([bootstrap_python, "-m", "venv", str(worker_root / ".venv")], cwd=worker_root, timeout=180)
+    py_env = _python_bootstrap_env()
+    _run([bootstrap_python, "-m", "venv", str(worker_root / ".venv")], cwd=worker_root, timeout=180, env=py_env)
     _run(
         [str(venv_python), "-m", "pip", "install", "-q", "--upgrade", "pip", "setuptools", "wheel"],
         cwd=worker_root,
         timeout=300,
+        env=py_env,
     )
-    _run([str(venv_python), "-m", "pip", "install", "-q", "-e", "."], cwd=worker_root, timeout=300)
+    _run([str(venv_python), "-m", "pip", "install", "-q", "-e", "."], cwd=worker_root, timeout=300, env=py_env)
 
 
 def ensure_worker_release(logger: logging.Logger | None = None) -> bool:
