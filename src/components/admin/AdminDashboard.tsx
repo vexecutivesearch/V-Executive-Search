@@ -28,6 +28,7 @@ import {
   DEFAULT_STATE_GEO_CONFIGS,
   getDefaultGeoSelection,
   getStateGeoConfig,
+  normalizeGeoToken,
   type StateGeoConfig,
 } from "@/lib/state-geo-config";
 
@@ -90,6 +91,16 @@ function MultiSelect({
       )}
     </div>
   );
+}
+
+function listEquals(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const normalized = new Set(a.map(normalizeGeoToken));
+  return b.every((value) => normalized.has(normalizeGeoToken(value)));
+}
+
+function titleCaseGeoKey(value: string): string {
+  return value.replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 export function AdminDashboard({
@@ -204,6 +215,22 @@ export function AdminDashboard({
     () => getStateGeoConfig(form.focus_state, geoConfigs),
     [form.focus_state, geoConfigs],
   );
+  const marketOptions = useMemo(
+    () =>
+      Object.entries(activeGeoConfig.metroPresets).map(([key, preset]) => ({
+        key,
+        label: preset.marketName ?? titleCaseGeoKey(key),
+      })),
+    [activeGeoConfig],
+  );
+  const selectedMarketKey = useMemo(() => {
+    const match = Object.entries(activeGeoConfig.metroPresets).find(
+      ([, preset]) =>
+        listEquals(form.metro_cities, preset.metroCities ?? []) &&
+        listEquals(form.focus_counties, preset.focusCounties ?? []),
+    );
+    return match?.[0] ?? "";
+  }, [activeGeoConfig, form.focus_counties, form.metro_cities]);
 
   function applyStateDefaults(state: string) {
     const defaults = getDefaultGeoSelection(state, null, geoConfigs);
@@ -214,6 +241,18 @@ export function AdminDashboard({
       focus_counties: defaults.focusCounties,
       metro_cities: defaults.metroCities,
       metro_aliases: defaults.metroAliases,
+    }));
+  }
+
+  function applyMarketPreset(marketKey: string) {
+    const preset = activeGeoConfig.metroPresets[marketKey];
+    if (!preset) return;
+    setForm((prev) => ({
+      ...prev,
+      focus_cities: preset.metroCities[0] ? [preset.metroCities[0]] : [],
+      focus_counties: preset.focusCounties,
+      metro_cities: preset.metroCities,
+      metro_aliases: preset.metroAliases,
     }));
   }
 
@@ -527,6 +566,30 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
                 </option>
               ))}
             </select>
+          </label>
+        )}
+
+        {form.geographic_scope === "city" && marketOptions.length > 0 && (
+          <label className="block text-sm">
+            Market
+            <select
+              value={selectedMarketKey}
+              onChange={(e) => applyMarketPreset(e.target.value)}
+              className="mt-1 w-full border rounded-lg px-3 py-2 dark:bg-gray-900 dark:border-gray-700"
+            >
+              <option value="" disabled>
+                Custom selection
+              </option>
+              {marketOptions.map((market) => (
+                <option key={market.key} value={market.key}>
+                  {market.label}
+                </option>
+              ))}
+            </select>
+            <span className="mt-1 block text-xs text-gray-500">
+              Switching markets fully reloads focus cities, counties, scrape hubs,
+              and aliases for one active market.
+            </span>
           </label>
         )}
 

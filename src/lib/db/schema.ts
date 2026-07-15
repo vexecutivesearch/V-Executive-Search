@@ -128,6 +128,7 @@ export const stateGeoConfigs = pgTable(
         Record<
           string,
           {
+            marketName?: string;
             metroCities?: string[];
             metroAliases?: string[];
             focusCounties?: string[];

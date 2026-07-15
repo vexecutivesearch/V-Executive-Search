@@ -7,6 +7,16 @@ function norm(value: string): string {
   return normalizeMetroToken(value);
 }
 
+function splitCountyToken(
+  value: string,
+): { name: string; stateAbbr: string | null } {
+  const match = value.trim().match(/^(.*?),\s*([A-Z]{2})$/i);
+  return {
+    name: match ? match[1].trim() : value.trim(),
+    stateAbbr: match ? match[2].toUpperCase() : null,
+  };
+}
+
 /**
  * Florida city → county lookup for the WPB metro (Palm Beach + Broward).
  * Unknown cities return null — callers treat as location_unknown, not out-of-metro.
@@ -100,6 +110,12 @@ export function countyInFocus(
   county: string,
   accepted: readonly string[],
 ): boolean {
-  const c = norm(county);
-  return accepted.some((a) => norm(a) === c || c.includes(norm(a)));
+  const c = splitCountyToken(county);
+  const countyName = norm(c.name);
+  return accepted.some((acceptedCounty) => {
+    const a = splitCountyToken(acceptedCounty);
+    if (norm(a.name) !== countyName) return false;
+    if (!a.stateAbbr || !c.stateAbbr) return true;
+    return a.stateAbbr === c.stateAbbr;
+  });
 }

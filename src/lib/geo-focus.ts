@@ -77,15 +77,32 @@ export function getAcceptedCounties(settings: GeoFocusSettings): string[] {
   return [...stateGeoConfigForSettings(settings).defaultFocusCounties];
 }
 
+function splitCountyToken(
+  county: string,
+): { name: string; stateAbbr: string | null } {
+  const match = county.trim().match(/^(.*?),\s*([A-Z]{2})$/i);
+  return {
+    name: match ? match[1].trim() : county.trim(),
+    stateAbbr: match ? match[2].toUpperCase() : null,
+  };
+}
+
 function countyFromLocationString(
   location: string,
   config: StateGeoConfig,
+  parsed: NonNullable<ReturnType<typeof parseJobLocation>>,
 ): string | null {
   const loc = normalize(location);
   if (!loc) return null;
   for (const county of config.counties) {
-    const countyToken = normalize(county);
-    if (loc.includes(`${countyToken} county`) || loc.includes(countyToken)) {
+    const countyToken = splitCountyToken(county);
+    const countyName = normalize(countyToken.name);
+    const countyStateMatches =
+      !countyToken.stateAbbr ||
+      !parsed.stateAbbr ||
+      parsed.stateAbbr.toUpperCase() === countyToken.stateAbbr;
+    if (!countyStateMatches) continue;
+    if (loc.includes(`${countyName} county`)) {
       return county;
     }
   }
@@ -97,9 +114,9 @@ function resolveConfiguredCounty(
   location: string,
   config: StateGeoConfig,
 ): string[] {
-  const fromString = countyFromLocationString(location, config);
+  const fromString = countyFromLocationString(location, config, parsed);
   if (fromString) return [fromString];
-  return resolveCountyForCity(config, parsed.city);
+  return resolveCountyForCity(config, parsed.city, parsed.stateAbbr);
 }
 
 function matchesCountyFocus(

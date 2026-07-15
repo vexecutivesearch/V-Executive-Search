@@ -332,7 +332,7 @@ export function buildGeoZones(
     const list = counties.length ? counties : legacy ? [legacy] : [];
 
     for (const county of list) {
-      const loc = formatBoardLocation(`${county} County`, state, config);
+      const loc = formatCountyLocation(county, state, config);
       zones.push({
         label: loc,
         location: loc,
@@ -403,6 +403,16 @@ export function formatBoardLocation(
   // Already "City, ST"
   if (/,\s*[A-Z]{2}$/i.test(place)) return place;
   return `${place}, ${abbr}`;
+}
+
+function formatCountyLocation(
+  county: string,
+  state: string,
+  stateGeoConfig?: StateGeoConfig | null,
+): string {
+  const match = county.trim().match(/^(.*?),\s*([A-Z]{2})$/i);
+  if (match) return `${match[1].trim()} County, ${match[2].toUpperCase()}`;
+  return formatBoardLocation(`${county} County`, state, stateGeoConfig);
 }
 
 function googleRecencyPhrase(hoursOld: number): string {

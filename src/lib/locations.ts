@@ -79,7 +79,12 @@ export function getMetroCitiesForState(
   state: string,
   configs: readonly StateGeoConfig[] = DEFAULT_STATE_GEO_CONFIGS,
 ): string[] {
-  return [
-    ...(findStateGeoConfig(state, configs)?.defaultMetroCities ?? []),
-  ].sort((a, b) => a.localeCompare(b));
+  const config = findStateGeoConfig(state, configs);
+  const cities = [
+    ...(config?.defaultMetroCities ?? []),
+    ...Object.values(config?.metroPresets ?? {}).flatMap(
+      (preset) => preset.metroCities ?? [],
+    ),
+  ];
+  return [...new Set(cities)].sort((a, b) => a.localeCompare(b));
 }

@@ -4,6 +4,7 @@ import {
 } from "@/lib/metro-defaults";
 
 export type StateGeoMetroPreset = {
+  marketName?: string;
   metroCities: string[];
   metroAliases: string[];
   focusCounties: string[];
@@ -292,7 +293,16 @@ export function getDefaultGeoSelection(
 export function resolveCountyForCity(
   config: StateGeoConfig,
   city: string | null | undefined,
+  stateAbbr?: string | null,
 ): string[] {
   if (!city?.trim()) return [];
-  return config.cityCountyMap[norm(city)] ?? [];
+  const counties = config.cityCountyMap[norm(city)] ?? [];
+  const requestedState = stateAbbr?.trim().toUpperCase();
+  if (!requestedState || !counties.some((county) => /,\s*[A-Z]{2}$/i.test(county))) {
+    return counties;
+  }
+  return counties.filter((county) => {
+    const match = county.match(/,\s*([A-Z]{2})$/i);
+    return !match || match[1].toUpperCase() === requestedState;
+  });
 }

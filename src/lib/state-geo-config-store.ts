@@ -6,6 +6,33 @@ import {
   type StateGeoConfig,
   getStateGeoConfig,
 } from "@/lib/state-geo-config";
+import {
+  REVIEWABLE_STATE_GEO_EXPANSION,
+  toStateGeoConfig,
+} from "@/lib/state-geo-expanded-seed";
+
+const EXPANDED_STATE_GEO_CONFIGS = REVIEWABLE_STATE_GEO_EXPANSION.map((seed) =>
+  toStateGeoConfig(seed),
+);
+
+const SEED_STATE_GEO_CONFIGS = Array.from(
+  new Map(
+    [
+      ...DEFAULT_STATE_GEO_CONFIGS,
+      ...EXPANDED_STATE_GEO_CONFIGS,
+    ].map((config) => [config.stateName, config]),
+  ).values(),
+);
+
+const FALLBACK_STATE_GEO_CONFIGS = [
+  ...DEFAULT_STATE_GEO_CONFIGS,
+  ...EXPANDED_STATE_GEO_CONFIGS.filter(
+    (config) =>
+      !DEFAULT_STATE_GEO_CONFIGS.some(
+        (defaultConfig) => defaultConfig.stateName === config.stateName,
+      ),
+  ),
+];
 
 function rowToConfig(row: StateGeoConfigRow): StateGeoConfig {
   return {
@@ -22,6 +49,7 @@ function rowToConfig(row: StateGeoConfigRow): StateGeoConfig {
       Object.entries(row.metroPresets ?? {}).map(([key, preset]) => [
         key,
         {
+          marketName: preset.marketName,
           metroCities: preset.metroCities ?? [],
           metroAliases: preset.metroAliases ?? [],
           focusCounties: preset.focusCounties ?? [],
@@ -37,7 +65,7 @@ async function seedMissingStateGeoConfigs() {
     .from(stateGeoConfigs);
   const existingNames = new Set(existing.map((row) => row.stateName));
 
-  for (const config of DEFAULT_STATE_GEO_CONFIGS) {
+  for (const config of SEED_STATE_GEO_CONFIGS) {
     if (existingNames.has(config.stateName)) continue;
     await db.insert(stateGeoConfigs).values({
       stateName: config.stateName,
@@ -64,7 +92,7 @@ export async function getAllStateGeoConfigs(): Promise<StateGeoConfig[]> {
     return rows.map(rowToConfig);
   } catch (error) {
     console.warn("Falling back to built-in state geo configs", error);
-    return DEFAULT_STATE_GEO_CONFIGS;
+    return FALLBACK_STATE_GEO_CONFIGS;
   }
 }
 
@@ -82,5 +110,5 @@ export async function getStateGeoConfigForState(
   } catch (error) {
     console.warn("Falling back to built-in state geo config", error);
   }
-  return getStateGeoConfig(state);
+  return getStateGeoConfig(state, FALLBACK_STATE_GEO_CONFIGS);
 }
