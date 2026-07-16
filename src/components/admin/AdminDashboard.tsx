@@ -26,8 +26,8 @@ import {
 import { SUGGESTED_FOCUS_KEYWORDS } from "@/lib/scrape-keyword-suggestions";
 import {
   DEFAULT_STATE_GEO_CONFIGS,
+  findStateGeoConfig,
   getDefaultGeoSelection,
-  getStateGeoConfig,
   normalizeGeoToken,
   type StateGeoConfig,
 } from "@/lib/state-geo-config";
@@ -39,6 +39,38 @@ const SCOPES: { value: GeographicScope; label: string }[] = [
   { value: "county", label: "County" },
 ];
 
+type MultiSelectOption = {
+  value: string;
+  disabled?: boolean;
+};
+
+function toMultiSelectOptions(
+  values: string[],
+  available?: ReadonlySet<string>,
+): MultiSelectOption[] {
+  if (!available) {
+    return values.map((value) => ({ value }));
+  }
+  const availableNorm = new Set(
+    [...available].map((value) => normalizeGeoToken(value)),
+  );
+  return values.map((value) => ({
+    value,
+    disabled: !availableNorm.has(normalizeGeoToken(value)),
+  }));
+}
+
+function mergeSelectedIntoOptions(
+  options: MultiSelectOption[],
+  selected: string[],
+): MultiSelectOption[] {
+  const seen = new Set(options.map((option) => normalizeGeoToken(option.value)));
+  const extras = selected
+    .filter((value) => !seen.has(normalizeGeoToken(value)))
+    .map((value) => ({ value, disabled: true }));
+  return [...options, ...extras];
+}
+
 function MultiSelect({
   label,
   options,
@@ -47,14 +79,19 @@ function MultiSelect({
   emptyHint,
 }: {
   label: string;
-  options: string[];
+  options: MultiSelectOption[];
   selected: string[];
   onChange: (next: string[]) => void;
   emptyHint?: string;
 }) {
-  function toggle(value: string) {
+  const displayOptions = mergeSelectedIntoOptions(options, selected);
+
+  function toggle(value: string, disabled?: boolean) {
+    const isSelected = selected.includes(value);
+    // Allow clearing stale selections even when the option is unavailable.
+    if (disabled && !isSelected) return;
     onChange(
-      selected.includes(value)
+      isSelected
         ? selected.filter((v) => v !== value)
         : [...selected, value],
     );
@@ -68,23 +105,31 @@ function MultiSelect({
           Selected: {selected.join(", ")}
         </p>
       )}
-      {options.length === 0 ? (
+      {displayOptions.length === 0 ? (
         <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
           {emptyHint ?? "No predefined locations for this state yet."}
         </p>
       ) : (
         <div className="mt-2 max-h-48 overflow-y-auto border rounded-lg p-2 space-y-1 dark:border-gray-700">
-          {options.map((option) => (
+          {displayOptions.map((option) => (
             <label
-              key={option}
-              className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 dark:hover:bg-gray-900 cursor-pointer"
+              key={option.value}
+              className={`flex items-center gap-2 px-2 py-1 rounded ${
+                option.disabled
+                  ? "cursor-not-allowed opacity-45 text-gray-400 dark:text-gray-500"
+                  : "hover:bg-gray-50 dark:hover:bg-gray-900 cursor-pointer"
+              }`}
             >
               <input
                 type="checkbox"
-                checked={selected.includes(option)}
-                onChange={() => toggle(option)}
+                checked={selected.includes(option.value)}
+                disabled={option.disabled && !selected.includes(option.value)}
+                onChange={() => toggle(option.value, option.disabled)}
               />
-              <span>{option}</span>
+              <span>
+                {option.value}
+                {option.disabled ? " (unavailable)" : ""}
+              </span>
             </label>
           ))}
         </div>
@@ -211,19 +256,33 @@ export function AdminDashboard({
     () => getCountiesForState(form.focus_state, geoConfigs),
     [form.focus_state, geoConfigs],
   );
+  const configuredStateNames = useMemo(
+    () =>
+      new Set(
+        geoConfigs.map((config) => config.stateName).filter(Boolean),
+      ),
+    [geoConfigs],
+  );
+  const stateIsConfigured = useMemo(
+    () => Boolean(findStateGeoConfig(form.focus_state, geoConfigs)),
+    [form.focus_state, geoConfigs],
+  );
   const activeGeoConfig = useMemo(
-    () => getStateGeoConfig(form.focus_state, geoConfigs),
+    () => findStateGeoConfig(form.focus_state, geoConfigs),
     [form.focus_state, geoConfigs],
   );
   const marketOptions = useMemo(
     () =>
-      Object.entries(activeGeoConfig.metroPresets).map(([key, preset]) => ({
-        key,
-        label: preset.marketName ?? titleCaseGeoKey(key),
-      })),
+      Object.entries(activeGeoConfig?.metroPresets ?? {}).map(
+        ([key, preset]) => ({
+          key,
+          label: preset.marketName ?? titleCaseGeoKey(key),
+        }),
+      ),
     [activeGeoConfig],
   );
   const selectedMarketKey = useMemo(() => {
+    if (!activeGeoConfig) return "";
     const match = Object.entries(activeGeoConfig.metroPresets).find(
       ([, preset]) =>
         listEquals(form.metro_cities, preset.metroCities ?? []) &&
@@ -231,8 +290,31 @@ export function AdminDashboard({
     );
     return match?.[0] ?? "";
   }, [activeGeoConfig, form.focus_counties, form.metro_cities]);
+  const selectedMarketPreset = useMemo(() => {
+    if (!activeGeoConfig || !selectedMarketKey) return null;
+    return activeGeoConfig.metroPresets[selectedMarketKey] ?? null;
+  }, [activeGeoConfig, selectedMarketKey]);
+  const availableCityValues = useMemo(() => {
+    if (form.geographic_scope !== "city" || !selectedMarketPreset) {
+      return new Set(cityOptions);
+    }
+    return new Set(selectedMarketPreset.metroCities ?? []);
+  }, [cityOptions, form.geographic_scope, selectedMarketPreset]);
+  const availableMetroValues = useMemo(() => {
+    if (form.geographic_scope !== "city" || !selectedMarketPreset) {
+      return new Set(metroOptions);
+    }
+    return new Set(selectedMarketPreset.metroCities ?? []);
+  }, [form.geographic_scope, metroOptions, selectedMarketPreset]);
+  const availableCountyValues = useMemo(() => {
+    if (form.geographic_scope === "city" && selectedMarketPreset) {
+      return new Set(selectedMarketPreset.focusCounties ?? []);
+    }
+    return new Set(countyOptions);
+  }, [countyOptions, form.geographic_scope, selectedMarketPreset]);
 
   function applyStateDefaults(state: string) {
+    if (!findStateGeoConfig(state, geoConfigs)) return;
     const defaults = getDefaultGeoSelection(state, null, geoConfigs);
     setForm((prev) => ({
       ...prev,
@@ -245,7 +327,7 @@ export function AdminDashboard({
   }
 
   function applyMarketPreset(marketKey: string) {
-    const preset = activeGeoConfig.metroPresets[marketKey];
+    const preset = activeGeoConfig?.metroPresets[marketKey];
     if (!preset) return;
     setForm((prev) => ({
       ...prev,
@@ -530,7 +612,8 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
       <section className="border rounded-xl p-5 space-y-4 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Geographic focus</h2>
         <p className="text-sm text-gray-500">
-          Select one or more cities or counties to geofence your daily searches.
+          Only seeded markets are selectable. Other U.S. states, cities, and
+          counties stay visible but greyed out until geo coverage is added.
         </p>
         <label className="block text-sm">
           Scope
@@ -560,12 +643,21 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
               onChange={(e) => applyStateDefaults(e.target.value)}
               className="mt-1 w-full border rounded-lg px-3 py-2 dark:bg-gray-900 dark:border-gray-700"
             >
-              {US_STATES.map((state) => (
-                <option key={state} value={state}>
-                  {state}
-                </option>
-              ))}
+              {US_STATES.map((state) => {
+                const available = configuredStateNames.has(state);
+                return (
+                  <option key={state} value={state} disabled={!available}>
+                    {available ? state : `${state} (unavailable)`}
+                  </option>
+                );
+              })}
             </select>
+            {!stateIsConfigured && (
+              <span className="mt-1 block text-xs text-amber-700 dark:text-amber-300">
+                This state has no geo config yet. Pick a configured state to
+                continue.
+              </span>
+            )}
           </label>
         )}
 
@@ -588,7 +680,8 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
             </select>
             <span className="mt-1 block text-xs text-gray-500">
               Switching markets fully reloads focus cities, counties, scrape hubs,
-              and aliases for one active market.
+              and aliases for one active market. Cities and counties outside the
+              selected market are greyed out.
             </span>
           </label>
         )}
@@ -597,25 +690,33 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
           <>
             <MultiSelect
               label="Cities (select all that apply)"
-              options={cityOptions}
+              options={toMultiSelectOptions(cityOptions, availableCityValues)}
               selected={form.focus_cities}
               onChange={applyFocusCities}
-              emptyHint="No city presets are configured for this state yet."
+              emptyHint={
+                stateIsConfigured
+                  ? "No city presets are configured for this state yet."
+                  : "Select a configured state to load city presets."
+              }
             />
             <MultiSelect
               label="Metro expansion cities (nearby scrape hubs + accept in ICP)"
-              options={metroOptions}
+              options={toMultiSelectOptions(metroOptions, availableMetroValues)}
               selected={form.metro_cities}
               onChange={(metro_cities) => setForm({ ...form, metro_cities })}
-              emptyHint="No metro expansion presets are configured for this state yet."
+              emptyHint={
+                stateIsConfigured
+                  ? "No metro expansion presets are configured for this state yet."
+                  : "Select a configured state to load metro hubs."
+              }
             />
             <p className="text-xs text-gray-500">
               Focus cities scrape first; metro cities are added as nearby hubs
               (capped). Also matches:{" "}
               {(form.metro_aliases.length
                 ? form.metro_aliases
-                : activeGeoConfig.defaultMetroAliases
-              ).join(", ")}
+                : activeGeoConfig?.defaultMetroAliases ?? []
+              ).join(", ") || "—"}
             </p>
           </>
         )}
@@ -623,10 +724,14 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
         {form.geographic_scope === "county" && (
           <MultiSelect
             label="Counties (select all that apply)"
-            options={countyOptions}
+            options={toMultiSelectOptions(countyOptions, availableCountyValues)}
             selected={form.focus_counties}
             onChange={(focus_counties) => setForm({ ...form, focus_counties })}
-            emptyHint="No county presets are configured for this state yet."
+            emptyHint={
+              stateIsConfigured
+                ? "No county presets are configured for this state yet."
+                : "Select a configured state to load county presets."
+            }
           />
         )}
 
@@ -642,7 +747,7 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
 
         <button
           onClick={saveSettings}
-          disabled={saving}
+          disabled={saving || (form.geographic_scope !== "national" && !stateIsConfigured)}
           className="bg-gray-900 text-white dark:bg-white dark:text-gray-900 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
         >
           {saving ? "Saving…" : "Save settings"}
