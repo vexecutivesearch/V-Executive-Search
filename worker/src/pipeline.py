@@ -424,9 +424,11 @@ def _run_pipeline_impl(
         ])
         return result
 
+    ingest_ok = False
     if crm.is_configured and not skip_crm:
         payload = _build_jobs_only_payload(companies, result)
-        if not crm.ingest_batch(payload):
+        ingest_ok = crm.ingest_batch(payload)
+        if not ingest_ok:
             result.errors.append("CRM jobs-only ingest failed")
         else:
             rescore = crm.rescore_backlog()
@@ -435,9 +437,10 @@ def _run_pipeline_impl(
 
     if scrape_only:
         logger.info(
-            "Scrape-only complete — %d listings, %d companies ingested",
+            "Scrape-only complete — %d listings, %d companies%s",
             result.listings_scraped,
             result.companies_found,
+            " ingested" if ingest_ok else " (CRM ingest failed)",
         )
         return result
 
