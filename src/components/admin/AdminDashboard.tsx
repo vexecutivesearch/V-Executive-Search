@@ -79,12 +79,15 @@ function MultiSelect({
   emptyHint,
 }: {
   label: string;
-  options: MultiSelectOption[];
+  options: (MultiSelectOption | string)[];
   selected: string[];
   onChange: (next: string[]) => void;
   emptyHint?: string;
 }) {
-  const displayOptions = mergeSelectedIntoOptions(options, selected);
+  const normalizedOptions = options.map((option) =>
+    typeof option === "string" ? { value: option } : option,
+  );
+  const displayOptions = mergeSelectedIntoOptions(normalizedOptions, selected);
 
   function toggle(value: string, disabled?: boolean) {
     const isSelected = selected.includes(value);
