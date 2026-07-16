@@ -65,11 +65,11 @@ Use this guide when standing up a **new Vercel environment**, **new Neon databas
 
 ## Daily pipeline (JIT enrichment — Eastern Time)
 
-The worker runs **staged free jobs twice daily** (6 AM and 6 PM scrape) instead of enriching every net-new company:
+The worker runs **staged free jobs twice daily** (5 AM and 6 PM scrape) instead of enriching every net-new company:
 
 | Time (ET) | Job | Credits |
 |-----------|-----|---------|
-| 06:00 | Scrape → chunked `jobs_only` ingest (+ optional LinkedIn posters) | Free |
+| 05:00 | Scrape → chunked `jobs_only` ingest (+ optional LinkedIn posters) | Free |
 | 06:15 | Archive stale listings | Free |
 | 06:30 | Rescore backlog | Free |
 | 07:30 | iMessage + email MX presence checks | Free |
@@ -89,7 +89,7 @@ Configure **N** and score thresholds in `/admin` → Enrichment quotas.
 LinkedIn hiring-team poster crawl defaults on (`LINKEDIN_FETCH_HIRING_TEAM=true`);
 set `false` for faster scrape-only validation runs.
 
-**Today's Call Sheet** in the CRM uses a **6 AM – 6 AM Eastern** business day. Enriched leads appear on the call sheet tab; the backlog tab shows ranked companies awaiting enrichment.
+**Today's Call Sheet** in the CRM uses a **5 AM – 5 AM Eastern** business day. Enriched leads appear on the call sheet tab; the backlog tab shows ranked companies awaiting enrichment.
 
 Default job boards: **Indeed, LinkedIn, ZipRecruiter**. **Google Jobs** uses **SerpApi** when `SERPAPI_API_KEY` is set on the Mac worker (auto-enabled at scrape time). JobSpy’s Google scraper is not used. Glassdoor is available but off. Toggle in `/admin` → Job boards.
 
@@ -255,7 +255,7 @@ python scripts/test_contactout_hybrid.py
 
 | Agent | Schedule |
 |-------|----------|
-| `com.vexecsearch.scrape` | 6:00 AM |
+| `com.vexecsearch.scrape` | 5:00 AM |
 | `com.vexecsearch.hygiene` | 6:15 AM |
 | `com.vexecsearch.rescore` | 6:30 AM |
 | `com.vexecsearch.presence` | 7:30 AM |

@@ -12,7 +12,7 @@ Automated recruiter list pipeline: scrape job postings from multiple boards, ran
 
 ## What runs automatically
 
-On a **home Mac worker** (launchd), twice daily at **6 AM and 6 PM ET**:
+On a **home Mac worker** (launchd), twice daily at **5 AM and 6 PM ET**:
 
 1. **Scrape** — JobSpy pulls jobs from boards enabled in `/admin` (default: Indeed, LinkedIn, ZipRecruiter; Google Jobs via SerpApi when keyed)
 2. **Dedupe** — collapse listings to companies; skip domains already in CRM

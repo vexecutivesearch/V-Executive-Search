@@ -167,7 +167,7 @@ EOF
 # Daily pipeline (America/New_York)
 write_calendar_plist "com.vexecsearch.scrape" \
   "scripts/run_daily.py --scrape-only" \
-  6 0 \
+  5 0 \
   "$WORKER_ROOT/logs/scrape_am_stdout.log" \
   "$WORKER_ROOT/logs/scrape_am_stderr.log"
 
@@ -230,7 +230,7 @@ done
 
 echo ""
 echo "Done. Scheduled (America/New_York):"
-echo "  • 06:00 Morning scrape + jobs_only ingest + LinkedIn posters (free)"
+echo "  • 05:00 Morning scrape + jobs_only ingest + LinkedIn posters (free)"
 echo "  • 06:15 Archive stale listings (free)"
 echo "  • 06:30 Rescore backlog (free)"
 echo "  • 07:30 Presence checks — iMessage + email MX (free)"

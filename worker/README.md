@@ -70,7 +70,7 @@ WORKER_ENV_FILE="$HOME/.vsearch/worker.env" ./scripts/install_launchd.sh
 
 | Agent | Schedule | Purpose |
 |-------|----------|---------|
-| `com.vexecsearch.scrape` | 6:00 AM | Scrape → chunked jobs-only CRM ingest |
+| `com.vexecsearch.scrape` | 5:00 AM | Scrape → chunked jobs-only CRM ingest |
 | `com.vexecsearch.hygiene` | 6:15 AM | Archive stale listings |
 | `com.vexecsearch.rescore` | 6:30 AM | Re-score backlog |
 | `com.vexecsearch.presence` | 7:30 AM | iMessage + email MX checks |

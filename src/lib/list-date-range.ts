@@ -70,7 +70,7 @@ export function listDateRangeLabel(range: ListDateRange): string {
   if (range.mode === "range") {
     const fromLabel = formatShortDate(range.from);
     const toLabel = formatShortDate(range.to);
-    return `${fromLabel} – ${toLabel} · 6 AM – 6 AM ET`;
+    return `${fromLabel} – ${toLabel} · 5 AM – 5 AM ET`;
   }
   return businessListWindowLabel(range.from);
 }

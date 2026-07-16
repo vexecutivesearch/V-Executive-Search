@@ -825,7 +825,7 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
       <section className="border rounded-xl p-5 space-y-4 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Job boards</h2>
         <p className="text-sm text-gray-500">
-          Sources scraped at 6 AM and 6 PM ET (via JobSpy on your worker Mac).
+          Sources scraped at 5 AM and 6 PM ET (via JobSpy on your worker Mac).
           Toggle boards to A/B which sources produce net-new companies — no
           deploy needed.
         </p>
