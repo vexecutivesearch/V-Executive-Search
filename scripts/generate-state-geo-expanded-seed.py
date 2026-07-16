@@ -767,17 +767,33 @@ export function reviewNotes(): Array<{{
 
 def write_coverage(coverage: dict[str, object]) -> None:
     COVERAGE_JSON.write_text(json.dumps(coverage, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    states = coverage["states"]  # type: ignore[index]
+    market_count = sum(len(state["markets"]) for state in states)  # type: ignore[index]
     lines = [
         "# Expanded State Geo Coverage",
+        "",
+        f"**Totals:** {len(states)} states · {market_count} markets",
         "",
         "Generated from:",
         f"- OMB/Census CBSA delineation: {SOURCE_URLS['cbsaWorkbook']}",
         f"- Census ACS 2023 5-year geography header: {SOURCE_URLS['acsGeography']}",
         "",
-        "Policy: full OMB/Census metro county sets are used, including cross-state counties. Hubs that cannot be resolved to Census place/county-equivalent rows inside the selected metro are excluded and listed below.",
+        "Policy: full OMB/Census metro county sets are used, including cross-state counties. "
+        "Hub cities keep their true state (e.g. Rock Hill, SC in the Charlotte metro). "
+        "Hubs that cannot be resolved to Census place/county-equivalent rows inside the "
+        "selected metro are excluded and listed below. Markets are capped at eight scrape hubs.",
+        "",
+        "Regenerate / seed:",
+        "",
+        "```bash",
+        "python3 scripts/generate-state-geo-expanded-seed.py",
+        "node scripts/seed-state-geo-configs.mjs",
+        "```",
+        "",
+        "Admin: `/admin` → State + Market reloads focus cities, counties, hubs, and aliases from Postgres.",
         "",
     ]
-    for state in coverage["states"]:  # type: ignore[index]
+    for state in states:
         lines.append(f"## {state['stateName']}")
         for market in state["markets"]:
             lines.append(f"### {market['marketName']}")

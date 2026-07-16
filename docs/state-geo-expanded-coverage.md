@@ -1,10 +1,21 @@
 # Expanded State Geo Coverage
 
+**Totals:** 14 states · 61 markets
+
 Generated from:
 - OMB/Census CBSA delineation: https://www2.census.gov/programs-surveys/metro-micro/geographies/reference-files/2023/delineation-files/list1_2023.xlsx
 - Census ACS 2023 5-year geography header: https://www2.census.gov/programs-surveys/acs/summary_file/2023/table-based-SF/documentation/Geos20235YR.txt
 
-Policy: full OMB/Census metro county sets are used, including cross-state counties. Hubs that cannot be resolved to Census place/county-equivalent rows inside the selected metro are excluded and listed below.
+Policy: full OMB/Census metro county sets are used, including cross-state counties. Hub cities keep their true state (e.g. Rock Hill, SC in the Charlotte metro). Hubs that cannot be resolved to Census place/county-equivalent rows inside the selected metro are excluded and listed below. Markets are capped at eight scrape hubs.
+
+Regenerate / seed:
+
+```bash
+python3 scripts/generate-state-geo-expanded-seed.py
+node scripts/seed-state-geo-configs.mjs
+```
+
+Admin: `/admin` → State + Market reloads focus cities, counties, hubs, and aliases from Postgres.
 
 ## Florida
 ### Miami / Fort Lauderdale
