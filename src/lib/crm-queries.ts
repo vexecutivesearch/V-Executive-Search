@@ -164,6 +164,41 @@ function companyMatchesCity(row: CrmLeadRow, city: string): boolean {
   });
 }
 
+/**
+ * Surface the listing that matches the active location filter first, so a
+ * multi-location company filtered by (say) Virginia shows its Virginia job —
+ * not its top-scored out-of-state one. Keeps national companies from looking
+ * like the filter is broken.
+ */
+function reorderListingsForFilter(
+  row: CrmLeadRow,
+  filters: CrmLeadFilters,
+  index: MarketIndex,
+): void {
+  const state = filters.state?.toUpperCase();
+  const city = filters.city?.trim().toLowerCase();
+  const market =
+    filters.market && filters.market !== UNKNOWN_MARKET_VALUE
+      ? filters.market
+      : null;
+  if (!state && !city && !market) return;
+
+  const matches = (listing: (typeof row.jobListings)[number]): boolean => {
+    const parsed = listing.location ? parseJobLocation(listing.location) : null;
+    if (city && parsed?.city?.trim().toLowerCase() !== city) return false;
+    if (state && parsed?.stateAbbr !== state) return false;
+    if (market && marketForJobLocation(listing.location, index) !== market) {
+      return false;
+    }
+    return true;
+  };
+
+  const matching = row.jobListings.filter(matches);
+  if (!matching.length) return;
+  const rest = row.jobListings.filter((l) => !matching.includes(l));
+  row.jobListings = [...matching, ...rest];
+}
+
 /** Distinct raw industry strings that roll up to the requested sector. */
 async function rawIndustriesForSector(sector: string): Promise<string[]> {
   const rows = await db
@@ -514,6 +549,7 @@ export async function getCrmLeads(
       }
       if (filters.state && !companyMatchesState(row, filters.state)) continue;
       if (filters.city && !companyMatchesCity(row, filters.city)) continue;
+      reorderListingsForFilter(row, filters, index);
       matched.push(row);
     }
   }
