@@ -17,12 +17,17 @@ import {
 } from "@/lib/pipeline-funnel";
 import { getGeoFocusSettings } from "@/lib/geo-focus";
 import { activeMarketLabel } from "@/lib/market-attribution";
+import { annotateCompaniesIcp } from "@/lib/icp/icp-annotate";
 import { recomputeCompanyScores } from "@/lib/recompute-company-scores";
 import type { IcpStatus } from "@/lib/db/schema";
 import { normalizeRunSlot } from "@/lib/timezone";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// Rescoring + ICP annotation both run per-company for every touched row in
+// this batch (worker chunks ingest POSTs to ≤200 companies) — give it the
+// same headroom as the other multi-company routes.
+export const maxDuration = 120;
 
 function mergeRunErrors(
   existing: string | null | undefined,
@@ -437,6 +442,17 @@ export async function POST(request: NextRequest) {
   const uniqueIds = [...new Set(touchedCompanyIds)];
   const { scored } = await recomputeCompanyScores(uniqueIds);
 
+  // ICP annotation (company_icp) — automatic post-ingest, scoped to this
+  // batch's companies only. Non-fatal: a scoring bug here must never break
+  // ingest, which is why annotation lives in its own try/catch.
+  let icpAnnotated = 0;
+  try {
+    const icpResult = await annotateCompaniesIcp(uniqueIds);
+    icpAnnotated = icpResult.companiesScored;
+  } catch (err) {
+    console.error("ICP annotate failed post-ingest:", err);
+  }
+
   const dbFunnel = await measureDbFunnel();
   const geoSettings = await getGeoFocusSettings();
   const runListings = payload.companies.flatMap((c) =>
@@ -475,6 +491,7 @@ export async function POST(request: NextRequest) {
     jobs_inserted: jobsInserted,
     jobs_resighted: jobsResighted,
     companies_scored: scored,
+    companies_icp_annotated: icpAnnotated,
     funnel: mergedFunnel,
   });
 }
