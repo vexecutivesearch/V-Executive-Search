@@ -1,0 +1,511 @@
+/**
+ * Consolidated CRM queries — every market, every date, no coupling to the
+ * Admin scrape focus or a date picker.
+ *
+ * Filters are applied server-side BEFORE the pagination cap so smaller
+ * markets are never buried by a global top-500: filtering to "Fort Wayne"
+ * queries Fort Wayne rows, not a pre-capped global slice.
+ */
+
+import { and, desc, eq, ilike, inArray, not, sql, type SQL } from "drizzle-orm";
+import { db } from "@/lib/db";
+import {
+  callListEntries,
+  companies,
+  jobListings,
+  type CallListEntry,
+  type CompanyStatus,
+} from "@/lib/db/schema";
+import type { CompanyCardData } from "@/components/CompanyCard";
+import { enrichCompanies } from "@/lib/queries";
+import { getGeoFocusSettings } from "@/lib/geo-focus";
+import { getMarketIndex } from "@/lib/market-index";
+import {
+  deriveMarketFromListings,
+  UNKNOWN_MARKET_VALUE,
+  type MarketIndex,
+} from "@/lib/market-attribution";
+import { parseJobLocation } from "@/lib/location-match";
+import {
+  OTHER_SECTOR,
+  allSectorFilterOptions,
+  sectorFromIndustry,
+} from "@/lib/industry-sectors";
+
+export const CRM_PAGE_SIZE = 500;
+/** Hydration batch size when exact market/state/city filtering is required. */
+const HYDRATE_CHUNK = 1000;
+
+export type CrmSort = "score" | "recent" | "name";
+
+export type CrmLeadFilters = {
+  /** Market label ("Charlotte, NC") or UNKNOWN_MARKET_VALUE bucket. */
+  market?: string;
+  /** Two-letter state abbreviation from listing locations. */
+  state?: string;
+  /** City name (any state unless combined with state filter). */
+  city?: string;
+  /** Broad industry sector (rollup of raw Apollo industries). */
+  sector?: string;
+  status?: CompanyStatus;
+  search?: string;
+  callableOnly?: boolean;
+  enrichedOnly?: boolean;
+  hotOnly?: boolean;
+  sort?: CrmSort;
+  /** 1-based page over the filtered, ranked set. */
+  page?: number;
+  /** CSV export: return the whole filtered set instead of one page. */
+  noCap?: boolean;
+};
+
+export type CrmLeadRow = CompanyCardData & {
+  /** source_market provenance, falling back to location-derived market. */
+  marketLabel: string | null;
+  onCallList: boolean;
+};
+
+export type CrmLeadsResult = {
+  rows: CrmLeadRow[];
+  totalMatched: number;
+  page: number;
+  pageCount: number;
+};
+
+function escapeLike(term: string): string {
+  return term.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+const CALLABLE_CONTACT_EXISTS = sql`EXISTS (
+  SELECT 1 FROM contacts AS ct
+  WHERE ct.company_id = ${companies.id}
+    AND (
+      ct.personal_phone IS NOT NULL
+      OR ct.phone IS NOT NULL
+      OR ct.personal_email IS NOT NULL
+      OR ct.email IS NOT NULL
+      OR ct.work_email IS NOT NULL
+    )
+)`;
+
+/** Resolve a company's market: ingest provenance first, else derived. */
+export function resolveMarketLabel(
+  company: Pick<CompanyCardData, "sourceMarket" | "jobListings">,
+  index: MarketIndex,
+): string | null {
+  return (
+    company.sourceMarket ??
+    deriveMarketFromListings(company.jobListings, index)
+  );
+}
+
+function companyMatchesState(row: CrmLeadRow, stateAbbr: string): boolean {
+  const target = stateAbbr.toUpperCase();
+  for (const listing of row.jobListings) {
+    const parsed = listing.location ? parseJobLocation(listing.location) : null;
+    if (parsed?.stateAbbr === target) return true;
+  }
+  return Boolean(row.marketLabel?.toUpperCase().endsWith(`, ${target}`));
+}
+
+function companyMatchesCity(row: CrmLeadRow, city: string): boolean {
+  const target = city.trim().toLowerCase();
+  if (!target) return true;
+  return row.jobListings.some((listing) => {
+    const parsed = listing.location ? parseJobLocation(listing.location) : null;
+    return parsed?.city?.trim().toLowerCase() === target;
+  });
+}
+
+/** Distinct raw industry strings that roll up to the requested sector. */
+async function rawIndustriesForSector(sector: string): Promise<string[]> {
+  const rows = await db
+    .selectDistinct({ industry: companies.industry })
+    .from(companies)
+    .where(sql`${companies.industry} IS NOT NULL AND ${companies.industry} <> ''`);
+  return rows
+    .map((r) => r.industry?.trim())
+    .filter((raw): raw is string => Boolean(raw))
+    .filter((raw) => sectorFromIndustry(raw) === sector);
+}
+
+/** SQL prefilter for a market: provenance tag OR listing in a member city. */
+function marketPrefilterSql(marketLabel: string, index: MarketIndex): SQL {
+  const cities = index.citiesByLabel.get(marketLabel) ?? [];
+  const aliases = index.aliasesByLabel.get(marketLabel) ?? [];
+  const patterns = [
+    ...cities.map(({ city }) => `%${escapeLike(city)}%`),
+    ...aliases.map((alias) => `%${escapeLike(alias)}%`),
+  ];
+  if (!patterns.length) {
+    return sql`${companies.sourceMarket} = ${marketLabel}`;
+  }
+  const locationMatch = sql.join(
+    patterns.map((p) => sql`jl.location ILIKE ${p}`),
+    sql` OR `,
+  );
+  return sql`(
+    ${companies.sourceMarket} = ${marketLabel}
+    OR EXISTS (
+      SELECT 1 FROM job_listings AS jl
+      WHERE jl.company_id = ${companies.id} AND (${locationMatch})
+    )
+  )`;
+}
+
+function statePrefilterSql(stateAbbr: string, stateName: string | null): SQL {
+  const abbrPattern = `%, ${stateAbbr}%`;
+  const namePattern = stateName ? `%${escapeLike(stateName)}%` : null;
+  const inner = namePattern
+    ? sql`jl.location ILIKE ${abbrPattern} OR jl.location ILIKE ${namePattern}`
+    : sql`jl.location ILIKE ${abbrPattern}`;
+  return sql`(
+    ${companies.sourceMarket} ILIKE ${`%, ${stateAbbr}`}
+    OR EXISTS (
+      SELECT 1 FROM job_listings AS jl
+      WHERE jl.company_id = ${companies.id} AND (${inner})
+    )
+  )`;
+}
+
+function cityPrefilterSql(city: string): SQL {
+  const pattern = `%${escapeLike(city.trim())}%`;
+  return sql`EXISTS (
+    SELECT 1 FROM job_listings AS jl
+    WHERE jl.company_id = ${companies.id} AND jl.location ILIKE ${pattern}
+  )`;
+}
+
+function stateNameForAbbr(abbr: string): string | null {
+  const parsed = parseJobLocation(abbr);
+  return parsed?.stateName ?? null;
+}
+
+async function buildSqlConditions(
+  filters: CrmLeadFilters,
+  index: MarketIndex,
+): Promise<SQL[]> {
+  const conditions: SQL[] = [
+    sql`${not(ilike(companies.name, "(Listing)%"))}`,
+  ];
+
+  if (filters.status) {
+    conditions.push(sql`${eq(companies.status, filters.status)}`);
+  }
+
+  const term = filters.search?.trim();
+  if (term) {
+    const pattern = `%${escapeLike(term)}%`;
+    conditions.push(sql`(
+      ${companies.name} ILIKE ${pattern}
+      OR ${companies.domain} ILIKE ${pattern}
+      OR EXISTS (
+        SELECT 1 FROM job_listings AS jl
+        WHERE jl.company_id = ${companies.id}
+          AND (jl.title ILIKE ${pattern} OR jl.location ILIKE ${pattern})
+      )
+      OR EXISTS (
+        SELECT 1 FROM contacts AS ct
+        WHERE ct.company_id = ${companies.id}
+          AND (ct.name ILIKE ${pattern} OR ct.title ILIKE ${pattern})
+      )
+    )`);
+  }
+
+  if (filters.callableOnly) {
+    conditions.push(CALLABLE_CONTACT_EXISTS);
+  }
+
+  if (filters.enrichedOnly) {
+    conditions.push(
+      sql`(${companies.enrichedAt} IS NOT NULL OR ${CALLABLE_CONTACT_EXISTS})`,
+    );
+  }
+
+  if (filters.hotOnly) {
+    conditions.push(
+      sql`${companies.hiringSignals} IS NOT NULL AND ${companies.hiringSignals}::text <> '{}'`,
+    );
+  }
+
+  if (filters.sector) {
+    const raws = await rawIndustriesForSector(filters.sector);
+    if (raws.length) {
+      conditions.push(sql`${inArray(companies.industry, raws)}`);
+    } else {
+      // Sector chosen but no raw industry maps to it — match nothing.
+      conditions.push(sql`FALSE`);
+    }
+  }
+
+  if (filters.market && filters.market !== UNKNOWN_MARKET_VALUE) {
+    conditions.push(marketPrefilterSql(filters.market, index));
+  }
+
+  if (filters.state) {
+    conditions.push(
+      statePrefilterSql(filters.state.toUpperCase(), stateNameForAbbr(filters.state)),
+    );
+  }
+
+  if (filters.city) {
+    conditions.push(cityPrefilterSql(filters.city));
+  }
+
+  return conditions;
+}
+
+function orderBySql(sort: CrmSort) {
+  if (sort === "recent") {
+    return [desc(companies.updatedAt), desc(companies.leadScore)];
+  }
+  if (sort === "name") {
+    return [companies.name, desc(companies.leadScore)];
+  }
+  return [desc(companies.leadScore), desc(companies.updatedAt)];
+}
+
+async function callListCompanyIdSet(): Promise<Set<string>> {
+  const rows = await db
+    .select({ companyId: callListEntries.companyId })
+    .from(callListEntries);
+  return new Set(rows.map((r) => r.companyId));
+}
+
+/**
+ * All Leads / Hot query — everything scraped, all markets, all dates.
+ * Server-side filters first, then the page cap over the filtered set.
+ */
+export async function getCrmLeads(
+  filters: CrmLeadFilters = {},
+): Promise<CrmLeadsResult> {
+  const sort = filters.sort ?? "score";
+  const page = Math.max(1, filters.page ?? 1);
+  const [geoSettings, index, onListIds] = await Promise.all([
+    getGeoFocusSettings(),
+    getMarketIndex(),
+    callListCompanyIdSet(),
+  ]);
+  const conditions = await buildSqlConditions(filters, index);
+  const whereClause = and(...conditions.map((c) => sql`(${c})`));
+
+  // Exact market/state/city matching needs hydrated listings, so those
+  // filters finish in TS over SQL-prefiltered candidates — still before
+  // the pagination cap.
+  const needsExactPass = Boolean(filters.market || filters.state || filters.city);
+
+  const toRow = (company: CompanyCardData): CrmLeadRow => ({
+    ...company,
+    marketLabel: resolveMarketLabel(company, index),
+    onCallList: onListIds.has(company.id),
+  });
+
+  if (!needsExactPass) {
+    const [{ count: totalMatched }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(companies)
+      .where(whereClause);
+
+    const baseQuery = db
+      .select()
+      .from(companies)
+      .where(whereClause)
+      .orderBy(...orderBySql(sort));
+    const pageRows = filters.noCap
+      ? await baseQuery
+      : await baseQuery
+          .limit(CRM_PAGE_SIZE)
+          .offset((page - 1) * CRM_PAGE_SIZE);
+
+    const hydrated = await enrichCompanies(pageRows, geoSettings, {
+      skipGeoFilter: true,
+    });
+
+    return {
+      rows: hydrated.map(toRow),
+      totalMatched,
+      page,
+      pageCount: Math.max(1, Math.ceil(totalMatched / CRM_PAGE_SIZE)),
+    };
+  }
+
+  const candidates = await db
+    .select()
+    .from(companies)
+    .where(whereClause)
+    .orderBy(...orderBySql(sort));
+
+  const matched: CrmLeadRow[] = [];
+  for (let i = 0; i < candidates.length; i += HYDRATE_CHUNK) {
+    const chunk = candidates.slice(i, i + HYDRATE_CHUNK);
+    const hydrated = await enrichCompanies(chunk, geoSettings, {
+      skipGeoFilter: true,
+    });
+    for (const company of hydrated) {
+      const row = toRow(company);
+      if (filters.market === UNKNOWN_MARKET_VALUE) {
+        if (row.marketLabel !== null) continue;
+      } else if (filters.market && row.marketLabel !== filters.market) {
+        continue;
+      }
+      if (filters.state && !companyMatchesState(row, filters.state)) continue;
+      if (filters.city && !companyMatchesCity(row, filters.city)) continue;
+      matched.push(row);
+    }
+  }
+
+  const totalMatched = matched.length;
+  const start = (page - 1) * CRM_PAGE_SIZE;
+  return {
+    rows: filters.noCap ? matched : matched.slice(start, start + CRM_PAGE_SIZE),
+    totalMatched,
+    page,
+    pageCount: Math.max(1, Math.ceil(totalMatched / CRM_PAGE_SIZE)),
+  };
+}
+
+/** Cheap tab badge counts — unfiltered totals across all markets/dates. */
+export async function getCrmTabCounts(): Promise<{
+  allLeads: number;
+  hot: number;
+  callList: number;
+}> {
+  const notListing = not(ilike(companies.name, "(Listing)%"));
+  const [[all], [hot], [list]] = await Promise.all([
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(companies)
+      .where(notListing),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(companies)
+      .where(
+        and(
+          notListing,
+          sql`${companies.hiringSignals} IS NOT NULL AND ${companies.hiringSignals}::text <> '{}'`,
+        ),
+      ),
+    db.select({ count: sql<number>`count(*)::int` }).from(callListEntries),
+  ]);
+  return { allLeads: all.count, hot: hot.count, callList: list.count };
+}
+
+export type CrmFilterOptions = {
+  markets: string[];
+  states: string[];
+  cities: Array<{ city: string; stateAbbr: string }>;
+  sectors: string[];
+};
+
+/** Distinct filter values across ALL scraped data (not date/geo-gated). */
+export async function getCrmFilterOptions(): Promise<CrmFilterOptions> {
+  const [index, marketRows, locationRows, industryRows] = await Promise.all([
+    getMarketIndex(),
+    db
+      .selectDistinct({ sourceMarket: companies.sourceMarket })
+      .from(companies)
+      .where(sql`${companies.sourceMarket} IS NOT NULL`),
+    db
+      .selectDistinct({ location: jobListings.location })
+      .from(jobListings)
+      .where(sql`${jobListings.location} IS NOT NULL AND ${jobListings.location} <> ''`),
+    db
+      .selectDistinct({ industry: companies.industry })
+      .from(companies)
+      .where(sql`${companies.industry} IS NOT NULL AND ${companies.industry} <> ''`),
+  ]);
+
+  const markets = new Set<string>();
+  for (const row of marketRows) {
+    if (row.sourceMarket) markets.add(row.sourceMarket);
+  }
+
+  const states = new Set<string>();
+  const cities = new Map<string, { city: string; stateAbbr: string }>();
+  for (const row of locationRows) {
+    const parsed = row.location ? parseJobLocation(row.location) : null;
+    if (!parsed) continue;
+    if (parsed.stateAbbr) states.add(parsed.stateAbbr);
+    if (parsed.city && parsed.stateAbbr) {
+      const key = `${parsed.city.toLowerCase()}|${parsed.stateAbbr}`;
+      if (!cities.has(key)) {
+        cities.set(key, { city: parsed.city, stateAbbr: parsed.stateAbbr });
+      }
+    }
+    const derived = deriveMarketFromListings([{ location: row.location }], index);
+    if (derived) markets.add(derived);
+  }
+
+  const sectorsPresent = new Set<string>();
+  for (const row of industryRows) {
+    const sector = sectorFromIndustry(row.industry);
+    if (sector) sectorsPresent.add(sector);
+  }
+  const sectors = allSectorFilterOptions().filter((s) => sectorsPresent.has(s));
+  if (!sectors.length && industryRows.length) sectors.push(OTHER_SECTOR);
+
+  return {
+    markets: [...markets].sort((a, b) => a.localeCompare(b)),
+    states: [...states].sort(),
+    cities: [...cities.values()].sort(
+      (a, b) => a.city.localeCompare(b.city) || a.stateAbbr.localeCompare(b.stateAbbr),
+    ),
+    sectors,
+  };
+}
+
+export type CallListItem = {
+  entry: CallListEntry;
+  company: CompanyCardData;
+  marketLabel: string | null;
+};
+
+/** Full call list — curated queue, loads completely (no pagination). */
+export async function getCallListItems(): Promise<CallListItem[]> {
+  const [geoSettings, index] = await Promise.all([
+    getGeoFocusSettings(),
+    getMarketIndex(),
+  ]);
+
+  const entries = await db
+    .select()
+    .from(callListEntries)
+    .orderBy(desc(callListEntries.addedAt));
+  if (!entries.length) return [];
+
+  const companyRows = await db
+    .select()
+    .from(companies)
+    .where(inArray(companies.id, entries.map((e) => e.companyId)));
+
+  const hydrated = await enrichCompanies(companyRows, geoSettings, {
+    skipGeoFilter: true,
+  });
+  const byId = new Map(hydrated.map((c) => [c.id, c]));
+
+  return entries
+    .map((entry) => {
+      const company = byId.get(entry.companyId);
+      if (!company) return null;
+      return {
+        entry,
+        company,
+        marketLabel: resolveMarketLabel(company, index),
+      };
+    })
+    .filter((item): item is CallListItem => item !== null);
+}
+
+/** Membership lookup for a single company (post-enrich Yes/No prompt). */
+export async function getCallListEntryForCompany(
+  companyId: string,
+): Promise<CallListEntry | null> {
+  const [entry] = await db
+    .select()
+    .from(callListEntries)
+    .where(eq(callListEntries.companyId, companyId))
+    .limit(1);
+  return entry ?? null;
+}
+
+export { UNKNOWN_MARKET_VALUE };

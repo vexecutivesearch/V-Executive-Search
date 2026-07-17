@@ -491,10 +491,17 @@ export async function getCompanyActivities(companyId: string) {
     .limit(100);
 }
 
-async function enrichCompanies(
+/**
+ * Hydrate company rows with contacts + job listings.
+ *
+ * By default listings outside the current Admin geo focus are dropped (the
+ * Today's List behavior). The consolidated CRM view passes `skipGeoFilter`
+ * so every market's listings survive regardless of the active scrape focus.
+ */
+export async function enrichCompanies(
   rows: (typeof companies.$inferSelect)[],
   geoSettings?: Awaited<ReturnType<typeof getGeoFocusSettings>>,
-  options?: { asOfDate?: string },
+  options?: { asOfDate?: string; skipGeoFilter?: boolean },
 ): Promise<CompanyCardData[]> {
   if (rows.length === 0) return [];
 
@@ -543,9 +550,11 @@ async function enrichCompanies(
     const listings = (listingsByCompany.get(company.id) ?? []).filter(
       (listing) => !asOfDate || jobActiveOnDate(listing, asOfDate),
     );
-    const inFocusListings = listings.filter((listing) =>
-      jobLocationInFocus(listing.location, settings),
-    );
+    const inFocusListings = options?.skipGeoFilter
+      ? listings
+      : listings.filter((listing) =>
+          jobLocationInFocus(listing.location, settings),
+        );
 
     return {
       id: company.id,
@@ -564,6 +573,7 @@ async function enrichCompanies(
       icpStatus: company.icpStatus,
       enrichedAt: company.enrichedAt,
       enrichRunDate: company.enrichRunDate,
+      sourceMarket: company.sourceMarket,
       contacts: applySharedLineFilter(companyContacts),
       jobListings: inFocusListings,
     };

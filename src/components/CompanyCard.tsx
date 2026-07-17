@@ -1,9 +1,11 @@
 import { Contact, JobListing, type IcpStatus } from "@/lib/db/schema";
 import { CompanyStatus } from "@/lib/db/schema";
 import Link from "next/link";
+import { AddToCallListButton } from "./AddToCallListButton";
 import { StatusBadge, StatusSelect } from "./StatusBadge";
 import { EnrichButton } from "./EnrichButton";
 import { ContactRow } from "./ContactRow";
+import { contactIsCallable } from "@/lib/lead-score";
 
 export interface CompanyCardData {
   id: string;
@@ -22,6 +24,8 @@ export interface CompanyCardData {
   icpStatus?: IcpStatus;
   enrichedAt?: Date | null;
   enrichRunDate?: string | null;
+  /** Market active when scraped (e.g. "Charlotte, NC") — CRM provenance tag. */
+  sourceMarket?: string | null;
   contacts: Contact[];
   jobListings: JobListing[];
 }
@@ -67,7 +71,10 @@ export function CompanyCard({
             </p>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
+          {company.contacts.some(contactIsCallable) && (
+            <AddToCallListButton companyId={company.id} compact />
+          )}
           <EnrichButton
             companyId={company.id}
             contactCount={company.contacts.length}
