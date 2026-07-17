@@ -10,8 +10,8 @@ import {
   OnCallListBadge,
 } from "@/components/AddToCallListButton";
 import { CallControls } from "./CallControls";
+import { ContactPickerButton } from "@/components/enrich/ContactPickerButton";
 import { ContactRow } from "@/components/ContactRow";
-import { EnrichButton } from "@/components/EnrichButton";
 import { StatusBadge, StatusSelect } from "@/components/StatusBadge";
 import {
   contactIsCallable,
@@ -228,7 +228,7 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
         </div>
 
         <div className="flex items-center justify-end gap-1">
-          {/* Action progression: Enrich → Add to list → Open (dossier). */}
+          {/* Action progression: Find contacts → Add to list → Open (dossier). */}
           {onList ? (
             <button
               type="button"
@@ -247,11 +247,10 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
               onAdded={() => setOnList(true)}
             />
           ) : (
-            <EnrichButton
+            <ContactPickerButton
               companyId={company.id}
-              contactCount={company.contacts.length}
               compact
-              onEnrichComplete={handleEnrichComplete}
+              onRevealComplete={handleEnrichComplete}
             />
           )}
           <button
@@ -317,11 +316,11 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
                 />
               )
             )}
-            <EnrichButton
+            <ContactPickerButton
               companyId={company.id}
-              contactCount={company.contacts.length}
               compact
-              onEnrichComplete={handleEnrichComplete}
+              label={hasCallable ? "Enrich another contact" : "Find contacts"}
+              onRevealComplete={handleEnrichComplete}
             />
           </div>
 

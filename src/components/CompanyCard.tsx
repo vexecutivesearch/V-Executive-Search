@@ -3,7 +3,7 @@ import { CompanyStatus } from "@/lib/db/schema";
 import Link from "next/link";
 import { AddToCallListButton } from "./AddToCallListButton";
 import { StatusBadge, StatusSelect } from "./StatusBadge";
-import { EnrichButton } from "./EnrichButton";
+import { ContactPickerButton } from "./enrich/ContactPickerButton";
 import { ContactRow } from "./ContactRow";
 import { contactIsCallable } from "@/lib/lead-score";
 
@@ -75,10 +75,14 @@ export function CompanyCard({
           {company.contacts.some(contactIsCallable) && (
             <AddToCallListButton companyId={company.id} compact />
           )}
-          <EnrichButton
+          <ContactPickerButton
             companyId={company.id}
-            contactCount={company.contacts.length}
-            onEnrichComplete={onEnrichComplete}
+            label={
+              company.contacts.some(contactIsCallable)
+                ? "Enrich another contact"
+                : "Find contacts"
+            }
+            onRevealComplete={onEnrichComplete}
           />
           <StatusBadge status={company.status} />
           <StatusSelect
