@@ -13,6 +13,16 @@ import {
   getBacklogForDateRange,
   getCallSheetCompanies,
 } from "@/lib/queries";
+import {
+  getCallListItems,
+  getCrmLeads,
+  type CrmLeadFilters,
+} from "@/lib/crm-queries";
+import { CALL_STATUS_LABELS } from "@/lib/call-status";
+import { compareContactsForOutreach } from "@/lib/contact-title-priority";
+import { parseJobLocation } from "@/lib/location-match";
+import { formatListingSalary, pickDisplayListing } from "@/lib/salary-format";
+import { businessListDate } from "@/lib/timezone";
 
 export type ScrapeCsvRow = {
   company_name: string;
@@ -223,4 +233,134 @@ export function exportFilename(
   const suffix =
     range.from === range.to ? range.from : `${range.from}_to_${range.to}`;
   return `vexec-${kind}-${suffix}.csv`;
+}
+
+const CALL_LIST_HEADERS = [
+  "company_name",
+  "industry",
+  "city",
+  "state",
+  "market",
+  "open_position",
+  "salary",
+  "contact_name",
+  "contact_title",
+  "verified_email",
+  "direct_phone",
+  "main_company_phone",
+  "linkedin_profile",
+  "opportunity_score",
+  "outreach_angle",
+  "call_status",
+  "last_contact_date",
+  "attempts",
+  "next_follow_up_date",
+  "notes",
+  "assigned_team_member",
+  "final_result",
+  "added_at",
+] as const;
+
+function isoDate(value: Date | string | null | undefined): string {
+  if (!value) return "";
+  if (typeof value === "string") return value.slice(0, 10);
+  return value.toISOString().slice(0, 10);
+}
+
+/** Full call list — one row per entry, all workflow + contact fields. */
+export async function buildCallListCsv(): Promise<string> {
+  const items = await getCallListItems();
+  const rows = items.map(({ entry, company, marketLabel }) => {
+    const primaryContact =
+      company.contacts.find((c) => c.id === entry.primaryContactId) ??
+      [...company.contacts].sort(compareContactsForOutreach)[0];
+    const job = company.jobListings[0];
+    const salaryJob = pickDisplayListing(company.jobListings);
+    const parsedLocation = job?.location ? parseJobLocation(job.location) : null;
+    const phones = primaryContact
+      ? sortPhonesForDisplay(contactPhonesForDisplay(primaryContact))
+      : [];
+    const directPhone = phones.find((p) => p.kind !== "company")?.number ?? "";
+    const companyPhone =
+      phones.find((p) => p.kind === "company")?.number ??
+      primaryContact?.companyPhone ??
+      "";
+
+    return {
+      company_name: company.name,
+      industry: company.industry ?? "",
+      city: parsedLocation?.city ?? "",
+      state: parsedLocation?.stateAbbr ?? parsedLocation?.stateName ?? "",
+      market: marketLabel ?? "",
+      open_position: job?.title ?? "",
+      salary: salaryJob ? (formatListingSalary(salaryJob) ?? "") : "",
+      contact_name: primaryContact?.name ?? "",
+      contact_title: primaryContact?.title ?? "",
+      verified_email: primaryContact
+        ? (resolveWorkEmail(primaryContact) ??
+          resolvePersonalEmail(primaryContact) ??
+          "")
+        : "",
+      direct_phone: directPhone,
+      main_company_phone: companyPhone,
+      linkedin_profile: primaryContact?.linkedinUrl ?? "",
+      opportunity_score: company.leadScore ?? 0,
+      outreach_angle: entry.outreachAngle ?? company.reasonToCall ?? "",
+      call_status: CALL_STATUS_LABELS[entry.callStatus],
+      last_contact_date: isoDate(entry.lastContactAt),
+      attempts: entry.attempts,
+      next_follow_up_date: entry.nextFollowUpDate ?? "",
+      notes: entry.notes ?? "",
+      assigned_team_member: entry.assignedTo ?? "",
+      final_result: entry.finalResult ?? "",
+      added_at: isoDate(entry.addedAt),
+    };
+  });
+  return rowsToCsv([...CALL_LIST_HEADERS], rows);
+}
+
+/** CRM All Leads / Hot export — the whole filtered set, one row per job. */
+export async function buildCrmLeadsCsv(
+  filters: CrmLeadFilters,
+): Promise<string> {
+  const { rows } = await getCrmLeads({ ...filters, noCap: true });
+  const headers = [...SCRAPE_HEADERS, "market", "on_call_list"];
+  const csvRows = rows.flatMap((company) => {
+    const scrapeRows = companiesToScrapeRows([company]);
+    const base = scrapeRows.length
+      ? scrapeRows
+      : [
+          // Zero-listing companies still appear in the consolidated view.
+          {
+            company_name: company.name,
+            domain: company.domain ?? "",
+            domain_confidence: company.domainConfidence,
+            industry: company.industry ?? "",
+            lead_score: company.leadScore ?? 0,
+            icp_status: company.icpStatus ?? "",
+            first_seen: company.firstSeen,
+            enrich_run_date: company.enrichRunDate ?? "",
+            reason_to_call: company.reasonToCall ?? "",
+            job_title: "",
+            job_board: "",
+            job_location: "",
+            job_url: "",
+            salary: "",
+            search_name: "",
+            job_posted_at: "",
+            job_last_seen: "",
+            contact_count: company.contacts.length,
+          } satisfies ScrapeCsvRow,
+        ];
+    return base.map((row) => ({
+      ...row,
+      market: company.marketLabel ?? "",
+      on_call_list: company.onCallList ? "yes" : "no",
+    }));
+  });
+  return rowsToCsv(headers, csvRows);
+}
+
+export function crmExportFilename(kind: "call-list" | "crm-leads"): string {
+  return `vexec-${kind}-${businessListDate()}.csv`;
 }
