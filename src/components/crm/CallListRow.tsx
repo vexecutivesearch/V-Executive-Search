@@ -194,7 +194,7 @@ export function CallListRow({
   return (
     <div className="border-b border-gray-200 dark:border-gray-800 last:border-b-0">
       <div
-        className="grid grid-cols-[3rem_1fr_auto] lg:grid-cols-[3.25rem_minmax(0,1.4fr)_minmax(0,1.2fr)_11.5rem_4.5rem_7rem_minmax(0,0.7fr)_auto] gap-x-3 gap-y-1 items-center px-3 py-2.5 sm:px-4 hover:bg-gray-50 dark:hover:bg-gray-900/60 transition-colors cursor-pointer"
+        className="grid grid-cols-[3rem_1fr_auto] lg:grid-cols-[3.25rem_minmax(0,1.4fr)_minmax(0,1.2fr)_11.5rem_4.5rem_7rem_minmax(0,0.7fr)_auto] gap-x-3 gap-y-1 items-center px-3 py-4 lg:py-2.5 sm:px-4 hover:bg-gray-50 dark:hover:bg-gray-900/60 transition-colors cursor-pointer"
         onClick={() => setExpanded((v) => !v)}
       >
         <div
@@ -308,11 +308,11 @@ export function CallListRow({
               e.stopPropagation();
               setExpanded((v) => !v);
             }}
-            className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            className="p-2 -mr-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
             aria-label={expanded ? "Collapse row" : "Expand row"}
           >
             <span
-              className={`inline-block transition-transform ${expanded ? "rotate-180" : ""}`}
+              className={`inline-block text-base transition-transform ${expanded ? "rotate-180" : ""}`}
               aria-hidden
             >
               ▾

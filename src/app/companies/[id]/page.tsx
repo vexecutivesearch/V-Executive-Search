@@ -19,10 +19,10 @@ export default async function CompanyDetailPage({
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
       <Link
-        href="/companies"
+        href="/crm"
         className="text-sm text-gray-500 hover:underline mb-4 inline-block"
       >
-        ← Back to companies
+        ← Back to Pipeline
       </Link>
       <RefreshableCompanyCard company={company} showLocationDisclaimer />
 
