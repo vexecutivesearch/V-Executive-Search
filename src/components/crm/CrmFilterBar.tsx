@@ -12,6 +12,7 @@ export type CrmActiveFilters = {
   q: string;
   callable: boolean;
   enriched: boolean;
+  discovered: boolean;
   sort: string;
   /* ICP annotation filters (view state only — reversible). */
   role: string;
@@ -114,6 +115,7 @@ export function CrmFilterBar({
     active.q ||
     active.callable ||
     active.enriched ||
+    active.discovered ||
     active.role ||
     active.size ||
     active.comp ||
@@ -210,6 +212,16 @@ export function CrmFilterBar({
             className="rounded border-gray-300"
           />
           Enriched only
+        </label>
+
+        <label className="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={active.discovered}
+            onChange={(e) => apply({ discovered: e.target.checked ? "1" : null })}
+            className="rounded border-gray-300"
+          />
+          Discovered only
         </label>
 
         <select

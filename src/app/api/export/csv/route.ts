@@ -67,6 +67,7 @@ export async function GET(request: NextRequest) {
         search: params.get("q") ?? undefined,
         callableOnly: params.get("callable") === "1",
         enrichedOnly: params.get("enriched") === "1",
+        discoveredOnly: params.get("discovered") === "1",
         hotOnly: params.get("hot") === "1",
       };
       return csvResponse(

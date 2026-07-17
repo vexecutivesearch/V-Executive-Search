@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { CrmListingsResult, CrmListingRow } from "@/lib/crm-queries";
 import { CRM_LISTINGS_PAGE_SIZE } from "@/lib/crm-queries";
-import { EnrichButton } from "@/components/EnrichButton";
+import { ContactPickerButton } from "@/components/enrich/ContactPickerButton";
 import { CrmListingsFilterBar } from "./CrmListingsFilterBar";
 
 const BOARD_STYLES: Record<string, string> = {
@@ -86,7 +86,7 @@ export function CrmListingsList({
                 <th className="px-3 py-2">Location</th>
                 <th className="px-3 py-2">Board</th>
                 <th className="px-3 py-2">Link</th>
-                <th className="px-3 py-2 text-right">Enrich</th>
+                <th className="px-3 py-2 text-right">Contacts</th>
               </tr>
             </thead>
             <tbody>
@@ -143,11 +143,12 @@ export function CrmListingsList({
                     )}
                   </td>
                   <td className="px-3 py-2.5 text-right">
-                    <EnrichButton
-                      companyId={row.companyId}
-                      contactCount={row.contactCount}
-                      compact
-                    />
+                    <ContactPickerButton companyId={row.companyId} compact />
+                    {row.contactCount > 0 && (
+                      <span className="block text-[10px] text-gray-400 mt-0.5">
+                        {row.contactCount} saved
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}

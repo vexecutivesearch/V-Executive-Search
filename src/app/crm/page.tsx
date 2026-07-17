@@ -60,6 +60,7 @@ type CrmSearchParams = {
   q?: string;
   callable?: string;
   enriched?: string;
+  discovered?: string;
   role?: string;
   size?: string;
   comp?: string;
@@ -92,6 +93,7 @@ function parseFilters(params: CrmSearchParams): CrmLeadFilters {
     search: params.q?.trim() || undefined,
     callableOnly: params.callable === "1",
     enrichedOnly: params.enriched === "1",
+    discoveredOnly: params.discovered === "1",
     roleType:
       params.role && ROLE_TYPES.has(params.role) ? params.role : undefined,
     sizeBand:
@@ -176,6 +178,7 @@ export default async function CrmPage({
     q: params.q,
     callable: params.callable,
     enriched: params.enriched,
+    discovered: params.discovered,
     role: params.role,
     size: params.size,
     comp: params.comp,
@@ -299,6 +302,7 @@ export default async function CrmPage({
                   q: params.q ?? "",
                   callable: params.callable === "1",
                   enriched: params.enriched === "1",
+                  discovered: params.discovered === "1",
                   role: filters.roleType ?? "",
                   size: filters.sizeBand ?? "",
                   comp: params.comp ?? "",
@@ -334,6 +338,7 @@ function CrmExportLink({
     q: params.q,
     callable: params.callable,
     enriched: params.enriched,
+    discovered: params.discovered,
   })) {
     if (value) qs.set(key, value);
   }

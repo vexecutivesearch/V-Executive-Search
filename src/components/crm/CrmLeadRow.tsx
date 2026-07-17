@@ -36,6 +36,9 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
   const salary = salaryJob ? formatListingSalary(salaryJob) : null;
   const callableCount = company.contacts.filter(contactIsCallable).length;
   const hasCallable = callableCount > 0;
+  const discoveredCount = company.contacts.filter(
+    (c) => c.revealStatus === "discovered",
+  ).length;
   const hotSignals = Object.keys(company.hiringSignals ?? {}).length > 0;
   const sector = sectorFromIndustry(company.industry);
   const jobLocation =
@@ -144,6 +147,19 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
               {hotSignals && (
                 <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 dark:bg-orange-950/60 dark:text-orange-300">
                   Hot
+                </span>
+              )}
+              {hasCallable && (
+                <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                  Enriched
+                </span>
+              )}
+              {discoveredCount > 0 && (
+                <span
+                  className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-300"
+                  title={`${discoveredCount} candidate${discoveredCount === 1 ? "" : "s"} discovered (reveal-off) — pick one to reveal`}
+                >
+                  Discovered {discoveredCount}
                 </span>
               )}
               {row.icp && row.icp.adjustedScore != null && (

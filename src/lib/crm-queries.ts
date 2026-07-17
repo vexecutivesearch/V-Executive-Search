@@ -67,6 +67,8 @@ export type CrmLeadFilters = {
   search?: string;
   callableOnly?: boolean;
   enrichedOnly?: boolean;
+  /** Companies with reveal-off discovered candidates awaiting reveal. */
+  discoveredOnly?: boolean;
   hotOnly?: boolean;
   /* --- ICP annotation filters (Phase 2, view layer only) --- */
   roleType?: string;
@@ -265,6 +267,14 @@ async function buildSqlConditions(
     conditions.push(
       sql`(${companies.enrichedAt} IS NOT NULL OR ${CALLABLE_CONTACT_EXISTS})`,
     );
+  }
+
+  if (filters.discoveredOnly) {
+    conditions.push(sql`EXISTS (
+      SELECT 1 FROM contacts AS ct
+      WHERE ct.company_id = ${companies.id}
+        AND ct.reveal_status = 'discovered'
+    )`);
   }
 
   if (filters.hotOnly) {

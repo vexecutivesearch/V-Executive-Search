@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
     search: params.get("search") ?? params.get("q") ?? undefined,
     callableOnly: params.get("callable") === "1",
     enrichedOnly: params.get("enriched") === "1",
+    discoveredOnly: params.get("discovered") === "1",
     hotOnly: params.get("hot") === "1",
     roleType: params.get("role") ?? undefined,
     sizeBand: params.get("size") ?? undefined,
