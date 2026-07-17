@@ -9,7 +9,13 @@ type DemoModalProps = {
   interests?: string[];
 };
 
-export function DemoModal({ open, onClose, interests = [] }: DemoModalProps) {
+function DemoModalForm({
+  onClose,
+  interests,
+}: {
+  onClose: () => void;
+  interests: string[];
+}) {
   const titleId = useId();
   const firstFieldRef = useRef<HTMLInputElement>(null);
   const [sent, setSent] = useState(false);
@@ -17,12 +23,6 @@ export function DemoModal({ open, onClose, interests = [] }: DemoModalProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open) {
-      setSent(false);
-      setSubmitting(false);
-      setError(null);
-      return;
-    }
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const t = window.setTimeout(() => firstFieldRef.current?.focus(), 30);
@@ -35,7 +35,7 @@ export function DemoModal({ open, onClose, interests = [] }: DemoModalProps) {
       document.removeEventListener("keydown", onKey);
       window.clearTimeout(t);
     };
-  }, [open, onClose]);
+  }, [onClose]);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -63,8 +63,6 @@ export function DemoModal({ open, onClose, interests = [] }: DemoModalProps) {
       setError("Could not send automatically — opening your email client.");
     }
   }
-
-  if (!open) return null;
 
   return (
     <div
@@ -184,4 +182,9 @@ export function DemoModal({ open, onClose, interests = [] }: DemoModalProps) {
       </div>
     </div>
   );
+}
+
+export function DemoModal({ open, onClose, interests = [] }: DemoModalProps) {
+  if (!open) return null;
+  return <DemoModalForm onClose={onClose} interests={interests} />;
 }
