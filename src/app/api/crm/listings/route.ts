@@ -18,6 +18,7 @@ export async function GET(request: NextRequest) {
     market: params.get("market") ?? undefined,
     board: params.get("board") ?? undefined,
     state: params.get("state") ?? undefined,
+    city: params.get("city") ?? undefined,
     search: params.get("search") ?? params.get("q") ?? undefined,
     sort: sort && SORTS.has(sort) ? (sort as CrmListingSort) : "newest",
     page: Math.max(1, Number.parseInt(params.get("page") ?? "1", 10) || 1),

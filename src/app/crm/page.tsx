@@ -4,7 +4,7 @@ import { CrmLeadsList } from "@/components/crm/CrmLeadsList";
 import { CrmListingsList } from "@/components/crm/CrmListingsList";
 import { CallListView } from "@/components/crm/CallListView";
 import { KpiCards } from "@/components/crm/KpiCards";
-import { MarketRail } from "@/components/crm/MarketRail";
+import { LocationRail } from "@/components/crm/LocationRail";
 import {
   getCallListItems,
   getConsolidatedListings,
@@ -12,7 +12,7 @@ import {
   getCrmKpis,
   getCrmLeads,
   getCrmTabCounts,
-  getMarketRailCounts,
+  getLocationRailCounts,
   type CallListItem,
   type CrmLeadFilters,
   type CrmLeadsResult,
@@ -55,7 +55,9 @@ function parseTab(raw: string | undefined): CrmTab {
 
 function parseFilters(params: CrmSearchParams): CrmLeadFilters {
   return {
-    market: params.market?.trim() || undefined,
+    // The Pipeline UI is location-led (State → City). source_market remains
+    // available to the JSON API for provenance queries, but is not a view gate.
+    market: undefined,
     state: params.state?.trim() || undefined,
     city: params.city?.trim() || undefined,
     sector: params.sector?.trim() || undefined,
@@ -92,14 +94,14 @@ export default async function CrmPage({
       getCrmFilterOptions(),
       getCrmTabCounts(),
       getCrmKpis(businessListDate()),
-      getMarketRailCounts(),
+      getLocationRailCounts(),
     ]);
     if (tab === "call-list") {
       callListItems = await getCallListItems();
     } else if (tab === "listings") {
       listings = await getConsolidatedListings({
-        market: filters.market,
         state: filters.state,
+        city: filters.city,
         board: params.board?.trim() || undefined,
         search: filters.search,
         sort:
@@ -155,12 +157,15 @@ export default async function CrmPage({
     return s ? `/crm?${s}` : "/crm";
   }
 
-  function marketHref(market: string | null): string {
+  function locationHref(state: string | null, city?: string | null): string {
     const qs = new URLSearchParams();
     for (const [key, value] of Object.entries(carriedFilterEntries)) {
-      if (value && key !== "market") qs.set(key, value);
+      if (value && key !== "market" && key !== "state" && key !== "city") {
+        qs.set(key, value);
+      }
     }
-    if (market) qs.set("market", market);
+    if (state) qs.set("state", state);
+    if (state && city) qs.set("city", city);
     if (tab !== "all") qs.set("tab", tab);
     const s = qs.toString();
     return s ? `/crm?${s}` : "/crm";
@@ -215,11 +220,12 @@ export default async function CrmPage({
 
       <div className="flex gap-6">
         {tab !== "call-list" && (
-          <MarketRail
+          <LocationRail
             total={rail!.total}
-            markets={rail!.markets}
-            activeMarket={params.market ?? ""}
-            buildHref={marketHref}
+            states={rail!.states}
+            activeState={params.state ?? ""}
+            activeCity={params.city ?? ""}
+            buildHref={locationHref}
           />
         )}
 
@@ -245,7 +251,6 @@ export default async function CrmPage({
                 options={filterOptions!}
                 tab={tab}
                 active={{
-                  market: params.market ?? "",
                   state: params.state ?? "",
                   city: params.city ?? "",
                   sector: params.sector ?? "",

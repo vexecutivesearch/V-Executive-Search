@@ -19,6 +19,7 @@ import {
   scoreTextClass,
 } from "@/lib/lead-score";
 import { sectorFromIndustry } from "@/lib/industry-sectors";
+import { parseJobLocation } from "@/lib/location-match";
 import { formatListingSalary, pickDisplayListing } from "@/lib/salary-format";
 
 export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
@@ -41,6 +42,9 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
     primaryJob?.location ||
     company.contacts.find((c) => c.jobLocation)?.jobLocation ||
     null;
+  const locationLabel = jobLocation
+    ? (parseJobLocation(jobLocation)?.label ?? jobLocation)
+    : null;
   const score = company.leadScore ?? 0;
 
   async function handleEnrichComplete(
@@ -169,12 +173,14 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
           </div>
 
           <div className="hidden sm:block min-w-0 text-left">
-            {row.marketLabel ? (
+            {locationLabel ? (
               <span className="text-xs text-gray-600 dark:text-gray-300 truncate block">
-                {row.marketLabel}
+                {locationLabel}
               </span>
             ) : (
-              <span className="text-xs text-gray-400 italic">No market match</span>
+              <span className="text-xs text-gray-400 italic">
+                Location unavailable
+              </span>
             )}
           </div>
 
@@ -238,7 +244,7 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
         >
           {primaryJob?.title}
           {primaryJob?.location ? ` · ${primaryJob.location}` : ""}
-          {row.marketLabel ? ` · ${row.marketLabel}` : ""}
+          {locationLabel ? ` · ${locationLabel}` : ""}
         </button>
       </div>
 
@@ -345,10 +351,10 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
             )}
             {salary && <span>Salary: {salary}</span>}
             <span>First seen: {company.firstSeen}</span>
-            <span>
-              Market: {row.marketLabel ?? "no match"}
-              {company.sourceMarket ? "" : row.marketLabel ? " (derived)" : ""}
-            </span>
+            <span>Location: {locationLabel ?? "unavailable"}</span>
+            {company.sourceMarket && (
+              <span>Source market: {company.sourceMarket}</span>
+            )}
           </div>
 
           {primaryJob && (

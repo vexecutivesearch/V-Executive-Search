@@ -50,7 +50,7 @@ export function CrmLeadsList({
             <span>Score</span>
             <span>Company</span>
             <span>Job</span>
-            <span>Market</span>
+            <span>Location</span>
             <span>Contacts</span>
             <span className="text-right pr-6">Action</span>
           </div>

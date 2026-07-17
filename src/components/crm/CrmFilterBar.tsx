@@ -3,10 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { CrmFilterOptions } from "@/lib/crm-queries";
-import { UNKNOWN_MARKET_LABEL, UNKNOWN_MARKET_VALUE } from "@/lib/market-attribution";
 
 export type CrmActiveFilters = {
-  market: string;
   state: string;
   city: string;
   sector: string;
@@ -74,7 +72,6 @@ export function CrmFilterBar({
   }, [options.cities, active.state]);
 
   const hasActiveFilters =
-    active.market ||
     active.state ||
     active.city ||
     active.sector ||
@@ -96,21 +93,6 @@ export function CrmFilterBar({
           placeholder="Search company, job, contact…"
           className="flex-1 min-w-[12rem] text-sm border border-gray-200 dark:border-gray-700 rounded-md px-3 py-1.5 bg-white dark:bg-gray-900"
         />
-
-        <select
-          value={active.market}
-          onChange={(e) => apply({ market: e.target.value || null })}
-          className={selectClass}
-          aria-label="Filter by market"
-        >
-          <option value="">All markets</option>
-          {options.markets.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-          <option value={UNKNOWN_MARKET_VALUE}>{UNKNOWN_MARKET_LABEL}</option>
-        </select>
 
         <select
           value={active.state}

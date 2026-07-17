@@ -469,6 +469,7 @@ export type CrmListingFilters = {
   market?: string;
   board?: string;
   state?: string;
+  city?: string;
   search?: string;
   sort?: CrmListingSort;
   page?: number;
@@ -556,6 +557,12 @@ export async function getConsolidatedListings(
       name
         ? sql`(${jobListings.location} ILIKE ${`%, ${abbr}%`} OR ${jobListings.location} ILIKE ${`%${escapeLike(name)}%`})`
         : sql`${jobListings.location} ILIKE ${`%, ${abbr}%`}`,
+    );
+  }
+
+  if (filters.city) {
+    conditions.push(
+      sql`${jobListings.location} ILIKE ${`%${escapeLike(filters.city.trim())}%`}`,
     );
   }
 
@@ -725,6 +732,95 @@ export async function getMarketRailCounts(): Promise<{
     });
   }
   return { total, markets };
+}
+
+export type LocationRailCity = {
+  city: string;
+  count: number;
+};
+
+export type LocationRailState = {
+  stateName: string;
+  stateAbbr: string;
+  count: number;
+  cities: LocationRailCity[];
+};
+
+/**
+ * State → city hierarchy for the Pipeline rail.
+ *
+ * Counts are based on actual job-listing locations, not source_market. A
+ * company is counted once per state/city in which it has a listing, matching
+ * the server-side State/City filter semantics. This means a valid location
+ * such as Weston, FL is never mislabeled as "No market match" merely because
+ * Weston was not a configured metro scrape hub.
+ */
+export async function getLocationRailCounts(): Promise<{
+  total: number;
+  states: LocationRailState[];
+}> {
+  const [companyRows, locationRows] = await Promise.all([
+    db
+      .select({ id: companies.id })
+      .from(companies)
+      .where(not(ilike(companies.name, "(Listing)%"))),
+    db
+      .select({
+        companyId: jobListings.companyId,
+        location: jobListings.location,
+      })
+      .from(jobListings)
+      .innerJoin(companies, eq(jobListings.companyId, companies.id))
+      .where(
+        and(
+          not(ilike(companies.name, "(Listing)%")),
+          sql`${jobListings.location} IS NOT NULL AND ${jobListings.location} <> ''`,
+        ),
+      ),
+  ]);
+
+  const stateCompanies = new Map<
+    string,
+    { stateName: string; companies: Set<string> }
+  >();
+  const cityCompanies = new Map<string, Map<string, Set<string>>>();
+
+  for (const row of locationRows) {
+    const parsed = row.location ? parseJobLocation(row.location) : null;
+    if (!parsed?.stateAbbr || !parsed.stateName) continue;
+
+    const state = stateCompanies.get(parsed.stateAbbr) ?? {
+      stateName: parsed.stateName,
+      companies: new Set<string>(),
+    };
+    state.companies.add(row.companyId);
+    stateCompanies.set(parsed.stateAbbr, state);
+
+    if (parsed.city?.trim()) {
+      const byCity = cityCompanies.get(parsed.stateAbbr) ?? new Map();
+      const companyIds = byCity.get(parsed.city) ?? new Set<string>();
+      companyIds.add(row.companyId);
+      byCity.set(parsed.city, companyIds);
+      cityCompanies.set(parsed.stateAbbr, byCity);
+    }
+  }
+
+  const states = [...stateCompanies.entries()]
+    .map(([stateAbbr, state]) => ({
+      stateName: state.stateName,
+      stateAbbr,
+      count: state.companies.size,
+      cities: [...(cityCompanies.get(stateAbbr) ?? new Map()).entries()]
+        .map(([city, ids]) => ({ city, count: ids.size }))
+        .sort((a, b) => b.count - a.count || a.city.localeCompare(b.city)),
+    }))
+    .sort(
+      (a, b) =>
+        a.stateName.localeCompare(b.stateName) ||
+        a.stateAbbr.localeCompare(b.stateAbbr),
+    );
+
+  return { total: companyRows.length, states };
 }
 
 export type CrmKpis = {
