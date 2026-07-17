@@ -20,9 +20,15 @@ On a **home Mac worker** (launchd), twice daily at **5 AM and 6 PM ET**:
 4. **Score / hygiene** — free backlog rescore, stale-listing archive, presence checks
 5. **Email** — daily HTML call-sheet report via Resend
 
-**Paid enrichment (Apollo / ContactOut) is manual-only** — use Enrich on a company card. Scheduled jobs must not spend provider credits.
+**Paid enrichment (Apollo / ContactOut) is manual-only** — use **Find contacts** on a company card. Scheduled jobs must not spend provider credits.
 
 Admin **Run now** uses the same scrape-only / jobs-only path via a 5-minute poll.
+
+## The CRM app (`/crm` is the home page)
+
+`/crm` (**Pipeline**) is the consolidated book of business — all markets, all dates, decoupled from the Admin scrape focus. Tabs: **All Leads · Job Listings · Call List · Hot**, with a State→City rail, ICP fit scoring/filters, and a persistent Call List (12 statuses, follow-ups, CSV). **Runs** (`/runs`) is a Market/Credits/Health ledger. **Legacy** (`/legacy`, off-menu) preserves the old Today's List + Companies views.
+
+**Selective enrichment (discovery → reveal):** "Find contacts" runs one reveal-off Apollo search (cached per company, zero reveal credits); a picker pre-selects the best contact; reveal spends credits only on your pick — **ContactOut-first** (personal email top 2, mobile top 3), Apollo phone as last resort, phone opt-in, never re-revealed. Discovery targets a **sector-aware allowlist** (`config/contact-targets.json`; law firms first). See `docs/V-EXECUTIVE-SEARCH-SYSTEM.md`.
 
 ## Quick start
 

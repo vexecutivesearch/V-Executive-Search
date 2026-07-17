@@ -29,7 +29,7 @@ Think of it as three layers:
 ┌─────────────────────────────────────────────────────────────────┐
 │  YOU (Alejandro)                                                 │
 │  Phone · judgment · relationships · closing                      │
-│  Interfaces: 6 AM email · /today CRM · /admin from phone          │
+│  Interfaces: 6 AM email · /crm Pipeline · /admin from phone       │
 └────────────────────────────▲────────────────────────────────────┘
                              │
 ┌────────────────────────────┴────────────────────────────────────┐
@@ -91,7 +91,13 @@ Think of it as three layers:
 - **iMessage check** on personal emails (Mac Messages API) — blue bubble vs SMS-only before you text.
 - **Email MX verification** — flags deliverable vs risky addresses on new contacts.
 
-### CRM (`/today`, `/companies`, company detail)
+### Pipeline CRM (`/crm` — home page)
+
+`/crm` is the default landing page (all markets · all dates · independent of the Admin scrape and today's date; navigate by filters). Left rail is **State → City**; header has KPI cards. Tabs: **All Leads** (default, ICP-ranked, Enriched/Discovered badges, action progresses Find contacts → Add to Call List → Open), **Job Listings** (one row per posting, reposts flagged, Find contacts per row), **Call List** (persistent call queue with 12 statuses, attempts, follow-ups, assignee, notes, CSV), **Hot** (active hiring signals). Server-side filters (market/state/city/sector/status/search, Callable/Enriched/**Discovered** only, plus ICP role/size/comp/score and per-category hide toggles that *sink don't hide*). **Runs** (`/runs`) is a Market/Credits/Health ledger. **Legacy** (`/legacy`, out of the menu) preserves the old Today's List + Companies views.
+
+Enrich is now **discovery → reveal-on-selection**: "Find contacts" runs one reveal-off Apollo search (cached, zero reveal credits), a picker pre-selects the best contact, and reveal spends credits only on your pick — **ContactOut-first** for personal email (top 2) and mobile (top 3), Apollo phone only as last resort, phone opt-in, never re-revealed. Discovery targets a **sector-aware allowlist** (law firms: Managing Partner/HR Director-led by size; litigation chairs etc. never searched).
+
+**Legacy call-sheet view** (`/legacy`):
 
 | View | What you see |
 |------|----------------|
@@ -128,7 +134,7 @@ This is the workflow the system is designed around:
 |------|-----|------------|
 | **Before 6 AM** | Sleep | Scrape → chunked jobs-only ingest → filter → score → presence checks → build email |
 | **6:00 AM** | Open call sheet email on phone | Ranked leads with reasons, channels, openers (enriched rows you already worked) |
-| **6:15 AM** | Skim top 3, open `/today` in CRM | Full detail, backlog tab for context |
+| **6:15 AM** | Skim top 3, open `/crm` (Pipeline) | Full detail, filter by market for context |
 | **7:00–11:00** | **Call block** — work the sheet top-down | — |
 | **Per call** | Read opener chip → dial → converse | — |
 | **After each call** | Expand row → Log call → paste notes → Save & mark contacted | Haiku summarizes, updates timeline |
@@ -234,9 +240,11 @@ Rough framing for one recruiter:
 
 | URL | Use when |
 |-----|----------|
-| `https://v-executive-search.vercel.app/today` | Morning work — call sheet + backlog tabs |
-| `https://v-executive-search.vercel.app/companies` | Browse full pipeline, filter by status |
-| `https://v-executive-search.vercel.app/companies/[id]` | Deep dive + log call + activity history |
+| `https://v-executive-search.vercel.app/` → `/crm` | **Home / daily driver** — Pipeline: All Leads · Job Listings · Call List · Hot |
+| `https://v-executive-search.vercel.app/crm?tab=call-list` | Persistent call queue (statuses, follow-ups, notes) |
+| `https://v-executive-search.vercel.app/runs` | Run health + credits per scrape |
+| `https://v-executive-search.vercel.app/companies/[id]` | Deep dive + find/reveal contacts + log call + activity history |
+| `https://v-executive-search.vercel.app/legacy` | Old Today's List + Companies views (out of the menu, still live) |
 | `https://v-executive-search.vercel.app/admin` | Change settings, trigger runs from phone |
 | **6 AM email** | First look — ranked leads + funnel stats |
 
@@ -453,7 +461,12 @@ The daily call sheet is *internal*. When you add outbound email to prospects, ke
 | JIT scrape → score → manual enrich | ✅ Live |
 | Paid egress locked to manual Enrich | ✅ Live |
 | ICP filter + hiring signals | ✅ Live |
-| Call sheet + backlog CRM tabs | ✅ Live |
+| Call sheet + backlog CRM tabs | ✅ Live (now under `/legacy`) |
+| Pipeline CRM (`/crm`, home): All Leads · Job Listings · Call List · Hot | ✅ Live (Jul 2026) |
+| ICP fit scoring + sink-don't-hide filters; Market provenance | ✅ Live |
+| Persistent Call List (12 statuses, follow-ups, CSV) | ✅ Live |
+| Selective enrichment (discovery→reveal, ContactOut-first, sector-aware) | ✅ Live |
+| Runs ledger (Market/Credits/Health) · Legacy page | ✅ Live |
 | Ranked email with funnel header | ✅ Live |
 | Haiku openers | ✅ Live (requires `ANTHROPIC_API_KEY`) |
 | Activity timeline + AI summarize | ✅ Live |
@@ -471,5 +484,6 @@ The daily call sheet is *internal*. When you add outbound email to prospects, ke
 
 ---
 
-*Document version: 1.1 · July 2026 · V Executive Search / Proven Theory*
-*Shareable twin: `docs/V-Executive-Search-Playbook.md` (keep in sync with this file).*
+*Document version: 1.2 · July 2026 · V Executive Search / Proven Theory*
+*v1.2 adds: Pipeline CRM (home page), ICP fit scoring, persistent Call List, discovery→reveal selective enrichment (ContactOut-first, sector-aware legal targeting), rebuilt Runs ledger, and the Legacy page.*
+*Canonical twin: `docs/V-EXECUTIVE-SEARCH-SYSTEM.md` (keep in sync with this file).*
