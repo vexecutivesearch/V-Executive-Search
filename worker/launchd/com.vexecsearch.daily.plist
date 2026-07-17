@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Legacy daily plist — replaced by install_launchd.sh (scrape/rescore/enrich/imessage/email).
+  Legacy scrape-only plist — replaced by install_launchd.sh and removed during install.
   Re-run: cd worker && ./scripts/install_launchd.sh
 -->
 <plist version="1.0">
@@ -19,7 +19,7 @@
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
-        <integer>2</integer>
+        <integer>6</integer>
         <key>Minute</key>
         <integer>0</integer>
     </dict>

@@ -4,6 +4,11 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { CompanyCardData } from "./CompanyCard";
+import {
+  AddToCallListButton,
+  AddToCallListPrompt,
+  OnCallListBadge,
+} from "./AddToCallListButton";
 import { ContactRow } from "./ContactRow";
 import { EnrichButton } from "./EnrichButton";
 import { StatusBadge, StatusSelect } from "./StatusBadge";
@@ -21,12 +26,14 @@ export function TodayListRow({
   rank,
   showReasonToCall = false,
   listMode = "call-sheet",
+  navigationPath = "/today",
 }: {
   company: CompanyCardData;
   defaultExpanded?: boolean;
   rank?: number;
   showReasonToCall?: boolean;
   listMode?: "call-sheet" | "backlog";
+  navigationPath?: "/today" | "/legacy";
 }) {
   const router = useRouter();
   const [company, setCompany] = useState(initial);
@@ -34,10 +41,34 @@ export function TodayListRow({
   const [enrichNotice, setEnrichNotice] = useState<string | null>(null);
   const [openerBusy, setOpenerBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [callListState, setCallListState] = useState<"unknown" | "on" | "off">(
+    "unknown",
+  );
+  const [showAddPrompt, setShowAddPrompt] = useState(false);
+  const [pendingBacklogNav, setPendingBacklogNav] = useState(false);
 
   useEffect(() => {
     setCompany(initial);
   }, [initial]);
+
+  const hasCallableContact = company.contacts.some(contactIsCallable);
+
+  // Resolve call-list membership lazily when the row opens with callable contacts.
+  useEffect(() => {
+    if (!expanded || callListState !== "unknown" || !hasCallableContact) return;
+    let cancelled = false;
+    fetch(`/api/call-list?company_id=${initial.id}`, { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { entry?: unknown } | null) => {
+        if (!cancelled && data) {
+          setCallListState(data.entry ? "on" : "off");
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, callListState, hasCallableContact, initial.id]);
 
   const linkedInJob =
     company.jobListings.find(
@@ -86,6 +117,16 @@ export function TodayListRow({
     }
   }
 
+  function finishPromotion(navigateFromBacklog: boolean) {
+    router.refresh();
+    if (navigateFromBacklog) {
+      const params = new URLSearchParams(window.location.search);
+      params.delete("tab");
+      const qs = params.toString();
+      router.push(qs ? `${navigationPath}?${qs}` : navigationPath);
+    }
+  }
+
   async function handleEnrichComplete(
     updated?: CompanyCardData,
     summary?: string,
@@ -96,15 +137,42 @@ export function TodayListRow({
 
     const latest = updated ?? company;
     const promoted = latest.contacts.some(contactIsCallable);
-    if (promoted) {
-      router.refresh();
-      if (listMode === "backlog") {
-        const params = new URLSearchParams(window.location.search);
-        params.delete("tab");
-        const qs = params.toString();
-        router.push(qs ? `/today?${qs}` : "/today");
+    if (!promoted) return;
+
+    // After a successful enrich, offer "Add to Call List: Yes / No" before
+    // the list refresh/navigation would unmount this row.
+    let onList = callListState === "on";
+    if (callListState === "unknown") {
+      try {
+        const res = await fetch(`/api/call-list?company_id=${initial.id}`, {
+          cache: "no-store",
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { entry?: unknown };
+          onList = Boolean(data.entry);
+          setCallListState(onList ? "on" : "off");
+        }
+      } catch {
+        // Membership unknown — still offer the prompt (POST is idempotent).
       }
     }
+
+    if (!onList) {
+      setShowAddPrompt(true);
+      setPendingBacklogNav(listMode === "backlog");
+      return;
+    }
+    finishPromotion(listMode === "backlog");
+  }
+
+  function handleAddPromptAnswer(added: boolean) {
+    setShowAddPrompt(false);
+    if (added) {
+      setCallListState("on");
+      setEnrichNotice("Added to Call List — Ready to Call");
+    }
+    finishPromotion(pendingBacklogNav);
+    setPendingBacklogNav(false);
   }
 
   async function generateOpener(force = false) {
@@ -272,6 +340,15 @@ export function TodayListRow({
         </button>
       </div>
 
+      {showAddPrompt && (
+        <div className="mx-4 mb-2">
+          <AddToCallListPrompt
+            companyId={company.id}
+            onAnswer={handleAddPromptAnswer}
+          />
+        </div>
+      )}
+
       {enrichNotice && (
         <div
           className={`mx-4 mb-2 rounded-md border px-3 py-2 text-sm ${
@@ -301,6 +378,16 @@ export function TodayListRow({
                 setCompany((c) => ({ ...c, status }))
               }
             />
+            {hasCallableContact &&
+              (callListState === "on" ? (
+                <OnCallListBadge />
+              ) : (
+                <AddToCallListButton
+                  companyId={company.id}
+                  compact
+                  onAdded={() => setCallListState("on")}
+                />
+              ))}
           </div>
 
           {primaryJob && (
@@ -419,6 +506,16 @@ export function TodayListRow({
                 setCompany((c) => ({ ...c, status }))
               }
             />
+            {hasCallableContact &&
+              (callListState === "on" ? (
+                <OnCallListBadge />
+              ) : (
+                <AddToCallListButton
+                  companyId={company.id}
+                  compact
+                  onAdded={() => setCallListState("on")}
+                />
+              ))}
           </div>
         </div>
       )}

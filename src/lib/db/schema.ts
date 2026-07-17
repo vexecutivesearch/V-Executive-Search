@@ -5,6 +5,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  real,
   text,
   timestamp,
   uniqueIndex,
@@ -52,6 +53,22 @@ export const activityTypeEnum = pgEnum("activity_type", [
   "meeting",
 ]);
 
+/** Outreach workflow statuses for the persistent CRM call list. */
+export const callStatusEnum = pgEnum("call_status", [
+  "new",
+  "ready_to_call",
+  "called_no_answer",
+  "voicemail_left",
+  "spoke_follow_up",
+  "email_sent",
+  "meeting_scheduled",
+  "proposal_sent",
+  "client_won",
+  "not_interested",
+  "bad_contact",
+  "do_not_contact",
+]);
+
 export const pipelineSettings = pgTable("pipeline_settings", {
   id: uuid("id").defaultRandom().primaryKey(),
   geographicScope: geographicScopeEnum("geographic_scope")
@@ -76,16 +93,72 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   /** Decision-maker titles for Apollo/ContactOut — not scrape search terms. */
   contactTitles: jsonb("contact_titles").$type<string[]>().default([]),
   runRequestedAt: timestamp("run_requested_at"),
+  runClaimedAt: timestamp("run_claimed_at"),
   contactoutSyncRequestedAt: timestamp("contactout_sync_requested_at"),
+  contactoutCreditsExhaustedAt: timestamp("contactout_credits_exhausted_at"),
   imessageCheckRequestedAt: timestamp("imessage_check_requested_at"),
   dailyEnrichQuota: integer("daily_enrich_quota").default(25).notNull(),
   minScoreForEnrich: integer("min_score_for_enrich").default(60).notNull(),
   minScoreForPhone: integer("min_score_for_phone").default(75).notNull(),
   lastRunAt: timestamp("last_run_at"),
   workerLastSeenAt: timestamp("worker_last_seen_at"),
+  workerCommitSha: text("worker_commit_sha"),
+  workerBranch: text("worker_branch"),
+  workerDirty: boolean("worker_dirty").default(false),
+  workerAgentSummary: text("worker_agent_summary"),
+  workerStatusPayload: jsonb("worker_status_payload").$type<Record<string, unknown>>(),
+  workerStatusAt: timestamp("worker_status_at"),
   missedRunAlertSlot: text("missed_run_alert_slot"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+export const stateGeoConfigs = pgTable(
+  "state_geo_configs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    stateName: text("state_name").notNull(),
+    stateAbbr: text("state_abbr").notNull(),
+    cities: jsonb("cities").$type<string[]>().default([]).notNull(),
+    counties: jsonb("counties").$type<string[]>().default([]).notNull(),
+    defaultFocusCities: jsonb("default_focus_cities")
+      .$type<string[]>()
+      .default([])
+      .notNull(),
+    defaultFocusCounties: jsonb("default_focus_counties")
+      .$type<string[]>()
+      .default([])
+      .notNull(),
+    defaultMetroCities: jsonb("default_metro_cities")
+      .$type<string[]>()
+      .default([])
+      .notNull(),
+    defaultMetroAliases: jsonb("default_metro_aliases")
+      .$type<string[]>()
+      .default([])
+      .notNull(),
+    cityCountyMap: jsonb("city_county_map")
+      .$type<Record<string, string[]>>()
+      .default({})
+      .notNull(),
+    metroPresets: jsonb("metro_presets")
+      .$type<
+        Record<
+          string,
+          {
+            marketName?: string;
+            metroCities?: string[];
+            metroAliases?: string[];
+            focusCounties?: string[];
+          }
+        >
+      >()
+      .default({})
+      .notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("state_geo_configs_state_name_uq").on(table.stateName)],
+);
 
 export const searchProfiles = pgTable(
   "search_profiles",
@@ -112,6 +185,8 @@ export const dailyRuns = pgTable(
     runDate: date("run_date").notNull(),
     /** Scheduled batch: am (6 AM ET), pm (6 PM ET), or manual. */
     runSlot: text("run_slot").notNull().default("am"),
+    /** Market active in Admin when this run scraped (e.g. "Charlotte, NC"). */
+    market: text("market"),
     listingsScraped: integer("listings_scraped").default(0),
     companiesFound: integer("companies_found").default(0),
     companiesSkippedExisting: integer("companies_skipped_existing").default(0),
@@ -151,6 +226,18 @@ export const companies = pgTable("companies", {
   industry: text("industry"),
   enrichedAt: timestamp("enriched_at"),
   enrichRunDate: date("enrich_run_date"),
+  /**
+   * Market active in Admin when this company was first scraped
+   * (e.g. "Charlotte, NC"). Provenance tag for the consolidated CRM view;
+   * nullable — historical rows are derived from job locations at read time.
+   */
+  sourceMarket: text("source_market"),
+  /**
+   * Set when a reveal-off discovery search completed for this company.
+   * The candidate cache: re-opening the picker never re-searches — the
+   * search credit is paid once per company, ever.
+   */
+  discoveryCompletedAt: timestamp("discovery_completed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -165,6 +252,8 @@ export const contacts = pgTable("contacts", {
   email: text("email"),
   workEmail: text("work_email"),
   personalEmail: text("personal_email"),
+  /** Additional personal emails from ContactOut (up to 2 total), best first. */
+  personalEmails: jsonb("personal_emails").$type<string[]>().default([]),
   phone: text("phone"),
   personalPhone: text("personal_phone"),
   companyPhone: text("company_phone"),
@@ -187,6 +276,35 @@ export const contacts = pgTable("contacts", {
   locationMatched: boolean("location_matched").default(false).notNull(),
   contactLocation: text("contact_location"),
   jobLocation: text("job_location"),
+  /**
+   * Selective enrichment state: 'discovered' = found by a reveal-off search
+   * (no email/phone credits spent), 'revealed' = reveal credits spent on
+   * selection. NULL = legacy contact from the pre-split enrich flow.
+   */
+  revealStatus: text("reveal_status"),
+  /** Channels paid for at reveal: 'email' | 'email_phone'. */
+  revealChannels: text("reveal_channels"),
+  /** Best contact for outreach (picker pre-selection). */
+  isPrimary: boolean("is_primary").default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const providerUsageEvents = pgTable("provider_usage_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  provider: text("provider").notNull(),
+  endpoint: text("endpoint").notNull(),
+  egressContext: text("egress_context").notNull(),
+  triggerSource: text("trigger_source").notNull(),
+  companyId: uuid("company_id").references(() => companies.id, {
+    onDelete: "set null",
+  }),
+  contactId: uuid("contact_id").references(() => contacts.id, {
+    onDelete: "set null",
+  }),
+  recordsReturned: integer("records_returned").default(0).notNull(),
+  estimatedCost: integer("estimated_cost").default(0).notNull(),
+  blocked: boolean("blocked").default(false).notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -217,6 +335,77 @@ export const jobListings = pgTable("job_listings", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+/**
+ * Persistent CRM call list — one entry per approved company.
+ * Company/contact/job facts stay on their own tables and are joined live;
+ * this table only owns the mutable call-tracking workflow fields.
+ */
+export const callListEntries = pgTable(
+  "call_list_entries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    /** Best contact to dial — switchable if a better contact turns up. */
+    primaryContactId: uuid("primary_contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    callStatus: callStatusEnum("call_status").default("ready_to_call").notNull(),
+    callStatusUpdatedAt: timestamp("call_status_updated_at"),
+    /** Editable override; falls back to companies.reason_to_call when null. */
+    outreachAngle: text("outreach_angle"),
+    attempts: integer("attempts").default(0).notNull(),
+    lastContactAt: timestamp("last_contact_at"),
+    nextFollowUpDate: date("next_follow_up_date"),
+    notes: text("notes"),
+    assignedTo: text("assigned_to"),
+    finalResult: text("final_result"),
+    addedAt: timestamp("added_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("call_list_entries_company_uq").on(table.companyId),
+  ],
+);
+
+/**
+ * ICP scoring annotations — a sibling table so the ICP layer cannot alter
+ * existing company rows. Annotations only: nothing here deletes, hides, or
+ * reorders pipeline data; the CRM view applies reversible filters on top.
+ */
+export const companyIcp = pgTable(
+  "company_icp",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    /** Snapshot of the hiring-signal score at scoring time (dual-score view). */
+    baseLeadScore: integer("base_lead_score"),
+    /** base × recruiter-fit multiplier + bonuses, clamped 0–100. */
+    icpAdjustedScore: integer("icp_adjusted_score"),
+    /** e.g. ["fortune_500","public_sector","staffing_agency"]. */
+    exclusionFlags: jsonb("exclusion_flags").$type<string[]>(),
+    /** Per-flag confidence 0–1 — every flag MUST have an entry. */
+    exclusionConfidence: jsonb("exclusion_confidence").$type<
+      Record<string, number>
+    >(),
+    roleType: text("role_type"),
+    roleTypeConfidence: real("role_type_confidence"),
+    compAnnualMin: integer("comp_annual_min"),
+    compAnnualMax: integer("comp_annual_max"),
+    /** True when comp was estimated from the config table, not the listing. */
+    compEstimatedFlag: boolean("comp_estimated_flag"),
+    compConfidence: text("comp_confidence"),
+    companySizeBand: text("company_size_band"),
+    likelyToUseRecruiter: real("likely_to_use_recruiter"),
+    enrichmentTier: text("enrichment_tier"),
+    scoredAt: timestamp("scored_at").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("company_icp_company_uq").on(table.companyId)],
+);
+
 export const companyActivities = pgTable("company_activities", {
   id: uuid("id").defaultRandom().primaryKey(),
   companyId: uuid("company_id")
@@ -239,8 +428,13 @@ export type JobListing = typeof jobListings.$inferSelect;
 export type CompanyActivity = typeof companyActivities.$inferSelect;
 export type ActivityType = (typeof activityTypeEnum.enumValues)[number];
 export type DailyRun = typeof dailyRuns.$inferSelect;
+export type ProviderUsageEvent = typeof providerUsageEvents.$inferSelect;
 export type PipelineSettings = typeof pipelineSettings.$inferSelect;
+export type StateGeoConfigRow = typeof stateGeoConfigs.$inferSelect;
 export type SearchProfile = typeof searchProfiles.$inferSelect;
+export type CallListEntry = typeof callListEntries.$inferSelect;
+export type CompanyIcp = typeof companyIcp.$inferSelect;
+export type CallStatus = (typeof callStatusEnum.enumValues)[number];
 export type CompanyStatus = (typeof companyStatusEnum.enumValues)[number];
 export type GeographicScope = (typeof geographicScopeEnum.enumValues)[number];
 export type IcpStatus = (typeof icpStatusEnum.enumValues)[number];

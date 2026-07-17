@@ -13,6 +13,7 @@ out/
 dist/
 build/
 next-env.d.ts
+data/census/
 
 # Python worker
 worker/.venv/
@@ -31,3 +32,4 @@ worker/*.egg-info/
 
 # Drizzle
 drizzle/
+icp-shadow-report.json

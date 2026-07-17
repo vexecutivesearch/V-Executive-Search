@@ -13,7 +13,11 @@ export async function POST() {
   const settings = await getOrCreateSettings();
   await db
     .update(pipelineSettings)
-    .set({ runRequestedAt: new Date(), updatedAt: new Date() })
+    .set({
+      runRequestedAt: new Date(),
+      runClaimedAt: null,
+      updatedAt: new Date(),
+    })
     .where(eq(pipelineSettings.id, settings.id));
 
   return NextResponse.json({

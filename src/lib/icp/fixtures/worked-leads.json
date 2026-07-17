@@ -1,0 +1,112 @@
+{
+  "generated_at": "2026-07-17T06:40:06.444Z",
+  "min_score_floor": 25,
+  "leads": [
+    {
+      "id": "d7e35789-c6b1-4f4e-be46-b4660904bd60",
+      "name": "Caulfield & Wheeler, Inc",
+      "domain": "cwi-assoc.com",
+      "status": "new",
+      "lead_score": 73
+    },
+    {
+      "id": "0e0ff315-d9e1-42d2-a5c7-aee612fcb791",
+      "name": "Family Eye Center",
+      "domain": "familyeyemd.com",
+      "status": "new",
+      "lead_score": 64
+    },
+    {
+      "id": "14653d32-bec5-41ef-bc05-d1a9a21826ff",
+      "name": "MBattle Construction",
+      "domain": "mbattleconstruction.com",
+      "status": "new",
+      "lead_score": 44
+    },
+    {
+      "id": "04b0fc6a-bc4c-42d8-a2ba-9cf8e1035948",
+      "name": "Aviata Health Group",
+      "domain": "aviatahealth.com",
+      "status": "new",
+      "lead_score": 54
+    },
+    {
+      "id": "f5098285-75f4-4d4c-9c3b-8d6d2b950061",
+      "name": "MN8 Energy",
+      "domain": "mn8.com",
+      "status": "new",
+      "lead_score": 68
+    },
+    {
+      "id": "e690dedc-acd9-4adb-bb83-8643e7439df0",
+      "name": "City of Deerfield Beach",
+      "domain": "deerfield-beach.com",
+      "status": "new",
+      "lead_score": 35
+    },
+    {
+      "id": "c93b1d1d-d727-4f41-beca-6fa7d4c74f25",
+      "name": "Maid Cleaning For you",
+      "domain": "maidforyoucleaning.com",
+      "status": "new",
+      "lead_score": 64
+    },
+    {
+      "id": "c0a53036-003f-4802-856a-6121cb1737cc",
+      "name": "Atlanta Legal Aid Society",
+      "domain": "atlantalegalaid.org",
+      "status": "new",
+      "lead_score": 100
+    },
+    {
+      "id": "68f7dcdf-1093-475a-98e7-a485ed7cc1a9",
+      "name": "USClaims",
+      "domain": "usclaims.com",
+      "status": "new",
+      "lead_score": 67
+    },
+    {
+      "id": "b88255d9-e8e2-4a8c-847d-cabbfe65d37b",
+      "name": "Lydecker LLP",
+      "domain": "lydecker.com",
+      "status": "new",
+      "lead_score": 62
+    },
+    {
+      "id": "4fa1afff-7b9c-4c33-9f3b-0069fe81f4f1",
+      "name": "Menzies Aviation LATAM",
+      "domain": "menziesaviationlatam.com",
+      "status": "new",
+      "lead_score": 42
+    },
+    {
+      "id": "a48b6d82-6cc9-4dba-8231-8c0cd12a8972",
+      "name": "Excell Refrigeration",
+      "domain": "excellrefrigeration.com",
+      "status": "new",
+      "lead_score": 62
+    },
+    {
+      "id": "4cf37714-33b7-47d0-aa1c-2f90783f09ba",
+      "name": "III Capital Management",
+      "domain": "iiicm.com",
+      "status": "new",
+      "lead_score": 65
+    },
+    {
+      "id": "4766d387-730d-4679-9b2f-fc6d44ad51db",
+      "name": "Trinity Search Group",
+      "domain": "trinitysearchgroup.com",
+      "status": "new",
+      "lead_score": 64
+    }
+  ],
+  "allowed_flags": {
+    "e690dedc-acd9-4adb-bb83-8643e7439df0": [
+      "public_sector"
+    ],
+    "4766d387-730d-4679-9b2f-fc6d44ad51db": [
+      "third_party_posting"
+    ]
+  }
+}

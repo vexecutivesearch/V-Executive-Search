@@ -194,7 +194,7 @@ export async function getTopRankedLeads(limit = 5): Promise<CompanyCardData[]> {
       and(
         eq(companies.status, "new"),
         or(
-          ne(companies.icpStatus, "fail"),
+          eq(companies.icpStatus, "pass"),
           sql`EXISTS (
             SELECT 1 FROM contacts AS ct
             WHERE ct.company_id = ${companies.id}
@@ -407,6 +407,7 @@ export async function getCompaniesByStatus(
 
 export async function getCompanyById(
   id: string,
+  options?: { skipGeoFilter?: boolean },
 ): Promise<CompanyCardData | null> {
   const rows = await db
     .select()
@@ -415,7 +416,12 @@ export async function getCompanyById(
     .limit(1);
 
   if (rows.length === 0) return null;
-  const enriched = await enrichCompanies(rows, await getGeoFocusSettings());
+  // The CRM/Pipeline is decoupled from the Admin geo focus, so callers there
+  // must pass skipGeoFilter to keep a company's job listings visible after an
+  // enrich even when Admin is scraping a different market ("No active job" bug).
+  const enriched = await enrichCompanies(rows, await getGeoFocusSettings(), {
+    skipGeoFilter: options?.skipGeoFilter,
+  });
   return enriched[0];
 }
 
@@ -491,10 +497,17 @@ export async function getCompanyActivities(companyId: string) {
     .limit(100);
 }
 
-async function enrichCompanies(
+/**
+ * Hydrate company rows with contacts + job listings.
+ *
+ * By default listings outside the current Admin geo focus are dropped (the
+ * Today's List behavior). The consolidated CRM view passes `skipGeoFilter`
+ * so every market's listings survive regardless of the active scrape focus.
+ */
+export async function enrichCompanies(
   rows: (typeof companies.$inferSelect)[],
   geoSettings?: Awaited<ReturnType<typeof getGeoFocusSettings>>,
-  options?: { asOfDate?: string },
+  options?: { asOfDate?: string; skipGeoFilter?: boolean },
 ): Promise<CompanyCardData[]> {
   if (rows.length === 0) return [];
 
@@ -543,9 +556,11 @@ async function enrichCompanies(
     const listings = (listingsByCompany.get(company.id) ?? []).filter(
       (listing) => !asOfDate || jobActiveOnDate(listing, asOfDate),
     );
-    const inFocusListings = listings.filter((listing) =>
-      jobLocationInFocus(listing.location, settings),
-    );
+    const inFocusListings = options?.skipGeoFilter
+      ? listings
+      : listings.filter((listing) =>
+          jobLocationInFocus(listing.location, settings),
+        );
 
     return {
       id: company.id,
@@ -555,6 +570,7 @@ async function enrichCompanies(
       status: company.status,
       firstSeen: company.firstSeen,
       industry: company.industry,
+      estimatedEmployees: company.estimatedEmployees,
       leadScore: company.leadScore ?? 0,
       hiringSignals: company.hiringSignals ?? {},
       reasonToCall: company.reasonToCall,
@@ -563,6 +579,7 @@ async function enrichCompanies(
       icpStatus: company.icpStatus,
       enrichedAt: company.enrichedAt,
       enrichRunDate: company.enrichRunDate,
+      sourceMarket: company.sourceMarket,
       contacts: applySharedLineFilter(companyContacts),
       jobListings: inFocusListings,
     };

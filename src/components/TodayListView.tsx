@@ -29,6 +29,7 @@ export function TodayListView({
   listRange,
   showFunnel = true,
   filterOptions,
+  navigationPath = "/today",
 }: {
   companies: CompanyCardData[];
   geoLabel: string;
@@ -38,6 +39,8 @@ export function TodayListView({
   listRange?: ListDateRange;
   showFunnel?: boolean;
   filterOptions?: TodayFilterOptions;
+  /** Keep backlog promotion inside Legacy when this view is embedded there. */
+  navigationPath?: "/today" | "/legacy";
 }) {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortKey>("score");
@@ -70,6 +73,16 @@ export function TodayListView({
   function dismissNotice() {
     localStorage.setItem(DISCLAIMER_KEY, "1");
     setDismissedNotice(true);
+  }
+
+  function clearFilters() {
+    setSearch("");
+    setGeoOnly(false);
+    setCallableOnly(listMode === "call-sheet");
+    setHotSignalsOnly(false);
+    setNewTodayOnly(false);
+    setLinkedinOnly(false);
+    setLeadFilters({ ...DEFAULT_LEAD_FILTER });
   }
 
   const filtered = useMemo(() => {
@@ -107,13 +120,18 @@ export function TodayListView({
 
       if (!term) return true;
 
-      const primaryJob = company.jobListings[0];
+      const listingText = company.jobListings
+        .map(
+          (j) =>
+            `${j.title ?? ""} ${j.location ?? ""} ${j.searchName ?? ""}`,
+        )
+        .join(" ");
       const haystack = [
         company.name,
         company.domain ?? "",
         company.reasonToCall ?? "",
-        primaryJob?.title ?? "",
-        primaryJob?.location ?? "",
+        company.industry ?? "",
+        listingText,
         ...company.contacts.map((c) => `${c.name} ${c.title ?? ""}`),
       ]
         .join(" ")
@@ -206,6 +224,40 @@ export function TodayListView({
         .filter(Boolean)
         .join(" · ")
     : null;
+
+  const activeFilterLabels: string[] = [];
+  if (search.trim()) activeFilterLabels.push(`search “${search.trim()}”`);
+  if (geoOnly) activeFilterLabels.push("geo match");
+  if (listMode !== "backlog" && callableOnly) {
+    activeFilterLabels.push("callable");
+  }
+  if (hotSignalsOnly) activeFilterLabels.push("hot signals");
+  if (newTodayOnly) activeFilterLabels.push("new today");
+  if (linkedinOnly) activeFilterLabels.push("LinkedIn jobs");
+  if (leadFilters.jobTitle) activeFilterLabels.push(leadFilters.jobTitle);
+  if (leadFilters.industry) activeFilterLabels.push(leadFilters.industry);
+  if (leadFilters.salaryFilter === "has_salary") {
+    activeFilterLabels.push("has salary");
+  } else if (leadFilters.salaryFilter === "min_salary") {
+    activeFilterLabels.push(
+      `salary ≥ $${leadFilters.salaryMinUsd.toLocaleString()}`,
+    );
+  }
+  const filtersActive = activeFilterLabels.length > 0;
+
+  const industryUnknownHidden = useMemo(() => {
+    if (!leadFilters.industry.trim()) return 0;
+    return companies.filter((company) => {
+      if (!company.jobListings.length) return false;
+      if (company.industry?.trim()) return false;
+      // Would match all other active filters if industry were known
+      return companyMatchesLeadFilters(company, {
+        ...leadFilters,
+        industry: "",
+        includeUnknownIndustry: true,
+      });
+    }).length;
+  }, [companies, leadFilters]);
 
   return (
     <div>
@@ -331,7 +383,12 @@ export function TodayListView({
               <select
                 value={leadFilters.industry}
                 onChange={(e) =>
-                  setLeadFilters((f) => ({ ...f, industry: e.target.value }))
+                  setLeadFilters((f) => ({
+                    ...f,
+                    industry: e.target.value,
+                    // Sector pick is exact — blank industries must not leak in
+                    includeUnknownIndustry: false,
+                  }))
                 }
                 className="text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900 max-w-[10rem]"
                 aria-label="Filter by sector"
@@ -389,13 +446,32 @@ export function TodayListView({
             )}
         </div>
 
-        <p className="text-xs text-gray-500 mt-2">
-          Showing {filtered.length} of {companies.length}{" "}
-          {listMode === "backlog" ? "backlog leads" : "call sheet leads"}
-          {listMode === "backlog" && listRange && !listRange.isToday && (
-            <> · snapshot as of {listRange.snapshotDate}</>
+        <p className="text-xs text-gray-500 mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span>
+            Showing {filtered.length} of {companies.length}{" "}
+            {listMode === "backlog" ? "backlog leads" : "call sheet leads"}
+            {filtersActive
+              ? ` · filtered by ${activeFilterLabels.join(", ")}`
+              : " · filters apply instantly"}
+            {listMode === "backlog" && listRange && !listRange.isToday && (
+              <> · snapshot as of {listRange.snapshotDate}</>
+            )}
+            {sort === "score" && " · ranked by lead score"}
+          </span>
+          {industryUnknownHidden > 0 && (
+            <span className="text-amber-700 dark:text-amber-400">
+              {industryUnknownHidden} hidden — industry unknown
+            </span>
           )}
-          {sort === "score" && " · ranked by lead score"}
+          {filtersActive && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              Clear filters
+            </button>
+          )}
         </p>
       </div>
 
@@ -404,14 +480,7 @@ export function TodayListView({
           <p>No leads match your filters</p>
           <button
             type="button"
-            onClick={() => {
-              setSearch("");
-              setGeoOnly(false);
-              setCallableOnly(listMode === "call-sheet");
-              setHotSignalsOnly(false);
-              setLinkedinOnly(false);
-              setLeadFilters({ ...DEFAULT_LEAD_FILTER });
-            }}
+            onClick={clearFilters}
             className="text-sm text-blue-600 dark:text-blue-400 hover:underline mt-2"
           >
             Clear filters
@@ -435,6 +504,7 @@ export function TodayListView({
               rank={index + 1}
               showReasonToCall
               listMode={listMode}
+              navigationPath={navigationPath}
             />
           ))}
         </div>

@@ -5,6 +5,7 @@ import { resolveCompanyOrg } from "@/lib/domain-resolver";
 import { db } from "@/lib/db";
 import { companies } from "@/lib/db/schema";
 import { isListingPseudoCompany } from "@/lib/icp-filter";
+import { PaidEgressBlockedError } from "@/lib/paid-egress";
 import { recomputeCompanyScores } from "@/lib/recompute-company-scores";
 
 export const runtime = "nodejs";
@@ -66,7 +67,24 @@ export async function POST(request: NextRequest) {
   for (const row of rows) {
     if (isListingPseudoCompany(row.name)) continue;
 
-    const lookup = await resolveCompanyOrg(row.name, apiKey);
+    let lookup: Awaited<ReturnType<typeof resolveCompanyOrg>>;
+    try {
+      lookup = await resolveCompanyOrg(row.name, apiKey, "scheduled_pipeline");
+    } catch (err) {
+      if (err instanceof PaidEgressBlockedError) {
+        return NextResponse.json(
+          {
+            error:
+              "Apollo domain backfill is blocked until paid egress is explicitly re-enabled.",
+            updated,
+            industry_set: industrySet,
+            company_ids: touchedIds,
+          },
+          { status: 403 },
+        );
+      }
+      throw err;
+    }
     const patch: Partial<typeof companies.$inferInsert> = {};
 
     if (

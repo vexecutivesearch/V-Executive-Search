@@ -7,15 +7,15 @@ import re
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
-load_dotenv(WORKER_ROOT / ".env")
 
+from src.env_loader import load_worker_env  # noqa: E402
 from jobspy import scrape_jobs  # noqa: E402
 from jobspy.util import create_session  # noqa: E402
 from jobspy.linkedin.constant import headers  # noqa: E402
+
+load_worker_env()
 
 
 def linkedin_guest_title(keywords: str, location: str) -> str:

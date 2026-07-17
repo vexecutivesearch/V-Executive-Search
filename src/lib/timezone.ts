@@ -19,12 +19,12 @@ export function businessHour(): number {
 }
 
 /**
- * Recruiting "list day" rolls at 6:00 AM Eastern (not midnight).
- * Between midnight and 6 AM, the list still shows the prior business day.
+ * Recruiting "list day" rolls at 5:00 AM Eastern (not midnight).
+ * Between midnight and 5 AM, the list still shows the prior business day.
  */
 export function businessListDate(): string {
   const calendarToday = businessToday();
-  if (businessHour() < 6) {
+  if (businessHour() < 5) {
     const d = new Date(`${calendarToday}T12:00:00`);
     d.setDate(d.getDate() - 1);
     return d.toISOString().slice(0, 10);
@@ -34,7 +34,7 @@ export function businessListDate(): string {
 
 /**
  * first_seen values to include on Today's List.
- * Before 6 AM, also includes calendar-today rows from midnight straddle runs.
+ * Before 5 AM, also includes calendar-today rows from midnight straddle runs.
  */
 export function businessDayFirstSeenDates(): string[] {
   const listDate = businessListDate();
@@ -54,7 +54,7 @@ export function businessListWindowLabel(listDate?: string): string {
     day: "numeric",
     year: "numeric",
   });
-  return `${dayLabel} · 6 AM – 6 AM ET`;
+  return `${dayLabel} · 5 AM – 5 AM ET`;
 }
 
 /** Validate YYYY-MM-DD from URL ?date= param. */
@@ -68,7 +68,7 @@ export function resolveListDate(listDateParam?: string): string {
   return parseListDateParam(listDateParam) ?? businessListDate();
 }
 
-/** am = morning scrape (~6 AM ET), pm = evening (~6 PM ET). */
+/** am = morning scrape (~5 AM ET), pm = evening (~6 PM ET). */
 export type RunSlot = "am" | "pm" | "manual";
 
 export function normalizeRunSlot(slot?: string | null): RunSlot {
@@ -81,7 +81,7 @@ export function formatRunSlot(slot?: string | null): string {
   const s = normalizeRunSlot(slot);
   if (s === "pm") return "6 PM ET";
   if (s === "manual") return "manual";
-  return "6 AM ET";
+  return "5 AM ET";
 }
 
 /** Infer slot from Eastern hour (matches worker schedule). */
@@ -92,7 +92,7 @@ export function businessRunSlot(hour = businessHour()): RunSlot {
 
 /**
  * first_seen dates for the daily list query.
- * Explicit date → that day only; default → current business day (+ straddle before 6 AM).
+ * Explicit date → that day only; default → current business day (+ straddle before 5 AM).
  */
 export function firstSeenDatesForListQuery(listDateParam?: string): string[] {
   const parsed = parseListDateParam(listDateParam);

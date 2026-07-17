@@ -33,6 +33,12 @@ describe("sectorFromIndustry", () => {
     );
   });
 
+  it("accepts coarse sector labels already stored by the scrape worker", () => {
+    for (const sector of INDUSTRY_SECTORS) {
+      expect(sectorFromIndustry(sector)).toBe(sector);
+    }
+  });
+
   it("returns null for empty", () => {
     expect(sectorFromIndustry(null)).toBeNull();
     expect(sectorFromIndustry("  ")).toBeNull();

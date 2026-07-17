@@ -19,6 +19,9 @@ def try_hybrid_contactout_client():
     if sys.platform != "darwin":
         return None
 
+    if os.environ.get("ENABLE_CONTACTOUT_HYBRID") != "true":
+        return None
+
     mode = os.environ.get("CONTACTOUT_MODE", "auto").strip().lower()
     if mode == "api":
         return None

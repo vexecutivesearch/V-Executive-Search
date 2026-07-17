@@ -1,74 +1,8 @@
-import { DEFAULT_WPB_METRO_CITIES } from "@/lib/metro-defaults";
-
-/** Florida cities for admin dropdown (geofence multi-select). */
-export const FLORIDA_CITIES = [
-  "Boca Raton",
-  "Clearwater",
-  "Daytona Beach",
-  "Fort Lauderdale",
-  "Fort Myers",
-  "Gainesville",
-  "Hialeah",
-  "Hollywood",
-  "Jacksonville",
-  "Lakeland",
-  "Melbourne",
-  "Miami",
-  "Naples",
-  "Ocala",
-  "Orlando",
-  "Palm Bay",
-  "Pensacola",
-  "Port St. Lucie",
-  "Sarasota",
-  "St. Petersburg",
-  "Tallahassee",
-  "Tampa",
-  "West Palm Beach",
-  "Winter Park",
-].sort();
-
-/** Florida counties for admin dropdown (geofence multi-select). */
-export const FLORIDA_COUNTIES = [
-  "Alachua",
-  "Brevard",
-  "Broward",
-  "Charlotte",
-  "Citrus",
-  "Collier",
-  "Duval",
-  "Escambia",
-  "Flagler",
-  "Hernando",
-  "Hillsborough",
-  "Indian River",
-  "Lake",
-  "Lee",
-  "Leon",
-  "Manatee",
-  "Marion",
-  "Martin",
-  "Miami-Dade",
-  "Monroe",
-  "Nassau",
-  "Okaloosa",
-  "Orange",
-  "Osceola",
-  "Palm Beach",
-  "Pasco",
-  "Pinellas",
-  "Polk",
-  "Sarasota",
-  "Seminole",
-  "St. Johns",
-  "St. Lucie",
-  "Volusia",
-].sort();
-
-export function getMetroCitiesForState(state: string): string[] {
-  if (state === "Florida") return [...DEFAULT_WPB_METRO_CITIES].sort();
-  return [];
-}
+import {
+  DEFAULT_STATE_GEO_CONFIGS,
+  findStateGeoConfig,
+  type StateGeoConfig,
+} from "@/lib/state-geo-config";
 
 export const US_STATES = [
   "Alabama",
@@ -123,12 +57,34 @@ export const US_STATES = [
   "Wyoming",
 ];
 
-export function getCitiesForState(state: string): string[] {
-  if (state === "Florida") return FLORIDA_CITIES;
-  return [];
+export function getCitiesForState(
+  state: string,
+  configs: readonly StateGeoConfig[] = DEFAULT_STATE_GEO_CONFIGS,
+): string[] {
+  return [...(findStateGeoConfig(state, configs)?.cities ?? [])].sort((a, b) =>
+    a.localeCompare(b),
+  );
 }
 
-export function getCountiesForState(state: string): string[] {
-  if (state === "Florida") return FLORIDA_COUNTIES;
-  return [];
+export function getCountiesForState(
+  state: string,
+  configs: readonly StateGeoConfig[] = DEFAULT_STATE_GEO_CONFIGS,
+): string[] {
+  return [...(findStateGeoConfig(state, configs)?.counties ?? [])].sort((a, b) =>
+    a.localeCompare(b),
+  );
+}
+
+export function getMetroCitiesForState(
+  state: string,
+  configs: readonly StateGeoConfig[] = DEFAULT_STATE_GEO_CONFIGS,
+): string[] {
+  const config = findStateGeoConfig(state, configs);
+  const cities = [
+    ...(config?.defaultMetroCities ?? []),
+    ...Object.values(config?.metroPresets ?? {}).flatMap(
+      (preset) => preset.metroCities ?? [],
+    ),
+  ];
+  return [...new Set(cities)].sort((a, b) => a.localeCompare(b));
 }

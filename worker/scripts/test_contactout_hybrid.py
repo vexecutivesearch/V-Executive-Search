@@ -6,13 +6,13 @@ import logging
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
-load_dotenv(WORKER_ROOT / ".env")
 
+from src.env_loader import load_worker_env  # noqa: E402
 from src.enrich.contactout import get_contactout_client  # noqa: E402
+
+load_worker_env()
 
 PROFILES = [
     ("Ryan Cronin", "http://www.linkedin.com/in/ryan-cronin-3b422a32"),
@@ -26,7 +26,7 @@ def main() -> int:
 
     client = get_contactout_client()
     if not client.is_configured:
-        logger.error("Set CONTACTOUT_API_KEY in worker/.env")
+        logger.error("Set CONTACTOUT_API_KEY in the canonical worker env")
         return 1
 
     ok = 0

@@ -9,15 +9,15 @@
 
 ## Executive summary
 
-V Executive Search is a **recruiting operating system** built for one recruiter working a focused market (currently West Palm Beach, Florida). It runs overnight on a home Mac, ranks the entire local hiring market for free, spends paid enrichment credits only on the leads you can actually call that day, and delivers a **ranked call sheet** to your inbox by 6 AM.
+V Executive Search is a **recruiting operating system** built for one recruiter working focused metro markets (DB-backed presets across **14 states / 61 markets** — e.g. Charlotte, NC–SC; Florida markets including West Palm Beach). It runs overnight on a home Mac, ranks the local hiring market for free, spends paid enrichment credits only when you manually Enrich a lead you will call, and delivers a **ranked call sheet** to your inbox by ~6 AM.
 
 Your job is not to hunt listings, build spreadsheets, or update a CRM after the fact. Your job is to **pick up the phone and have the conversation** — with a reason to call, a suggested opener, and the best contact channel already surfaced.
 
 The system follows one rule:
 
-> **Scrape wide and free. Score for free. Spend credits only on the top-N leads you will call today.**
+> **Scrape wide and free. Score for free. Spend credits only on leads you choose to Enrich and call.**
 
-That single design choice cut projected enrichment spend from ~$4,500/month to ~$200/month while **increasing** market coverage, because the backlog compounds every night without costing more.
+That design cut projected enrichment spend from ~$4,500/month (enrich-everything) to a small manual budget while **increasing** market coverage, because the backlog compounds every night without costing more.
 
 ---
 
@@ -29,7 +29,7 @@ Think of it as three layers:
 ┌─────────────────────────────────────────────────────────────────┐
 │  YOU (Alejandro)                                                 │
 │  Phone · judgment · relationships · closing                      │
-│  Interfaces: 6 AM email · /today CRM · /admin from phone          │
+│  Interfaces: 6 AM email · /crm Pipeline · /admin from phone       │
 └────────────────────────────▲────────────────────────────────────┘
                              │
 ┌────────────────────────────┴────────────────────────────────────┐
@@ -40,7 +40,8 @@ Think of it as three layers:
                              │ HTTPS
 ┌────────────────────────────┴────────────────────────────────────┐
 │  Mac worker (always-on, residential IP)                          │
-│  Scrape · rescore · enrich top-N · iMessage · email delivery     │
+│  Scrape · chunked jobs-only ingest · rescore · iMessage · email  │
+│  Paid Apollo/ContactOut only via manual Enrich                   │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -70,14 +71,15 @@ Think of it as three layers:
   - New companies on today's list
 - Persists a **lead score** and **reason to call** on every company — ranked best-first.
 
-### Just-in-time enrichment (paid, top-N only)
+### Just-in-time enrichment (paid, **manual**)
 
-- Pulls the top **25 companies** per day from the ranked backlog (configurable in Admin).
+- Scheduled jobs are **scrape-only / jobs-only**. They do not call Apollo or ContactOut.
+- From the CRM, **Enrich** on a company pulls decision-makers when you are ready to call.
 - **Apollo** finds decision-makers: name, title, LinkedIn URL, work contact paths.
 - **ContactOut API** adds personal email and mobile where available.
-- **Phone gating:** only requests phone reveals when lead score ≥ 75 (saves credits on marginal leads).
-- **Domain backfill** runs before enrich so companies without domains get a second chance via Apollo org search.
-- Credits are capped per run; ContactOut exhaustion triggers an alert email.
+- **Phone gating:** only requests phone reveals when lead score ≥ threshold (saves credits).
+- **Domain backfill** can run before enrich so companies without domains get a second chance via Apollo org search.
+- Credits are capped; ContactOut exhaustion triggers an alert email.
 
 ### Delivery & prep (free)
 
@@ -89,7 +91,13 @@ Think of it as three layers:
 - **iMessage check** on personal emails (Mac Messages API) — blue bubble vs SMS-only before you text.
 - **Email MX verification** — flags deliverable vs risky addresses on new contacts.
 
-### CRM (`/today`, `/companies`, company detail)
+### Pipeline CRM (`/crm` — home page)
+
+`/crm` is the default landing page (all markets · all dates · independent of the Admin scrape and today's date; navigate by filters). Left rail is **State → City**; header has KPI cards. Tabs: **All Leads** (default, ICP-ranked, Enriched/Discovered badges, action progresses Find contacts → Add to Call List → Open), **Job Listings** (one row per posting, reposts flagged, Find contacts per row), **Call List** (persistent call queue with 12 statuses, attempts, follow-ups, assignee, notes, CSV), **Hot** (active hiring signals). Server-side filters (market/state/city/sector/status/search, Callable/Enriched/**Discovered** only, plus ICP role/size/comp/score and per-category hide toggles that *sink don't hide*). **Runs** (`/runs`) is a Market/Credits/Health ledger. **Legacy** (`/legacy`, out of the menu) preserves the old Today's List + Companies views.
+
+Enrich is now **discovery → reveal-on-selection**: "Find contacts" runs one reveal-off Apollo search (cached, zero reveal credits), a picker pre-selects the best contact, and reveal spends credits only on your pick — **ContactOut-first** for personal email (top 2) and mobile (top 3), Apollo phone only as last resort, phone opt-in, never re-revealed. Discovery targets a **sector-aware allowlist** (law firms: Managing Partner/HR Director-led by size; litigation chairs etc. never searched).
+
+**Legacy call-sheet view** (`/legacy`):
 
 | View | What you see |
 |------|----------------|
@@ -102,16 +110,17 @@ Think of it as three layers:
 
 ### Admin (`/admin` from phone or laptop)
 
-- Geographic focus (cities, counties, state)
+- **State + Market** — 14 states / 61 OMB–Census-grounded metros; Market reloads cities, counties, hubs, aliases (cross-state hubs keep true state, e.g. Rock Hill, SC)
 - Job board toggles (A/B which sources produce net-new companies)
-- Active title searches
-- **Enrichment quotas:** daily N, min score to enrich, min score for phone
-- **Run now** — triggers scrape → rescore → enrich from anywhere; worker polls every 5 minutes
+- Active title searches and optional focus keywords (legal/HR/finance/etc.)
+- **Enrichment quotas:** still configure thresholds for when you Enrich; scheduled paid egress stays off
+- **Worker status** — release SHA / drift vs `origin/worker-production`
+- **Run now** — triggers scrape-only/jobs-only ingest from anywhere; worker polls every 5 minutes
 
 ### Hygiene (automatic)
 
-- **02:15** — archive job listings not seen in 45+ days
-- **02:30** — rescore entire backlog (free)
+- **06:15** — archive job listings not seen in 45+ days
+- **06:30 / 18:30** — rescore entire backlog (free)
 - Credit alerts when ContactOut phone API locks
 - Pipeline health check before enrich (won't run against stale CRM)
 
@@ -123,14 +132,14 @@ This is the workflow the system is designed around:
 
 | Time | You | The system |
 |------|-----|------------|
-| **Before 6 AM** | Sleep | Scrape → filter → score → enrich top-25 → presence checks → build email |
-| **6:00 AM** | Open call sheet email on phone | 12–25 ranked leads with reasons, channels, openers |
-| **6:15 AM** | Skim top 3, open `/today` in CRM | Full detail, backlog tab for context |
+| **Before 6 AM** | Sleep | Scrape → chunked jobs-only ingest → filter → score → presence checks → build email |
+| **6:00 AM** | Open call sheet email on phone | Ranked leads with reasons, channels, openers (enriched rows you already worked) |
+| **6:15 AM** | Skim top 3, open `/crm` (Pipeline) | Full detail, filter by market for context |
 | **7:00–11:00** | **Call block** — work the sheet top-down | — |
 | **Per call** | Read opener chip → dial → converse | — |
 | **After each call** | Expand row → Log call → paste notes → Save & mark contacted | Haiku summarizes, updates timeline |
 | **11:30 AM** | Check backlog tab for anything that heated up overnight | Rescored automatically |
-| **Ad hoc** | Hit Enrich on a one-off company from backlog | Manual JIT outside the batch |
+| **Ad hoc** | Hit Enrich on a company from backlog before calling | Manual paid egress only |
 | **Anytime** | Admin → Run now if you want a fresh pull before a trip | Worker runs within 5 min |
 
 **Time you no longer spend:**
@@ -231,11 +240,13 @@ Rough framing for one recruiter:
 
 | URL | Use when |
 |-----|----------|
-| `https://v-executive-search.vercel.app/today` | Morning work — call sheet + backlog tabs |
-| `https://v-executive-search.vercel.app/companies` | Browse full pipeline, filter by status |
-| `https://v-executive-search.vercel.app/companies/[id]` | Deep dive + log call + activity history |
-| `https://v-executive-search.vercel.app/admin` | Change settings, trigger runs from phone |
-| **6 AM email** | First look — ranked leads + funnel stats |
+| `https://v-executive-search-delta.vercel.app/` → `/crm` | **Home / daily driver** — Pipeline: All Leads · Job Listings · Call List · Hot |
+| `https://v-executive-search-delta.vercel.app/crm?tab=call-list` | Persistent call queue (statuses, follow-ups, notes) |
+| `https://v-executive-search-delta.vercel.app/runs` | Run health + credits per scrape |
+| `https://v-executive-search-delta.vercel.app/companies/[id]` | Deep dive + find/reveal contacts + log call + activity history |
+| `https://v-executive-search-delta.vercel.app/legacy` | Old Today's List + Companies views (out of the menu, still live) |
+| `https://v-executive-search-delta.vercel.app/admin` | Change settings, trigger runs from phone |
+| **5 AM email** | First look — ranked leads + funnel stats |
 
 ---
 
@@ -260,7 +271,7 @@ These are the highest-leverage next steps, ordered by impact on your daily outpu
 ### Longer-term (team scale)
 
 9. **Per-recruiter call sheets** — when you add closers, each gets their own N slice from the shared backlog.
-10. **Market expansion** — clone geo focus to a second city; same worker, same economics, separate ranked queues.
+10. **More markets / multi-recruiter queues** — geo presets already cover 61 metros; next step is per-recruiter slices of the shared backlog, not inventing new city configs by hand.
 
 ---
 
@@ -404,13 +415,21 @@ Design rules:
 
 | Time | Job | Cost |
 |---|---|---|
-| 02:00 | Scrape all boards → store | free |
-| 02:15 | Archive stale listings | free |
-| 02:30 | Filter ICP + re-score full backlog | free |
-| 03:00 | Select top-N → enrich via Apollo → ContactOut | credits |
-| 03:30 | Presence check (iMessage + email MX) | free |
-| 06:00 | Build + send daily call sheet email | free |
-| every 5 min | Admin "Run now" poll | free |
+| 06:00 | Scrape all boards → chunked jobs-only ingest | free |
+| 06:15 | Archive stale listings | free |
+| 06:30 | Filter ICP + re-score full backlog | free |
+| 07:30 | Presence check (iMessage + email MX) | free |
+| 07:45 | Build + send daily call sheet email | free |
+| 18:00 | Scrape all boards → chunked jobs-only ingest | free |
+| 18:30 | Filter ICP + re-score full backlog | free |
+| every 5 min | Admin "Run now" poll, scrape-only by default | free |
+
+Enrichment is manual only. Apollo and ContactOut paid egress must carry an
+explicit per-company manual enrich context; scheduled jobs must not call paid
+provider APIs.
+
+Worker code ships via `origin/worker-production` + `bootstrap_release.sh` (see DEPLOY.md).
+Large ingest payloads are chunked (~200 companies / ~3.5 MB) to avoid Vercel 413.
 
 ---
 
@@ -435,13 +454,19 @@ The daily call sheet is *internal*. When you add outbound email to prospects, ke
 
 ---
 
-## Appendix B: Implementation status (as of March 2026)
+## Appendix B: Implementation status (as of July 2026)
 
 | Spec item | Status |
 |-----------|--------|
-| JIT scrape → score → enrich top-N | ✅ Live |
+| JIT scrape → score → manual enrich | ✅ Live |
+| Paid egress locked to manual Enrich | ✅ Live |
 | ICP filter + hiring signals | ✅ Live |
-| Call sheet + backlog CRM tabs | ✅ Live |
+| Call sheet + backlog CRM tabs | ✅ Live (now under `/legacy`) |
+| Pipeline CRM (`/crm`, home): All Leads · Job Listings · Call List · Hot | ✅ Live (Jul 2026) |
+| ICP fit scoring + sink-don't-hide filters; Market provenance | ✅ Live |
+| Persistent Call List (12 statuses, follow-ups, CSV) | ✅ Live |
+| Selective enrichment (discovery→reveal, ContactOut-first, sector-aware) | ✅ Live |
+| Runs ledger (Market/Credits/Health) · Legacy page | ✅ Live |
 | Ranked email with funnel header | ✅ Live |
 | Haiku openers | ✅ Live (requires `ANTHROPIC_API_KEY`) |
 | Activity timeline + AI summarize | ✅ Live |
@@ -449,8 +474,16 @@ The daily call sheet is *internal*. When you add outbound email to prospects, ke
 | Domain backfill before enrich | ✅ Live |
 | Stale listing archive | ✅ Live |
 | Credit alerts | ✅ Live |
+| DB-backed geo (14 states / 61 markets, Census/OMB) | ✅ Live |
+| Admin Market switch + cross-state hubs | ✅ Live |
+| Worker release (`worker-production` + bootstrap) | ✅ Live |
+| Chunked CRM ingest (Vercel 413-safe) | ✅ Live |
+| LinkedIn hiring-team poster crawl (optional) | ✅ Live |
+| Charlotte first-market scrape validation | ✅ Done (Jul 2026) |
 | Trigger-based prospect email sequences | 🔜 Roadmap |
 
 ---
 
-*Document version: 1.0 · V Executive Search / Proven Theory*
+*Document version: 1.2 · July 2026 · V Executive Search / Proven Theory*
+*v1.2 adds: Pipeline CRM (home page), ICP fit scoring, persistent Call List, discovery→reveal selective enrichment (ContactOut-first, sector-aware legal targeting), rebuilt Runs ledger, and the Legacy page.*
+*Canonical twin: `docs/V-EXECUTIVE-SEARCH-SYSTEM.md` (keep in sync with this file).*

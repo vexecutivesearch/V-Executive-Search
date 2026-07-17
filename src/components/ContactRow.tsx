@@ -67,6 +67,11 @@ export function ContactRow({
   const workEmail =
     contact.workEmail ??
     (contact.email && !isPersonalEmail(contact.email) ? contact.email : null);
+  // Additional personal emails from ContactOut (top 2 total), excluding the
+  // one already shown as the primary personal email.
+  const extraPersonalEmails = (contact.personalEmails ?? []).filter(
+    (e) => e && e !== personalEmail,
+  );
 
   const phones = sortPhonesForDisplay(contactPhonesForDisplay(contact));
 
@@ -76,6 +81,14 @@ export function ContactRow({
         <span className="font-medium">{contact.name}</span>
         {contact.title && (
           <span className="text-gray-500">{contact.title}</span>
+        )}
+        {contact.revealStatus === "discovered" && (
+          <span
+            className="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-sky-50 text-sky-800 dark:bg-sky-950/50 dark:text-sky-200"
+            title="Found by reveal-off discovery — no email/phone credits spent yet"
+          >
+            Discovered — not revealed
+          </span>
         )}
         {contact.sourceProvider === "linkedin_poster" && (
           <span className="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-200">
@@ -126,6 +139,20 @@ export function ContactRow({
             )}
           </div>
         )}
+
+        {extraPersonalEmails.map((email) => (
+          <div key={email} className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] uppercase tracking-wide text-green-700 dark:text-green-400 font-medium">
+              Personal
+            </span>
+            <a
+              href={`mailto:${email}`}
+              className="text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              {email}
+            </a>
+          </div>
+        ))}
 
         {workEmail && workEmail !== personalEmail && (
           <div className="flex flex-wrap items-center gap-2">

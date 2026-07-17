@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, useState, useTransition } from "react";
 import type { CompanyStatus } from "@/lib/db/schema";
 
@@ -14,6 +14,7 @@ export function CompanySearch({
   status?: CompanyStatus;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const [q, setQ] = useState(initialQuery ?? "");
   const [, startTransition] = useTransition();
@@ -27,7 +28,7 @@ export function CompanySearch({
     else params.delete("q");
     if (status) params.set("status", status);
     startTransition(() => {
-      router.push(`/companies?${params.toString()}`);
+      router.push(`${pathname}?${params.toString()}`);
     });
   }
 

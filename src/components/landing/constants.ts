@@ -1,4 +1,7 @@
-/** Same-origin CRM / platform entry. */
+/**
+ * Pipeline CRM entry — same-origin `/crm` on the production delta deploy
+ * (commit 2ee8f5e lineage: All leads / Job listings / Call list / Hot).
+ */
 export const CRM_URL = "/crm";
 
 export const DEMO_EMAIL = "odv@vexecutivesearch.com";

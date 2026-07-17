@@ -137,6 +137,7 @@ export function sectorFromIndustry(
   raw: string | null | undefined,
 ): IndustrySector | null {
   if (!raw?.trim()) return null;
+  if (isKnownSectorName(raw)) return raw.trim() as IndustrySector;
   const key = normalizeIndustryKey(raw);
   return RAW_INDUSTRY_TO_SECTOR[key] ?? OTHER_SECTOR;
 }

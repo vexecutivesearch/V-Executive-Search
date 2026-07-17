@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isContactOutCreditsAvailable } from "@/lib/contactout-credits";
 import { refreshCompanyContactsFromContactOut } from "@/lib/refresh-company-contacts";
 import { db } from "@/lib/db";
-import { companies } from "@/lib/db/schema";
+import { companies, contacts } from "@/lib/db/schema";
+import { manualEnrichContext } from "@/lib/paid-egress";
 import { eq } from "drizzle-orm";
 
 export const runtime = "nodejs";
@@ -32,15 +34,27 @@ export async function POST(
     return NextResponse.json({ error: "Company not found" }, { status: 404 });
   }
 
+  const [sampleContact] = await db
+    .select({ linkedinUrl: contacts.linkedinUrl })
+    .from(contacts)
+    .where(eq(contacts.companyId, id))
+    .limit(1);
+  const contactOutAvailable = await isContactOutCreditsAvailable(
+    contactOutKey,
+    sampleContact?.linkedinUrl ?? null,
+  );
+
   const { updated, checked } = await refreshCompanyContactsFromContactOut(
     id,
     contactOutKey,
+    { contactOutAvailable, context: manualEnrichContext(id) },
   );
 
   return NextResponse.json({
     ok: true,
     updated,
     checked,
+    contactout_available: contactOutAvailable,
     company: company.name,
   });
 }

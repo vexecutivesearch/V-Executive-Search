@@ -2,7 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { GeographicScope, PipelineSettings, SearchProfile } from "@/lib/db/schema";
+import type {
+  GeographicScope,
+  PipelineSettings,
+  SearchProfile,
+} from "@/lib/db/schema";
 import type { EmailReportPreferences } from "@/lib/email-report-preferences";
 import {
   normalizeEmailReportPreferences,
@@ -19,7 +23,14 @@ import {
   getMetroCitiesForState,
   US_STATES,
 } from "@/lib/locations";
-import { DEFAULT_WPB_METRO_ALIASES } from "@/lib/metro-defaults";
+import { SUGGESTED_FOCUS_KEYWORDS } from "@/lib/scrape-keyword-suggestions";
+import {
+  DEFAULT_STATE_GEO_CONFIGS,
+  findStateGeoConfig,
+  getDefaultGeoSelection,
+  normalizeGeoToken,
+  type StateGeoConfig,
+} from "@/lib/state-geo-config";
 
 const SCOPES: { value: GeographicScope; label: string }[] = [
   { value: "national", label: "National (United States)" },
@@ -27,6 +38,38 @@ const SCOPES: { value: GeographicScope; label: string }[] = [
   { value: "city", label: "City" },
   { value: "county", label: "County" },
 ];
+
+type MultiSelectOption = {
+  value: string;
+  disabled?: boolean;
+};
+
+function toMultiSelectOptions(
+  values: string[],
+  available?: ReadonlySet<string>,
+): MultiSelectOption[] {
+  if (!available) {
+    return values.map((value) => ({ value }));
+  }
+  const availableNorm = new Set(
+    [...available].map((value) => normalizeGeoToken(value)),
+  );
+  return values.map((value) => ({
+    value,
+    disabled: !availableNorm.has(normalizeGeoToken(value)),
+  }));
+}
+
+function mergeSelectedIntoOptions(
+  options: MultiSelectOption[],
+  selected: string[],
+): MultiSelectOption[] {
+  const seen = new Set(options.map((option) => normalizeGeoToken(option.value)));
+  const extras = selected
+    .filter((value) => !seen.has(normalizeGeoToken(value)))
+    .map((value) => ({ value, disabled: true }));
+  return [...options, ...extras];
+}
 
 function MultiSelect({
   label,
@@ -36,14 +79,22 @@ function MultiSelect({
   emptyHint,
 }: {
   label: string;
-  options: string[];
+  options: (MultiSelectOption | string)[];
   selected: string[];
   onChange: (next: string[]) => void;
   emptyHint?: string;
 }) {
-  function toggle(value: string) {
+  const normalizedOptions = options.map((option) =>
+    typeof option === "string" ? { value: option } : option,
+  );
+  const displayOptions = mergeSelectedIntoOptions(normalizedOptions, selected);
+
+  function toggle(value: string, disabled?: boolean) {
+    const isSelected = selected.includes(value);
+    // Allow clearing stale selections even when the option is unavailable.
+    if (disabled && !isSelected) return;
     onChange(
-      selected.includes(value)
+      isSelected
         ? selected.filter((v) => v !== value)
         : [...selected, value],
     );
@@ -57,23 +108,31 @@ function MultiSelect({
           Selected: {selected.join(", ")}
         </p>
       )}
-      {options.length === 0 ? (
+      {displayOptions.length === 0 ? (
         <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
           {emptyHint ?? "No predefined locations for this state yet."}
         </p>
       ) : (
         <div className="mt-2 max-h-48 overflow-y-auto border rounded-lg p-2 space-y-1 dark:border-gray-700">
-          {options.map((option) => (
+          {displayOptions.map((option) => (
             <label
-              key={option}
-              className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 dark:hover:bg-gray-900 cursor-pointer"
+              key={option.value}
+              className={`flex items-center gap-2 px-2 py-1 rounded ${
+                option.disabled
+                  ? "cursor-not-allowed opacity-45 text-gray-400 dark:text-gray-500"
+                  : "hover:bg-gray-50 dark:hover:bg-gray-900 cursor-pointer"
+              }`}
             >
               <input
                 type="checkbox"
-                checked={selected.includes(option)}
-                onChange={() => toggle(option)}
+                checked={selected.includes(option.value)}
+                disabled={option.disabled && !selected.includes(option.value)}
+                onChange={() => toggle(option.value, option.disabled)}
               />
-              <span>{option}</span>
+              <span>
+                {option.value}
+                {option.disabled ? " (unavailable)" : ""}
+              </span>
             </label>
           ))}
         </div>
@@ -82,38 +141,59 @@ function MultiSelect({
   );
 }
 
+function listEquals(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const normalized = new Set(a.map(normalizeGeoToken));
+  return b.every((value) => normalized.has(normalizeGeoToken(value)));
+}
+
+function titleCaseGeoKey(value: string): string {
+  return value.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 export function AdminDashboard({
   settings,
   profiles: initialProfiles,
   filterOptions,
+  geoConfigs = DEFAULT_STATE_GEO_CONFIGS,
 }: {
   settings: PipelineSettings;
   profiles: SearchProfile[];
   filterOptions: TodayFilterOptions;
+  geoConfigs?: StateGeoConfig[];
 }) {
   const router = useRouter();
+  const initialState = settings.focusState ?? "Florida";
+  const initialDefaults = getDefaultGeoSelection(initialState, null, geoConfigs);
   const initialCities =
     settings.focusCities?.length
       ? settings.focusCities
       : settings.focusCity
         ? [settings.focusCity]
-        : [];
+        : initialDefaults.focusCities;
   const initialCounties =
     settings.focusCounties?.length
       ? settings.focusCounties
       : settings.focusCounty
         ? [settings.focusCounty]
-        : [];
+        : initialDefaults.focusCounties;
 
   const initialMetro =
-    settings.metroCities?.length ? settings.metroCities : [];
+    settings.metroCities?.length
+      ? settings.metroCities
+      : initialDefaults.metroCities;
+  const initialAliases =
+    settings.metroAliases?.length
+      ? settings.metroAliases
+      : initialDefaults.metroAliases;
 
   const [form, setForm] = useState({
     geographic_scope: settings.geographicScope,
-    focus_state: settings.focusState ?? "Florida",
+    focus_state: initialState,
     focus_cities: initialCities,
     focus_counties: initialCounties,
     metro_cities: initialMetro,
+    metro_aliases: initialAliases,
     notification_email: settings.notificationEmail,
     job_boards: resolveJobBoards(settings.jobBoards),
     daily_enrich_quota: settings.dailyEnrichQuota ?? 25,
@@ -129,24 +209,165 @@ export function AdminDashboard({
     ).join("\n"),
   });
   const [profiles, setProfiles] = useState(initialProfiles);
+  const [customKeyword, setCustomKeyword] = useState("");
+  const [customLabel, setCustomLabel] = useState("");
+  const [addingKeyword, setAddingKeyword] = useState(false);
   const [emailPrefs, setEmailPrefs] = useState<EmailReportPreferences>(() =>
     normalizeEmailReportPreferences(settings.emailReportPreferences),
   );
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
+  const workerPayload = settings.workerStatusPayload ?? {};
+  const workerReleaseSha =
+    typeof workerPayload.worker_release_sha === "string"
+      ? workerPayload.worker_release_sha
+      : null;
+  const workerReleaseRef =
+    typeof workerPayload.worker_release_ref === "string"
+      ? workerPayload.worker_release_ref
+      : "origin/worker-production";
+  const workerCommitMatchesRelease =
+    Boolean(workerReleaseSha) &&
+    Boolean(settings.workerCommitSha) &&
+    workerReleaseSha === settings.workerCommitSha;
+  const workerDriftReasons = [
+    !settings.workerCommitSha ? "unknown SHA" : null,
+    settings.workerDirty ? "dirty worktree" : null,
+    settings.workerBranch &&
+    workerReleaseRef.startsWith("origin/") &&
+    settings.workerBranch !== workerReleaseRef.replace(/^origin\//, "") &&
+    !(settings.workerBranch === "HEAD" && workerCommitMatchesRelease)
+      ? `branch ${settings.workerBranch}`
+      : null,
+    workerReleaseSha &&
+    settings.workerCommitSha &&
+    workerReleaseSha !== settings.workerCommitSha
+      ? `not at ${workerReleaseRef}`
+      : null,
+  ].filter(Boolean);
+
   const cityOptions = useMemo(
-    () => getCitiesForState(form.focus_state),
-    [form.focus_state],
+    () => getCitiesForState(form.focus_state, geoConfigs),
+    [form.focus_state, geoConfigs],
   );
   const metroOptions = useMemo(
-    () => getMetroCitiesForState(form.focus_state),
-    [form.focus_state],
+    () => getMetroCitiesForState(form.focus_state, geoConfigs),
+    [form.focus_state, geoConfigs],
   );
   const countyOptions = useMemo(
-    () => getCountiesForState(form.focus_state),
-    [form.focus_state],
+    () => getCountiesForState(form.focus_state, geoConfigs),
+    [form.focus_state, geoConfigs],
   );
+  const configuredStateNames = useMemo(
+    () =>
+      new Set(
+        geoConfigs.map((config) => config.stateName).filter(Boolean),
+      ),
+    [geoConfigs],
+  );
+  const stateIsConfigured = useMemo(
+    () => Boolean(findStateGeoConfig(form.focus_state, geoConfigs)),
+    [form.focus_state, geoConfigs],
+  );
+  const activeGeoConfig = useMemo(
+    () => findStateGeoConfig(form.focus_state, geoConfigs),
+    [form.focus_state, geoConfigs],
+  );
+  const marketOptions = useMemo(
+    () =>
+      Object.entries(activeGeoConfig?.metroPresets ?? {}).map(
+        ([key, preset]) => ({
+          key,
+          label: preset.marketName ?? titleCaseGeoKey(key),
+        }),
+      ),
+    [activeGeoConfig],
+  );
+  const selectedMarketKey = useMemo(() => {
+    if (!activeGeoConfig) return "";
+    const match = Object.entries(activeGeoConfig.metroPresets).find(
+      ([, preset]) =>
+        listEquals(form.metro_cities, preset.metroCities ?? []) &&
+        listEquals(form.focus_counties, preset.focusCounties ?? []),
+    );
+    return match?.[0] ?? "";
+  }, [activeGeoConfig, form.focus_counties, form.metro_cities]);
+  const selectedMarketPreset = useMemo(() => {
+    if (!activeGeoConfig || !selectedMarketKey) return null;
+    return activeGeoConfig.metroPresets[selectedMarketKey] ?? null;
+  }, [activeGeoConfig, selectedMarketKey]);
+  const availableCityValues = useMemo(() => {
+    if (form.geographic_scope !== "city" || !selectedMarketPreset) {
+      return new Set(cityOptions);
+    }
+    return new Set(selectedMarketPreset.metroCities ?? []);
+  }, [cityOptions, form.geographic_scope, selectedMarketPreset]);
+  const availableMetroValues = useMemo(() => {
+    if (form.geographic_scope !== "city" || !selectedMarketPreset) {
+      return new Set(metroOptions);
+    }
+    return new Set(selectedMarketPreset.metroCities ?? []);
+  }, [form.geographic_scope, metroOptions, selectedMarketPreset]);
+  const availableCountyValues = useMemo(() => {
+    if (form.geographic_scope === "city" && selectedMarketPreset) {
+      return new Set(selectedMarketPreset.focusCounties ?? []);
+    }
+    return new Set(countyOptions);
+  }, [countyOptions, form.geographic_scope, selectedMarketPreset]);
+
+  function applyStateDefaults(state: string) {
+    if (!findStateGeoConfig(state, geoConfigs)) return;
+    const defaults = getDefaultGeoSelection(state, null, geoConfigs);
+    setForm((prev) => ({
+      ...prev,
+      focus_state: state,
+      focus_cities: defaults.focusCities,
+      focus_counties: defaults.focusCounties,
+      metro_cities: defaults.metroCities,
+      metro_aliases: defaults.metroAliases,
+    }));
+  }
+
+  function applyMarketPreset(marketKey: string) {
+    const preset = activeGeoConfig?.metroPresets[marketKey];
+    if (!preset) return;
+    setForm((prev) => ({
+      ...prev,
+      focus_cities: preset.metroCities[0] ? [preset.metroCities[0]] : [],
+      focus_counties: preset.focusCounties,
+      metro_cities: preset.metroCities,
+      metro_aliases: preset.metroAliases,
+    }));
+  }
+
+  function applyFocusCities(focus_cities: string[]) {
+    if (!focus_cities.length) {
+      const defaults = getDefaultGeoSelection(form.focus_state, null, geoConfigs);
+      setForm({
+        ...form,
+        focus_cities: defaults.focusCities,
+        focus_counties: defaults.focusCounties,
+        metro_cities: defaults.metroCities,
+        metro_aliases: defaults.metroAliases,
+      });
+      return;
+    }
+
+    const primaryCity = focus_cities[0];
+    const defaults = getDefaultGeoSelection(
+      form.focus_state,
+      primaryCity,
+      geoConfigs,
+    );
+    setForm({
+      ...form,
+      focus_cities,
+      focus_counties: defaults.focusCounties,
+      metro_cities: defaults.metroCities,
+      metro_aliases: defaults.metroAliases,
+    });
+  }
 
   async function saveSettings() {
     if (form.job_boards.length === 0) {
@@ -200,6 +421,82 @@ export function AdminDashboard({
     );
   }
 
+  function profileTermKey(term: string) {
+    return term.trim().toLowerCase() || " ";
+  }
+
+  async function addFocusKeyword(name: string, searchTerm: string) {
+    const term = searchTerm.trim().toLowerCase().replace(/\s+/g, " ");
+    if (!term) {
+      setMessage("Enter a keyword to scrape.");
+      return;
+    }
+    if (profiles.some((p) => profileTermKey(p.searchTerm) === term)) {
+      setMessage(`Keyword “${term}” is already in your scrape list.`);
+      return;
+    }
+    setAddingKeyword(true);
+    const res = await fetch("/api/admin/search-profiles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: name.trim() || term,
+        search_term: term,
+        is_active: true,
+        results_wanted: 50,
+        hours_old: 168,
+        linkedin_distance: 25,
+      }),
+    });
+    setAddingKeyword(false);
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      setMessage(data.error || "Failed to add keyword.");
+      return;
+    }
+    const data = (await res.json()) as { profile: SearchProfile };
+    setProfiles((p) => [...p, data.profile]);
+    setCustomKeyword("");
+    setCustomLabel("");
+    setMessage(`Added scrape keyword “${term}” (runs on all active boards).`);
+    router.refresh();
+  }
+
+  const broadProfiles = useMemo(
+    () =>
+      profiles.filter((p) => {
+        const term = profileTermKey(p.searchTerm);
+        return (
+          term === " " ||
+          [
+            "manager",
+            "director",
+            "coordinator",
+            "specialist",
+            "assistant",
+            "analyst",
+            "sales",
+          ].includes(term)
+        );
+      }),
+    [profiles],
+  );
+
+  const focusProfiles = useMemo(
+    () =>
+      profiles.filter(
+        (p) => !broadProfiles.some((b) => b.id === p.id),
+      ),
+    [profiles, broadProfiles],
+  );
+
+  const missingSuggestions = useMemo(() => {
+    const have = new Set(profiles.map((p) => profileTermKey(p.searchTerm)));
+    return SUGGESTED_FOCUS_KEYWORDS.filter(
+      (s) => !have.has(s.searchTerm.trim().toLowerCase()),
+    );
+  }, [profiles]);
+
   async function saveEmailPreferences() {
     setSaving(true);
     const res = await fetch("/api/admin/settings", {
@@ -252,6 +549,47 @@ export function AdminDashboard({
           run <code className="text-xs">./scripts/install_launchd.sh</code>.
         </p>
         <div className="text-sm text-gray-700 dark:text-gray-300 space-y-2">
+          <div className="rounded-lg border border-amber-200 dark:border-amber-900 bg-white/70 dark:bg-gray-950/40 p-3 space-y-1">
+            <p className="font-medium">Worker code status</p>
+            <p className="text-xs text-gray-600 dark:text-gray-400">
+              Last heartbeat:{" "}
+              {settings.workerLastSeenAt
+                ? new Date(settings.workerLastSeenAt).toLocaleString()
+                : "never"}
+            </p>
+            <p className="text-xs text-gray-600 dark:text-gray-400">
+              Running SHA:{" "}
+              <code className="text-[11px]">
+                {settings.workerCommitSha ?? "unknown"}
+              </code>
+            </p>
+            <p className="text-xs text-gray-600 dark:text-gray-400">
+              Branch: {settings.workerBranch ?? "unknown"} · Dirty:{" "}
+              {settings.workerDirty ? "yes" : "no"}
+            </p>
+            {settings.workerAgentSummary && (
+              <p className="text-xs text-gray-600 dark:text-gray-400">
+                Agents: {settings.workerAgentSummary}
+              </p>
+            )}
+            {workerReleaseSha && (
+              <p className="text-xs text-gray-600 dark:text-gray-400">
+                {workerReleaseRef}:{" "}
+                <code className="text-[11px]">{workerReleaseSha}</code>
+              </p>
+            )}
+            <p
+              className={`text-xs font-medium ${
+                workerDriftReasons.length
+                  ? "text-red-700 dark:text-red-300"
+                  : "text-green-700 dark:text-green-300"
+              }`}
+            >
+              {workerDriftReasons.length
+                ? `Drift alarm: ${workerDriftReasons.join(", ")}`
+                : `Worker SHA matches ${workerReleaseRef} and worktree is clean.`}
+            </p>
+          </div>
           <p className="font-medium">LinkedIn hiring team (optional)</p>
           <p className="text-gray-600 dark:text-gray-400">
             Public job pages only expose a &quot;job poster&quot; on ~5–10% of
@@ -277,7 +615,8 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
       <section className="border rounded-xl p-5 space-y-4 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Geographic focus</h2>
         <p className="text-sm text-gray-500">
-          Select one or more cities or counties to geofence your daily searches.
+          Only seeded markets are selectable. Other U.S. states, cities, and
+          counties stay visible but greyed out until geo coverage is added.
         </p>
         <label className="block text-sm">
           Scope
@@ -304,22 +643,49 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
             State
             <select
               value={form.focus_state}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  focus_state: e.target.value,
-                  focus_cities: [],
-                  focus_counties: [],
-                })
-              }
+              onChange={(e) => applyStateDefaults(e.target.value)}
               className="mt-1 w-full border rounded-lg px-3 py-2 dark:bg-gray-900 dark:border-gray-700"
             >
-              {US_STATES.map((state) => (
-                <option key={state} value={state}>
-                  {state}
+              {US_STATES.map((state) => {
+                const available = configuredStateNames.has(state);
+                return (
+                  <option key={state} value={state} disabled={!available}>
+                    {available ? state : `${state} (unavailable)`}
+                  </option>
+                );
+              })}
+            </select>
+            {!stateIsConfigured && (
+              <span className="mt-1 block text-xs text-amber-700 dark:text-amber-300">
+                This state has no geo config yet. Pick a configured state to
+                continue.
+              </span>
+            )}
+          </label>
+        )}
+
+        {form.geographic_scope === "city" && marketOptions.length > 0 && (
+          <label className="block text-sm">
+            Market
+            <select
+              value={selectedMarketKey}
+              onChange={(e) => applyMarketPreset(e.target.value)}
+              className="mt-1 w-full border rounded-lg px-3 py-2 dark:bg-gray-900 dark:border-gray-700"
+            >
+              <option value="" disabled>
+                Custom selection
+              </option>
+              {marketOptions.map((market) => (
+                <option key={market.key} value={market.key}>
+                  {market.label}
                 </option>
               ))}
             </select>
+            <span className="mt-1 block text-xs text-gray-500">
+              Switching markets fully reloads focus cities, counties, scrape hubs,
+              and aliases for one active market. Cities and counties outside the
+              selected market are greyed out.
+            </span>
           </label>
         )}
 
@@ -327,21 +693,33 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
           <>
             <MultiSelect
               label="Cities (select all that apply)"
-              options={cityOptions}
+              options={toMultiSelectOptions(cityOptions, availableCityValues)}
               selected={form.focus_cities}
-              onChange={(focus_cities) => setForm({ ...form, focus_cities })}
-              emptyHint="City dropdowns are available for Florida. Add more states in locations.ts as you expand."
+              onChange={applyFocusCities}
+              emptyHint={
+                stateIsConfigured
+                  ? "No city presets are configured for this state yet."
+                  : "Select a configured state to load city presets."
+              }
             />
             <MultiSelect
               label="Metro expansion cities (nearby scrape hubs + accept in ICP)"
-              options={metroOptions}
+              options={toMultiSelectOptions(metroOptions, availableMetroValues)}
               selected={form.metro_cities}
               onChange={(metro_cities) => setForm({ ...form, metro_cities })}
-              emptyHint="Metro list available for Florida WPB market."
+              emptyHint={
+                stateIsConfigured
+                  ? "No metro expansion presets are configured for this state yet."
+                  : "Select a configured state to load metro hubs."
+              }
             />
             <p className="text-xs text-gray-500">
               Focus cities scrape first; metro cities are added as nearby hubs
-              (capped). Also matches: {DEFAULT_WPB_METRO_ALIASES.join(", ")}
+              (capped). Also matches:{" "}
+              {(form.metro_aliases.length
+                ? form.metro_aliases
+                : activeGeoConfig?.defaultMetroAliases ?? []
+              ).join(", ") || "—"}
             </p>
           </>
         )}
@@ -349,10 +727,14 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
         {form.geographic_scope === "county" && (
           <MultiSelect
             label="Counties (select all that apply)"
-            options={countyOptions}
+            options={toMultiSelectOptions(countyOptions, availableCountyValues)}
             selected={form.focus_counties}
             onChange={(focus_counties) => setForm({ ...form, focus_counties })}
-            emptyHint="County dropdowns are available for Florida."
+            emptyHint={
+              stateIsConfigured
+                ? "No county presets are configured for this state yet."
+                : "Select a configured state to load county presets."
+            }
           />
         )}
 
@@ -368,7 +750,7 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
 
         <button
           onClick={saveSettings}
-          disabled={saving}
+          disabled={saving || (form.geographic_scope !== "national" && !stateIsConfigured)}
           className="bg-gray-900 text-white dark:bg-white dark:text-gray-900 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
         >
           {saving ? "Saving…" : "Save settings"}
@@ -443,7 +825,7 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
       <section className="border rounded-xl p-5 space-y-4 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Job boards</h2>
         <p className="text-sm text-gray-500">
-          Sources scraped at 6 AM and 6 PM ET (via JobSpy on your worker Mac).
+          Sources scraped at 5 AM and 6 PM ET (via JobSpy on your worker Mac).
           Toggle boards to A/B which sources produce net-new companies — no
           deploy needed.
         </p>
@@ -501,65 +883,246 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
         </button>
       </section>
 
-      <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
-        <h2 className="font-semibold text-lg">Market scan queries</h2>
-        <p className="text-sm text-gray-500">
-          Broad hiring signals scraped in your geo (open roles across common job
-          buckets — not the contact titles above). LinkedIn radius (miles) is per
-          query; blank = wide.
-        </p>
-        <ul className="space-y-2">
-          {profiles.map((p) => (
-            <li
-              key={p.id}
-              className="flex flex-wrap items-center justify-between gap-3 text-sm border rounded-lg px-3 py-2 dark:border-gray-800"
-            >
-              <span className="font-medium">
-                {p.name}
-                <span className="ml-2 text-xs font-normal text-gray-500">
-                  ({p.searchTerm.trim() || "all roles"})
+      <section className="border rounded-xl p-5 space-y-4 dark:border-gray-800">
+        <div>
+          <h2 className="font-semibold text-lg">Daily scrape queries</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Additive <strong>OR</strong> queries across Indeed, LinkedIn, Google
+            Jobs (SerpAPI), and other active boards. Broad buckets stay on —
+            focus keywords run <em>on top</em> of them. Turning a keyword off
+            never removes Market scan.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            Broad market (always keep these for hiring-signal coverage)
+          </h3>
+          <ul className="space-y-2">
+            {broadProfiles.map((p) => (
+              <li
+                key={p.id}
+                className="flex flex-wrap items-center justify-between gap-3 text-sm border rounded-lg px-3 py-2 dark:border-gray-800"
+              >
+                <span className="font-medium">
+                  {p.name}
+                  <span className="ml-2 text-xs font-normal text-gray-500">
+                    ({p.searchTerm.trim() || "all roles"})
+                  </span>
                 </span>
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-2 text-xs text-gray-500">
+                    LI radius (mi)
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      placeholder="wide"
+                      className="w-16 border rounded px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900"
+                      value={p.linkedinDistance ?? ""}
+                      onChange={(e) =>
+                        setProfiles((rows) =>
+                          rows.map((x) =>
+                            x.id === p.id
+                              ? {
+                                  ...x,
+                                  linkedinDistance:
+                                    e.target.value === ""
+                                      ? null
+                                      : parseInt(e.target.value, 10) || null,
+                                }
+                              : x,
+                          ),
+                        )
+                      }
+                      onBlur={(e) =>
+                        updateProfileDistance(p.id, e.target.value)
+                      }
+                    />
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={p.isActive}
+                      onChange={(e) => toggleProfile(p.id, e.target.checked)}
+                    />
+                    Active
+                  </label>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="space-y-2 border-t pt-4 dark:border-gray-800">
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            Focus keywords (Legal · Marketing · Construction · HR · Finance)
+          </h3>
+          <p className="text-xs text-gray-500">
+            Each active keyword is scraped daily in your geo. White-label ready —
+            enable suggestions or add custom terms below.
+          </p>
+
+          {missingSuggestions.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {missingSuggestions.map((s) => (
+                <button
+                  key={s.searchTerm}
+                  type="button"
+                  disabled={addingKeyword}
+                  onClick={() => addFocusKeyword(s.name, s.searchTerm)}
+                  className="text-xs px-2.5 py-1 rounded-full border border-dashed border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50"
+                  title={`Add “${s.searchTerm}” scrape (${s.family})`}
+                >
+                  + {s.name}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <ul className="space-y-2">
+            {focusProfiles.length === 0 ? (
+              <li className="text-sm text-gray-400">
+                No focus keywords yet — click a suggestion above or add a custom
+                keyword.
+              </li>
+            ) : (
+              focusProfiles.map((p) => (
+                <li
+                  key={p.id}
+                  className="flex flex-wrap items-center justify-between gap-3 text-sm border rounded-lg px-3 py-2 dark:border-gray-800"
+                >
+                  <span className="font-medium">
+                    {p.name}
+                    <span className="ml-2 text-xs font-normal text-gray-500">
+                      query: “{p.searchTerm.trim()}”
+                    </span>
+                  </span>
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 text-xs text-gray-500">
+                      LI radius (mi)
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        placeholder="wide"
+                        className="w-16 border rounded px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900"
+                        value={p.linkedinDistance ?? ""}
+                        onChange={(e) =>
+                          setProfiles((rows) =>
+                            rows.map((x) =>
+                              x.id === p.id
+                                ? {
+                                    ...x,
+                                    linkedinDistance:
+                                      e.target.value === ""
+                                        ? null
+                                        : parseInt(e.target.value, 10) || null,
+                                  }
+                                : x,
+                            ),
+                          )
+                        }
+                        onBlur={(e) =>
+                          updateProfileDistance(p.id, e.target.value)
+                        }
+                      />
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={p.isActive}
+                        onChange={(e) => toggleProfile(p.id, e.target.checked)}
+                      />
+                      Active
+                    </label>
+                  </div>
+                </li>
+              ))
+            )}
+          </ul>
+
+          <div className="flex flex-wrap items-end gap-2 pt-2">
+            <label className="text-sm">
+              <span className="text-xs text-gray-500 block mb-1">
+                Custom keyword
               </span>
-              <div className="flex items-center gap-4">
-                <label className="flex items-center gap-2 text-xs text-gray-500">
-                  LI radius (mi)
-                  <input
-                    type="number"
-                    min={1}
-                    max={100}
-                    placeholder="wide"
-                    className="w-16 border rounded px-2 py-1 text-sm dark:border-gray-700 dark:bg-gray-900"
-                    value={p.linkedinDistance ?? ""}
-                    onChange={(e) =>
-                      setProfiles((rows) =>
-                        rows.map((x) =>
-                          x.id === p.id
-                            ? {
-                                ...x,
-                                linkedinDistance:
-                                  e.target.value === ""
-                                    ? null
-                                    : parseInt(e.target.value, 10) || null,
-                              }
-                            : x,
-                        ),
-                      )
-                    }
-                    onBlur={(e) => updateProfileDistance(p.id, e.target.value)}
-                  />
-                </label>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={p.isActive}
-                    onChange={(e) => toggleProfile(p.id, e.target.checked)}
-                  />
-                  Active
-                </label>
-              </div>
-            </li>
-          ))}
-        </ul>
+              <input
+                type="text"
+                value={customKeyword}
+                onChange={(e) => setCustomKeyword(e.target.value)}
+                placeholder="e.g. bookkeeper"
+                className="border rounded-lg px-3 py-1.5 text-sm dark:border-gray-700 dark:bg-gray-900 min-w-[10rem]"
+              />
+            </label>
+            <label className="text-sm">
+              <span className="text-xs text-gray-500 block mb-1">
+                Label (optional)
+              </span>
+              <input
+                type="text"
+                value={customLabel}
+                onChange={(e) => setCustomLabel(e.target.value)}
+                placeholder="Display name"
+                className="border rounded-lg px-3 py-1.5 text-sm dark:border-gray-700 dark:bg-gray-900 min-w-[10rem]"
+              />
+            </label>
+            <button
+              type="button"
+              disabled={addingKeyword || !customKeyword.trim()}
+              onClick={() =>
+                addFocusKeyword(
+                  customLabel.trim() || customKeyword.trim(),
+                  customKeyword.trim(),
+                )
+              }
+              className="bg-gray-900 text-white dark:bg-white dark:text-gray-900 px-4 py-1.5 rounded-lg text-sm font-medium disabled:opacity-50"
+            >
+              {addingKeyword ? "Adding…" : "Add keyword"}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
+        <h2 className="font-semibold text-lg">Daily email — Hot Listings</h2>
+        <p className="text-sm text-gray-500">
+          On by default for 6 AM and 6 PM sends. Uses the same Hot Listings filter
+          as the Today tab (mid-size, role families, geo, exclusions).
+        </p>
+
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <input
+            type="checkbox"
+            checked={emailPrefs.includeHotListingsSection !== false}
+            onChange={(e) =>
+              setEmailPrefs((p) => ({
+                ...p,
+                includeHotListingsSection: e.target.checked,
+              }))
+            }
+          />
+          Include Hot Listings section in daily email
+        </label>
+
+        {emailPrefs.includeHotListingsSection !== false && (
+          <label className="block text-sm">
+            <span className="text-gray-500">Max hot listings in email</span>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={emailPrefs.hotListingsLimit ?? 15}
+              onChange={(e) =>
+                setEmailPrefs((p) => ({
+                  ...p,
+                  hotListingsLimit: parseInt(e.target.value, 10) || 15,
+                }))
+              }
+              className="mt-1 block w-28 text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900"
+            />
+          </label>
+        )}
       </section>
 
       <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
@@ -704,9 +1267,9 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
       <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Run pipeline</h2>
         <p className="text-sm text-gray-500">
-          Trigger a scrape + enrich from your phone or browser. Your home Mac worker
-          polls every 5 minutes and runs when requested. Only the top-N ranked backlog
-          companies are enriched (not all net-new).
+          Trigger a scrape-only/jobs-only ingest from your phone or browser. Your
+          home Mac worker polls every 5 minutes and runs when requested. Paid
+          Apollo/ContactOut enrichment stays manual per company.
         </p>
         <button
           onClick={triggerRun}

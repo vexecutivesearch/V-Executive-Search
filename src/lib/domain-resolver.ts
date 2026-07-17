@@ -1,3 +1,10 @@
+import {
+  assertPaidEgressAllowed,
+  PaidEgressBlockedError,
+  recordProviderUsageEvent,
+  type PaidEgressContext,
+} from "@/lib/paid-egress";
+
 const APOLLO_BASE = "https://api.apollo.io/api/v1";
 
 export type DomainConfidence = "high" | "low";
@@ -69,6 +76,7 @@ function parseApolloOrg(org: ApolloOrg): OrgLookupResult {
 export async function resolveCompanyOrg(
   companyName: string,
   apiKey: string,
+  context?: PaidEgressContext,
 ): Promise<OrgLookupResult> {
   if (!apiKey) {
     const guess = guessDomain(companyName);
@@ -81,6 +89,10 @@ export async function resolveCompanyOrg(
   }
 
   try {
+    await assertPaidEgressAllowed("apollo", "organizations/search", context, {
+      estimatedCost: 1,
+      metadata: { companyName },
+    });
     const resp = await fetch(`${APOLLO_BASE}/organizations/search`, {
       method: "POST",
       headers: apolloHeaders(apiKey),
@@ -94,6 +106,11 @@ export async function resolveCompanyOrg(
 
     const data = (await resp.json()) as { organizations?: ApolloOrg[] };
     const org = data.organizations?.[0];
+    await recordProviderUsageEvent("apollo", "organizations/search", context ?? "automated_scrape", {
+      recordsReturned: data.organizations?.length ?? 0,
+      estimatedCost: 1,
+      metadata: { companyName },
+    });
     if (org) {
       const parsed = parseApolloOrg(org);
       if (parsed.domain) return parsed;
@@ -107,7 +124,8 @@ export async function resolveCompanyOrg(
         };
       }
     }
-  } catch {
+  } catch (err) {
+    if (err instanceof PaidEgressBlockedError) throw err;
     // fall through
   }
 
@@ -124,7 +142,8 @@ export async function resolveCompanyOrg(
 export async function resolveCompanyDomain(
   companyName: string,
   apiKey: string,
+  context?: PaidEgressContext,
 ): Promise<{ domain: string | null; confidence: DomainConfidence }> {
-  const lookup = await resolveCompanyOrg(companyName, apiKey);
+  const lookup = await resolveCompanyOrg(companyName, apiKey, context);
   return { domain: lookup.domain, confidence: lookup.confidence };
 }

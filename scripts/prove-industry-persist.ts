@@ -43,7 +43,7 @@ async function main() {
     estimatedEmployees: row.estimatedEmployees,
   });
 
-  const lookup = await resolveCompanyOrg(row.name, apiKey);
+  const lookup = await resolveCompanyOrg(row.name, apiKey, "manual_script");
   console.log("Apollo lookup:", lookup);
 
   if (!lookup.industry) {

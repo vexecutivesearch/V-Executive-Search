@@ -1,7 +1,12 @@
 import {
   extractContactOutPhones,
+  mergeSourcedPhones,
   type SourcedPhone,
 } from "@/lib/contact-phones";
+import {
+  pickPersonalEmailFromList,
+  pickWorkEmail,
+} from "@/lib/contact-enrichment-limits";
 import {
   contactTitlePriority,
   emailMatchesCompanyDomain,
@@ -9,6 +14,11 @@ import {
 } from "@/lib/contact-title-priority";
 import { isPersonalEmail } from "@/lib/phone-utils";
 import { isContactOutSampleResponse } from "@/lib/contactout-samples";
+import {
+  assertPaidEgressAllowed,
+  recordProviderUsageEvent,
+  type PaidEgressContext,
+} from "@/lib/paid-egress";
 
 const CONTACTOUT_SEARCH_URL = "https://api.contactout.com/v1/people/search";
 
@@ -66,7 +76,14 @@ async function searchContactOutPeople(
   body: Record<string, unknown>,
   domainForSort: string | null,
   limit: number,
+  context?: PaidEgressContext,
+  companyId?: string,
 ): Promise<ContactOutDomainPerson[]> {
+  await assertPaidEgressAllowed("contactout", "people/search", context, {
+    companyId,
+    estimatedCost: Math.max(limit, 1),
+    metadata: { body: { ...body, page_size: limit } },
+  });
   const resp = await fetch(CONTACTOUT_SEARCH_URL, {
     method: "POST",
     headers: {
@@ -92,13 +109,20 @@ async function searchContactOutPeople(
   }
 
   const sortDomain = domainForSort ?? "";
-  return parsed
+  const results = parsed
     .sort((a, b) => {
       const ka = profileSortKey(a, sortDomain);
       const kb = profileSortKey(b, sortDomain);
       return ka[0] - kb[0] || ka[1] - kb[1] || ka[2] - kb[2];
     })
     .slice(0, limit);
+  await recordProviderUsageEvent("contactout", "people/search", context ?? "automated_scrape", {
+    companyId,
+    recordsReturned: results.length,
+    estimatedCost: Math.max(results.length, 1),
+    metadata: { body: { ...body, page_size: limit } },
+  });
+  return results;
 }
 
 /** Domain search — used when Apollo HR title search returns no contacts. */
@@ -106,13 +130,15 @@ export async function searchContactOutByDomain(
   apiKey: string,
   domain: string,
   limit = 3,
+  context?: PaidEgressContext,
+  companyId?: string,
 ): Promise<ContactOutDomainPerson[]> {
   const normalized = domain.replace(/^https?:\/\//, "").replace(/^www\./, "");
   return searchContactOutPeople(
     apiKey,
     {
       page: 1,
-      page_size: Math.max(limit * 8, 25),
+      page_size: limit,
       domain: [normalized],
       data_types: ["personal_email", "work_email", "phone"],
       reveal_info: true,
@@ -120,6 +146,8 @@ export async function searchContactOutByDomain(
     },
     normalized,
     limit,
+    context,
+    companyId,
   );
 }
 
@@ -129,12 +157,14 @@ export async function searchContactOutByCompanyName(
   companyName: string,
   limit = 3,
   domainForSort: string | null = null,
+  context?: PaidEgressContext,
+  companyId?: string,
 ): Promise<ContactOutDomainPerson[]> {
   return searchContactOutPeople(
     apiKey,
     {
       page: 1,
-      page_size: Math.max(limit * 8, 25),
+      page_size: limit,
       company: [companyName.trim()],
       data_types: ["personal_email", "work_email", "phone"],
       reveal_info: true,
@@ -142,6 +172,8 @@ export async function searchContactOutByCompanyName(
     },
     domainForSort,
     limit,
+    context,
+    companyId,
   );
 }
 
@@ -159,8 +191,8 @@ function parseProfile(
     (contactInfo.personal_emails as string[] | undefined) ?? [];
   const rawEmails = (contactInfo.emails as string[] | undefined) ?? [];
 
-  let workEmail = workEmails[0] ?? null;
-  let personalEmail = personalEmails[0] ?? null;
+  let workEmail = pickWorkEmail(workEmails);
+  let personalEmail = pickPersonalEmailFromList(personalEmails);
   for (const email of rawEmails) {
     if (!email) continue;
     if (isPersonalEmail(email)) {
@@ -188,6 +220,6 @@ function parseProfile(
     personalEmail,
     phone: personalPhone ?? phones[0]?.number ?? null,
     personalPhone,
-    phones,
+    phones: mergeSourcedPhones(phones),
   };
 }

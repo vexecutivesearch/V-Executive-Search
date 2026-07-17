@@ -14,7 +14,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <>
       <Nav />
-      <main className="flex-1">{children}</main>
+      {/* overflow-x-clip prevents sideways page scroll on mobile without
+          creating a scroll container (keeps sticky filter bars working). */}
+      <main className="flex-1 overflow-x-clip">{children}</main>
     </>
   );
 }

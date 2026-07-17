@@ -1,9 +1,11 @@
 import { Contact, JobListing, type IcpStatus } from "@/lib/db/schema";
 import { CompanyStatus } from "@/lib/db/schema";
 import Link from "next/link";
+import { AddToCallListButton } from "./AddToCallListButton";
 import { StatusBadge, StatusSelect } from "./StatusBadge";
-import { EnrichButton } from "./EnrichButton";
+import { ContactPickerButton } from "./enrich/ContactPickerButton";
 import { ContactRow } from "./ContactRow";
+import { contactIsCallable } from "@/lib/lead-score";
 
 export interface CompanyCardData {
   id: string;
@@ -13,6 +15,8 @@ export interface CompanyCardData {
   status: CompanyStatus;
   firstSeen: string;
   industry?: string | null;
+  /** Apollo estimated headcount — required for Hot Listings mid-size band. */
+  estimatedEmployees?: number | null;
   leadScore?: number;
   hiringSignals?: Record<string, boolean | number>;
   reasonToCall?: string | null;
@@ -20,6 +24,8 @@ export interface CompanyCardData {
   icpStatus?: IcpStatus;
   enrichedAt?: Date | null;
   enrichRunDate?: string | null;
+  /** Market active when scraped (e.g. "Charlotte, NC") — CRM provenance tag. */
+  sourceMarket?: string | null;
   contacts: Contact[];
   jobListings: JobListing[];
 }
@@ -46,16 +52,16 @@ export function CompanyCard({
 
   return (
     <article className="border border-gray-200 dark:border-gray-800 rounded-xl p-5 bg-white dark:bg-gray-950 shadow-sm">
-      <div className="flex items-start justify-between gap-4 mb-3">
-        <div>
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-3">
+        <div className="min-w-0">
           <Link
             href={`/companies/${company.id}`}
-            className="text-lg font-semibold hover:underline"
+            className="text-lg font-semibold hover:underline break-words"
           >
             {company.name}
           </Link>
           {company.domain && (
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5 break-all">
               {company.domain}
               {company.domainConfidence === "low" && (
                 <span className="ml-2 text-amber-600 dark:text-amber-400 text-xs">
@@ -65,11 +71,18 @@ export function CompanyCard({
             </p>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <EnrichButton
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end sm:shrink-0">
+          {company.contacts.some(contactIsCallable) && (
+            <AddToCallListButton companyId={company.id} compact />
+          )}
+          <ContactPickerButton
             companyId={company.id}
-            contactCount={company.contacts.length}
-            onEnrichComplete={onEnrichComplete}
+            label={
+              company.contacts.some(contactIsCallable)
+                ? "Enrich another contact"
+                : "Find contacts"
+            }
+            onRevealComplete={onEnrichComplete}
           />
           <StatusBadge status={company.status} />
           <StatusSelect

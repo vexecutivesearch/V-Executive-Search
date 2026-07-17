@@ -10,17 +10,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
-load_dotenv(WORKER_ROOT / ".env")
 
+from src.env_loader import load_worker_env  # noqa: E402
 from src.config_loader import load_config, get_notification_email  # noqa: E402
 from src.contact_phones import contact_phones_for_display, merge_sourced_phones, pick_primary_from_phones  # noqa: E402
 from src.crm_config import fetch_pipeline_config  # noqa: E402
 from src.email_report import send_daily_report  # noqa: E402
 from src.enrich.contactout import get_contactout_client
+
+load_worker_env()
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ def main() -> int:
 
     client = get_contactout_client()
     if not client.is_configured:
-        logger.error("ContactOut not configured — set CONTACTOUT_API_KEY in worker/.env")
+        logger.error("ContactOut not configured — set CONTACTOUT_API_KEY in the canonical worker env")
         return 1
 
     contacts = fetch_contacts(args.names)

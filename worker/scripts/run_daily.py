@@ -9,8 +9,6 @@ import sys
 from email.mime.text import MIMEText
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 # Allow running as `python scripts/run_daily.py` from worker/
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
@@ -18,7 +16,10 @@ sys.path.insert(0, str(WORKER_ROOT))
 from src.caffeinate_guard import prevent_sleep  # noqa: E402
 from src.crm_client import CRMClient  # noqa: E402
 from src.crm_config import post_pipeline_status  # noqa: E402
+from src.env_loader import load_worker_env  # noqa: E402
 from src.pipeline import LOG_DIR, run_pipeline  # noqa: E402
+from src.worker_self_sync import ensure_worker_release, self_sync_enabled  # noqa: E402
+from src.worker_identity import worker_status_payload  # noqa: E402
 
 
 def setup_logging(run_date_str: str, verbose: bool, suffix: str = "") -> Path:
@@ -180,7 +181,17 @@ def main() -> int:
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
-    load_dotenv(WORKER_ROOT / ".env")
+    load_worker_env()
+
+    try:
+        from src.crm_config import crm_base_url
+
+        crm_url = crm_base_url(required=True)
+        logging.getLogger(__name__).info("CRM target: %s", crm_url)
+    except RuntimeError as exc:
+        logging.basicConfig(level=logging.ERROR)
+        logging.getLogger(__name__).error("%s", exc)
+        return 1
 
     from datetime import date
 
@@ -205,9 +216,26 @@ def main() -> int:
     log_path = setup_logging(run_date_str, args.verbose, mode_suffix)
     logger = logging.getLogger(__name__)
 
+    if self_sync_enabled() and not ensure_worker_release(logger):
+        send_failure_alert(
+            "Worker self-sync failed or installed a new promoted release; "
+            "scheduled run skipped to avoid stale or half-updated code."
+        )
+        return 1
+
     with prevent_sleep():
         try:
-            post_pipeline_status("worker_heartbeat")
+            identity = worker_status_payload()
+            post_pipeline_status(
+                "worker_heartbeat",
+                {
+                    "commit_sha": identity.get("commit_sha"),
+                    "branch": identity.get("branch"),
+                    "dirty": identity.get("dirty"),
+                    "agent_summary": identity.get("agent_summary"),
+                    "status_payload": identity,
+                },
+            )
         except Exception:
             pass
 
@@ -306,7 +334,12 @@ def main() -> int:
                 send_failure_alert("\n".join(result.errors))
                 return 1
 
-        if not args.dry_run and not args.skip_crm and not args.scrape_only:
+        if (
+            not args.dry_run
+            and not args.skip_crm
+            and not args.scrape_only
+            and os.environ.get("ENABLE_CONTACTOUT_DASHBOARD_BACKFILL") == "true"
+        ):
             if result.contacts_enriched > 0 or args.enrich_only:
                 try:
                     co_n = run_contactout_backfill(

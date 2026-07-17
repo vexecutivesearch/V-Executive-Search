@@ -8,12 +8,14 @@ import sys
 from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
 
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
 
-load_dotenv(WORKER_ROOT / ".env")
+from src.env_loader import load_worker_env  # noqa: E402
+
+load_worker_env()
+from src.paid_egress import PaidEgressBlocked, assert_paid_egress_allowed  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -80,25 +82,15 @@ def main() -> int:
     apollo_key = os.environ.get("APOLLO_API_KEY", "")
     if apollo_key:
         try:
-            resp = requests.post(
-                "https://api.apollo.io/api/v1/organizations/search",
-                headers={"X-Api-Key": apollo_key, "Content-Type": "application/json"},
-                json={"q_organization_name": "Chewy", "page": 1, "per_page": 1},
-                timeout=15,
+            assert_paid_egress_allowed(
+                "apollo",
+                "organizations/search",
+                context="health_check",
+                metadata={"script": "health_check.py"},
             )
-            ok = resp.status_code == 200
-            industry = None
-            if ok:
-                orgs = resp.json().get("organizations") or []
-                industry = orgs[0].get("industry") if orgs else None
-            detail = f"HTTP {resp.status_code}"
-            if industry:
-                detail += f", industry field present ({industry})"
-            elif ok:
-                detail += ", WARNING: no industry in response"
-            check("Apollo organizations/search", ok and bool(industry), detail)
-        except requests.RequestException as exc:
-            check("Apollo organizations/search", False, str(exc))
+            check("Apollo paid egress guard", False, "health_check should be blocked")
+        except PaidEgressBlocked:
+            check("Apollo paid egress guard", True, "live org-search probe blocked")
     else:
         check("Apollo API key", False, "APOLLO_API_KEY missing")
 

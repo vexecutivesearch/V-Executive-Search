@@ -1,0 +1,53 @@
+{
+  "$comment": "Sector-aware contact targeting for discovery (Feature 2). ALLOWLIST semantics: discovery searches ONLY the titles in the active priority list — no blocklist needed; litigation chairs / practice-group leaders / extra partners are never searched because they are not listed. Config-driven so other sectors get their own lists without code changes.",
+  "contact_targets": {
+    "legal": {
+      "detect_sector": "legal",
+      "detect_name_strong": ["LLP", "PLLC", "Attorneys at Law", "Law Firm", "Law Offices", "Law Group", "Law Office"],
+      "detect_name_weak": ["& Associates", "Group", "Partners"],
+      "detect_industry_keywords": ["law practice", "legal services", "legal"],
+      "on_uncertain": "generic",
+      "broad_search": true,
+      "size_small_max": 50,
+      "unknown_size": "union",
+      "priority_small": [
+        "Managing Partner",
+        "Founder|Named Partner",
+        "Firm Administrator",
+        "HR Manager"
+      ],
+      "priority_large": [
+        "HR Director",
+        "Recruiting Director",
+        "Legal Recruiting Manager",
+        "Firm Administrator",
+        "Executive Director",
+        "Office Managing Partner"
+      ],
+      "empty_fallback": ["Owner", "Principal", "President", "Founder"]
+    },
+    "default": {
+      "size_small_max": 50,
+      "unknown_size": "union",
+      "priority_small": [
+        "Owner|CEO|Founder",
+        "President",
+        "General Manager",
+        "Office Manager|Practice Manager",
+        "HR Manager"
+      ],
+      "priority_large": [
+        "HR Director|Director of Human Resources",
+        "Head of HR|Head of People|Chief People Officer|CHRO",
+        "VP People|VP Human Resources",
+        "Head of Talent",
+        "Operations Manager"
+      ],
+      "empty_fallback": ["Owner", "Principal", "President"]
+    }
+  },
+  "discovery": {
+    "max_candidates": 8,
+    "search_per_page": 10
+  }
+}

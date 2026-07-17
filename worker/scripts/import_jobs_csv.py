@@ -19,10 +19,11 @@ from datetime import date
 from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
 
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
+
+from src.env_loader import load_worker_env  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -134,11 +135,11 @@ def main() -> int:
     parser.add_argument("--run-date", default=date.today().isoformat())
     args = parser.parse_args()
 
-    load_dotenv(WORKER_ROOT / ".env")
+    load_worker_env()
     base_url = os.environ.get("CRM_API_URL", "")
     api_key = os.environ.get("CRM_API_KEY", "")
     if not base_url or not api_key:
-        logger.error("CRM_API_URL and CRM_API_KEY required in worker/.env")
+        logger.error("CRM_API_URL and CRM_API_KEY required in the canonical worker env")
         return 1
 
     if not args.csv.exists():

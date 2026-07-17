@@ -49,22 +49,25 @@ function etSlotStart(year: number, month: number, day: number, hour: number): Da
 
 /**
  * Returns the pipeline run slot we should monitor, if we're in the post-run
- * alert window (6:20–8:00 AM or PM ET).
+ * alert window (5:20–8:00 AM or 6:20–8:00 PM ET).
  */
 export function getActiveRunSlot(now = new Date()): RunSlot | null {
   const { year, month, day, hour, minute } = etParts(now);
   const dateKey = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
   const inMorningWindow =
-    (hour === 6 && minute >= 20) || hour === 7 || (hour === 8 && minute === 0);
+    (hour === 5 && minute >= 20) ||
+    hour === 6 ||
+    hour === 7 ||
+    (hour === 8 && minute === 0);
   const inEveningWindow =
     (hour === 18 && minute >= 20) || hour === 19 || (hour === 20 && minute === 0);
 
   if (inMorningWindow) {
     return {
       id: `${dateKey}-morning`,
-      label: "6 AM Eastern",
-      slotStart: etSlotStart(year, month, day, 6),
+      label: "5 AM Eastern",
+      slotStart: etSlotStart(year, month, day, 5),
     };
   }
 

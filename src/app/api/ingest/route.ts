@@ -16,6 +16,7 @@ import {
   type PipelineFunnel,
 } from "@/lib/pipeline-funnel";
 import { getGeoFocusSettings } from "@/lib/geo-focus";
+import { activeMarketLabel } from "@/lib/market-attribution";
 import { recomputeCompanyScores } from "@/lib/recompute-company-scores";
 import type { IcpStatus } from "@/lib/db/schema";
 import { normalizeRunSlot } from "@/lib/timezone";
@@ -189,6 +190,11 @@ export async function POST(request: NextRequest) {
   const enrichOnly = payload.import_mode === "enrich_only";
   const runSlot = normalizeRunSlot(payload.run_slot);
 
+  // Market active in Admin when this batch was scraped — provenance for the
+  // consolidated CRM (runs ledger + companies.source_market).
+  const ingestGeoSettings = await getGeoFocusSettings();
+  const sourceMarket = activeMarketLabel(ingestGeoSettings);
+
   const [existingRun] = await db
     .select()
     .from(dailyRuns)
@@ -202,6 +208,7 @@ export async function POST(request: NextRequest) {
     .values({
       runDate: payload.run_date,
       runSlot,
+      market: sourceMarket,
       listingsScraped: meta.listings_scraped ?? 0,
       companiesFound: meta.companies_found ?? 0,
       companiesSkippedExisting: meta.companies_skipped_existing ?? 0,
@@ -217,6 +224,7 @@ export async function POST(request: NextRequest) {
     .onConflictDoUpdate({
       target: [dailyRuns.runDate, dailyRuns.runSlot],
       set: {
+        market: existingRun?.market ?? sourceMarket,
         listingsScraped: jobsOnly
           ? (existingRun?.listingsScraped ?? 0) + (meta.listings_scraped ?? 0)
           : (meta.listings_scraped ?? existingRun?.listingsScraped ?? 0),
@@ -273,6 +281,7 @@ export async function POST(request: NextRequest) {
           icpStatus: item.icp_status ?? existing.icpStatus,
           enrichedAt: enrichOnly ? new Date() : existing.enrichedAt,
           enrichRunDate: item.enrich_run_date ?? existing.enrichRunDate,
+          sourceMarket: existing.sourceMarket ?? sourceMarket,
           updatedAt: new Date(),
         })
         .where(eq(companies.id, companyId));
@@ -293,6 +302,7 @@ export async function POST(request: NextRequest) {
             : payload.run_date,
           enrichRunDate: item.enrich_run_date ?? null,
           enrichedAt: enrichOnly ? new Date() : null,
+          sourceMarket,
           dailyRunId: run.id,
         })
         .returning();

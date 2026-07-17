@@ -13,16 +13,16 @@ Use this guide when standing up a **new Vercel environment**, **new Neon databas
                              │ HTTPS + WORKER_API_KEY
 ┌────────────────────────────┴────────────────────────────────────┐
 │  Mac worker (ONE machine only — residential IP)                   │
-│  • launchd: JIT pipeline (2–6 AM ET) + 5-min poll                 │
-│  • JobSpy scrape (boards from /admin)                             │
-│  • Apollo + ContactOut API enrichment                             │
-│  • worker/.env (never in git)                                     │
+│  • launchd on a clean release checkout (origin/worker-production) │
+│  • JobSpy scrape (boards + geo from /admin) → jobs-only ingest    │
+│  • Free rescore / hygiene / email; paid enrich is manual-only     │
+│  • Canonical env: ~/.vsearch/worker.env (never in git)            │
 │  • iMessage checks (Mac-only)                                     │
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
 │  Your MacBook / phone (optional — no worker install required)    │
-│  • Browser → /admin → geo, job boards, titles, Run now           │
+│  • Browser → /admin → state/market, boards, titles, Run now       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -30,7 +30,8 @@ Use this guide when standing up a **new Vercel environment**, **new Neon databas
 
 - Job scraping runs on **one home Mac** with a residential IP. Vercel hosts the CRM and admin UI only.
 - ContactOut uses the **API only** (`CONTACTOUT_API_KEY`) — no browser automation.
-- Job boards are toggled in `/admin` (stored in Postgres); the worker reads them on each run.
+- Job boards and geo are toggled in `/admin` (Postgres); the worker reads them on each run.
+- Promote worker code via `origin/worker-production`, not raw `main`. See [Worker release promotion](#worker-release-promotion).
 
 ---
 
@@ -43,16 +44,17 @@ Use this guide when standing up a **new Vercel environment**, **new Neon databas
 - [ ] Set Vercel environment variables (see table below)
 - [ ] `npm run db:push` locally (adds `job_boards` and other schema)
 - [ ] Deploy → verify `/today` and `/admin/login` return 200
-- [ ] Log into `/admin` → geographic focus, job boards, job titles, notification email
+- [ ] Log into `/admin` → **state + market**, job boards, job titles, notification email
+- [ ] Seed geo presets if needed: `node scripts/seed-state-geo-configs.mjs` (14 states / 61 markets)
 - [ ] Generate a long random `WORKER_API_KEY` (same value on worker Mac)
 
 ### Mac worker (dedicated machine — often Mac mini)
 
-- [ ] Clone repo on the **worker Mac**
-- [ ] `cd worker && ./scripts/setup_mac.sh`
-- [ ] Fill `worker/.env`: `CRM_API_URL`, `CRM_API_KEY`, `APOLLO_API_KEY`, `CONTACTOUT_API_KEY`, Resend keys
-- [ ] `./scripts/install_launchd.sh` (daily + poll)
-- [ ] `python scripts/health_check.py` → all critical checks pass
+- [ ] Clone repo on the **worker Mac** (editable checkout for promote/bootstrap only)
+- [ ] Create canonical env: `mkdir -p ~/.vsearch && cp worker/.env.example ~/.vsearch/worker.env` and fill keys
+- [ ] Promote a tested SHA to `worker-production`, then `bash worker/scripts/bootstrap_release.sh`
+- [ ] `bash worker/scripts/verify_release_launchd.sh` → all agents point at the release worktree
+- [ ] From the release checkout: `python scripts/health_check.py` → critical checks pass (no paid egress)
 - [ ] Admin → **Run now** → confirm poll picks it up within 5 minutes
 
 ### Do NOT do on MacBook if Mac mini is the worker
@@ -63,24 +65,31 @@ Use this guide when standing up a **new Vercel environment**, **new Neon databas
 
 ## Daily pipeline (JIT enrichment — Eastern Time)
 
-The worker runs **staged jobs twice daily** (6 AM and 6 PM scrape) instead of enriching every net-new company:
+The worker runs **staged free jobs twice daily** (5 AM and 6 PM scrape) instead of enriching every net-new company:
 
 | Time (ET) | Job | Credits |
 |-----------|-----|---------|
-| 06:00 | Scrape → `jobs_only` ingest (+ LinkedIn posters) | Free |
+| 05:00 | Scrape → chunked `jobs_only` ingest (+ optional LinkedIn posters) | Free |
 | 06:15 | Archive stale listings | Free |
 | 06:30 | Rescore backlog | Free |
-| 07:00 | Enrich top-N call sheet (default N=25) | Paid |
 | 07:30 | iMessage + email MX presence checks | Free |
 | 07:45 | Build + send ranked call sheet email | Free |
-| 18:00 | Evening scrape → `jobs_only` ingest (+ LinkedIn posters) | Free |
+| 18:00 | Evening scrape → chunked `jobs_only` ingest (+ optional LinkedIn posters) | Free |
 | 18:30 | Evening rescore backlog | Free |
 
-Admin **Run now** (5-min poll) runs scrape → rescore → enrich top-N — not enrich-all.
+Admin **Run now** (5-min poll) runs scrape-only/jobs-only ingest by default.
+Apollo and ContactOut paid egress are manual-only and require a per-company
+manual enrich context.
+
+Large scrapes POST companies in chunks (~200 companies / ~3.5 MB) so Vercel
+does not return **413 Request Entity Too Large**. Later chunks zero
+`listings_scraped` so additive `daily_runs` counters stay correct.
 
 Configure **N** and score thresholds in `/admin` → Enrichment quotas.
+LinkedIn hiring-team poster crawl defaults on (`LINKEDIN_FETCH_HIRING_TEAM=true`);
+set `false` for faster scrape-only validation runs.
 
-**Today's Call Sheet** in the CRM uses a **6 AM – 6 AM Eastern** business day. Enriched leads appear on the call sheet tab; the backlog tab shows ranked companies awaiting enrichment.
+**Today's Call Sheet** in the CRM uses a **5 AM – 5 AM Eastern** business day. Enriched leads appear on the call sheet tab; the backlog tab shows ranked companies awaiting enrichment.
 
 Default job boards: **Indeed, LinkedIn, ZipRecruiter**. **Google Jobs** uses **SerpApi** when `SERPAPI_API_KEY` is set on the Mac worker (auto-enabled at scrape time). JobSpy’s Google scraper is not used. Glassdoor is available but off. Toggle in `/admin` → Job boards.
 
@@ -135,8 +144,60 @@ npm run dev
 | `REPORT_FROM_EMAIL` | Yes | Resend-verified sender |
 | `CONTACTOUT_API_KEY` | Recommended | Personal email/mobile via LinkedIn URL |
 | `SERPAPI_API_KEY` | Optional | Google Jobs via SerpApi on the Mac worker (auto-enables Google board) |
+| `WORKER_SELF_SYNC_ENABLED` | Optional | Opt-in: sync to `WORKER_RELEASE_REF` before a run |
+| `WORKER_RELEASE_REF` | Optional | Default `origin/worker-production` (never raw `main`) |
+| `WORKER_ENV_FILE` | Recommended | Canonical secrets path, usually `~/.vsearch/worker.env` |
+| `LINKEDIN_FETCH_HIRING_TEAM` | Optional | Default `true`; set `false` to skip poster crawl (much faster) |
 
 See `worker/.env.example` for the full list.
+
+---
+
+## Worker release promotion
+
+Worker runtime code is promoted on a **dedicated ref**, not by pulling `main` into the live launchd checkout.
+
+1. Land changes on a feature branch; merge/push as usual.
+2. After tests, `db:push` (if schema), and Vercel deploy: move `worker-production` to the tested SHA:
+
+```bash
+git fetch origin
+git push origin <tested-sha>:refs/heads/worker-production
+# or: git branch -f worker-production <tested-sha> && git push origin worker-production
+```
+
+3. On the Mac mini, from the **editable** clone:
+
+```bash
+WORKER_BOOTSTRAP_PYTHON=/opt/homebrew/bin/python3.12 \
+  bash worker/scripts/bootstrap_release.sh
+bash worker/scripts/verify_release_launchd.sh
+```
+
+Bootstrap:
+
+- Fetches `origin/worker-production`
+- Builds a clean **detached** worktree (default `…/V-Executive-Search-release`)
+- Creates a fresh `.venv`, symlinks `~/.vsearch/worker.env` → `worker/.env`
+- Reinstalls all eight launchd agents against that release
+- Keeps the previous release worktree for rollback
+
+Admin **Worker status** compares the mini’s reported SHA to the expected release ref. Detached `HEAD` is healthy when the SHA matches the promoted release.
+
+Optional auto-sync before runs: set `WORKER_SELF_SYNC_ENABLED=true` in the canonical env (still only advances to `WORKER_RELEASE_REF`).
+
+---
+
+## Geographic markets (DB-backed)
+
+- **14 states / 61 markets** grounded in OMB 2023 CBSA delineations + Census ACS 2023 5-year geography.
+- Full metro county sets include **cross-state** counties; hubs keep their true state (`Rock Hill, SC` in Charlotte).
+- Admin **Market** dropdown reloads focus cities, counties, scrape hubs (max 8), and aliases.
+- Regenerate seeds: `python3 scripts/generate-state-geo-expanded-seed.py`
+- Upsert DB: `node scripts/seed-state-geo-configs.mjs`
+- Coverage report: [docs/state-geo-expanded-coverage.md](docs/state-geo-expanded-coverage.md)
+
+**Charlotte first-market validation (Jul 2026):** scrape-only with `LINKEDIN_FETCH_HIRING_TEAM=false` ingested ~15.8k listings / ~1.5k companies; Rock Hill locations only as SC; Apollo/ContactOut usage unchanged (manual-only). Chunked ingest required after a single-payload **413**.
 
 ---
 
@@ -167,36 +228,40 @@ See `worker/.env.example` for the full list.
 ## New Mac worker machine
 
 ```bash
-git clone git@github.com:proventheory/V-Executive-Search.git
-cd V-Executive-Search/worker
-chmod +x scripts/setup_mac.sh && ./scripts/setup_mac.sh
+git clone git@github.com:vexecutivesearch/V-Executive-Search.git
+cd V-Executive-Search
+mkdir -p ~/.vsearch
+cp worker/.env.example ~/.vsearch/worker.env
+# Edit ~/.vsearch/worker.env — CRM_API_URL, CRM_API_KEY (= WORKER_API_KEY), API keys
 ```
 
-Edit `worker/.env`:
-
-```env
-CRM_API_URL=https://YOUR-VERCEL-URL.vercel.app
-CRM_API_KEY=<same as WORKER_API_KEY on Vercel>
-CONTACTOUT_API_KEY=<your ContactOut API token>
-```
-
-Test ContactOut API:
+Promote and install launchd on a release checkout:
 
 ```bash
+# After origin/worker-production points at a tested SHA:
+WORKER_BOOTSTRAP_PYTHON=/opt/homebrew/bin/python3.12 \
+  bash worker/scripts/bootstrap_release.sh
+bash worker/scripts/verify_release_launchd.sh
+launchctl list | grep vexecsearch
+```
+
+Test ContactOut API from the **release** worker:
+
+```bash
+cd /path/to/V-Executive-Search-release/worker
 source .venv/bin/activate
 python scripts/test_contactout_hybrid.py
 ```
 
-Schedule:
-
-```bash
-./scripts/install_launchd.sh
-launchctl list | grep vexecsearch
-```
-
 | Agent | Schedule |
 |-------|----------|
-| `com.vexecsearch.daily` | 6:00 AM & 6:00 PM |
+| `com.vexecsearch.scrape` | 5:00 AM |
+| `com.vexecsearch.hygiene` | 6:15 AM |
+| `com.vexecsearch.rescore` | 6:30 AM |
+| `com.vexecsearch.presence` | 7:30 AM |
+| `com.vexecsearch.email` | 7:45 AM |
+| `com.vexecsearch.scrape-pm` | 6:00 PM |
+| `com.vexecsearch.rescore-pm` | 6:30 PM |
 | `com.vexecsearch.poll` | Every 5 minutes |
 
 ---
@@ -205,11 +270,11 @@ launchctl list | grep vexecsearch
 
 | Asset | Git | MacBook → Mac mini | Notes |
 |-------|-----|-------------------|--------|
-| Source code | Yes | `git clone` | |
-| `worker/.env` (API keys) | **No** | Copy manually | Never commit |
-| launchd plists | In repo | Re-run `install_launchd.sh` | Per macOS user |
+| Source code | Yes | `git clone` + promote `worker-production` | Live launchd uses release worktree |
+| `~/.vsearch/worker.env` | **No** | Copy manually | Never commit; not checkout-local |
+| launchd plists | In repo | Re-run bootstrap / `install_launchd.sh` | Per macOS user |
 | Neon data | N/A | Same `DATABASE_URL` | |
-| Admin settings | N/A | In Postgres | Geo, boards, searches |
+| Admin settings | N/A | In Postgres | State/market, boards, searches |
 
 ---
 
@@ -220,12 +285,16 @@ launchctl list | grep vexecsearch
 | **404 on Vercel** | Root Directory empty; redeploy |
 | **Database not connected** | `DATABASE_URL` on Vercel + `db:push` |
 | **Worker ingest 401** | `CRM_API_KEY` ≠ `WORKER_API_KEY` |
-| **Run now does nothing** | Poll only on worker Mac; `launchctl list \| grep vexec` |
+| **Worker ingest 413** | Need chunked ingest (`crm_client.ingest_batch`); promote worker ≥ `c4879bb` |
+| **Run now does nothing** | Poll only on worker Mac; agents must target release checkout |
+| **Admin SHA drift** | Promote + bootstrap so heartbeat matches `origin/worker-production` |
 | **No LinkedIn jobs** | LinkedIn blocks scrapers sometimes; check daily log; toggle board off/on |
+| **ZipRecruiter 0 / 403** | Cloudflare blocks common; non-blocking `board_failure` — Indeed/LinkedIn still count |
 | **ContactOut no phones** | API plan may lack phone credits |
-| **ContactOut HTTP 429** | Wait for cooldown; `rm worker/.contactout-rate-limited` after cooldown |
+| **ContactOut HTTP 429** | Wait for cooldown; clear rate-limit marker after cooldown |
 | **iMessage not tagging** | Messages signed in on worker Mac only |
 | **Old boards after deploy** | Open `/admin` → Job boards → Save (or wait for auto-backfill) |
+| **Wrong market hubs** | Confirm Admin Market; re-seed with `node scripts/seed-state-geo-configs.mjs` |
 
 ---
 
@@ -233,3 +302,5 @@ launchctl list | grep vexecsearch
 
 - [README.md](README.md) — repo overview
 - [worker/README.md](worker/README.md) — worker scripts and env reference
+- [docs/state-geo-expanded-coverage.md](docs/state-geo-expanded-coverage.md) — market counties / excluded hubs
+- [docs/V-EXECUTIVE-SEARCH-SYSTEM.md](docs/V-EXECUTIVE-SEARCH-SYSTEM.md) — product + pipeline model

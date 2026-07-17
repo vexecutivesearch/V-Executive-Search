@@ -1,23 +1,22 @@
 import { cache } from "react";
-import {
-  countyFromLocationString,
-  countyInFocus,
-  DEFAULT_WPB_FOCUS_COUNTIES,
-  resolveFloridaCounty,
-} from "@/lib/county-map";
+import { countyInFocus } from "@/lib/county-map";
 import {
   normalizeJobLocationString,
   parseJobLocation,
 } from "@/lib/location-match";
-import {
-  DEFAULT_WPB_METRO_ALIASES,
-  DEFAULT_WPB_METRO_CITIES,
-  normalizeMetroToken,
-} from "@/lib/metro-defaults";
+import { normalizeMetroToken } from "@/lib/metro-defaults";
 import { buildGeoZones, type GeoZone } from "@/lib/pipeline-config";
 import type { pipelineSettings } from "@/lib/db/schema";
+import {
+  getStateGeoConfig,
+  resolveCountyForCity,
+  type StateGeoConfig,
+} from "@/lib/state-geo-config";
 
 export type GeoMatchResult = "in_metro" | "out_of_metro" | "location_unknown";
+export type GeoFocusSettings = typeof pipelineSettings.$inferSelect & {
+  stateGeoConfig?: StateGeoConfig | null;
+};
 
 function normalize(value: string): string {
   return normalizeMetroToken(value);
@@ -50,91 +49,98 @@ function stateMatches(
   return false;
 }
 
-function focusUsesWpbMetro(focusCities: string[]): boolean {
-  return focusCities.some((city) => {
-    const n = normalize(city);
-    return n.includes("west palm") || n.includes("palm beach");
-  });
+function stateGeoConfigForSettings(settings: GeoFocusSettings): StateGeoConfig {
+  return settings.stateGeoConfig ?? getStateGeoConfig(settings.focusState);
 }
 
-/** Metro cities from admin config; falls back to WPB defaults when unset. */
-export function getMetroCities(
-  settings: typeof pipelineSettings.$inferSelect,
-): string[] {
+/** Metro cities from admin config; falls back to active state's defaults when unset. */
+export function getMetroCities(settings: GeoFocusSettings): string[] {
   const configured = normalizeList(settings.metroCities);
   if (configured.length) return configured;
-
-  const focus = normalizeList(
-    settings.focusCities?.length
-      ? settings.focusCities
-      : settings.focusCity
-        ? [settings.focusCity]
-        : ["West Palm Beach"],
-  );
-  if (focusUsesWpbMetro(focus)) {
-    return [...DEFAULT_WPB_METRO_CITIES];
-  }
-  return [];
+  return [...stateGeoConfigForSettings(settings).defaultMetroCities];
 }
 
-export function getMetroAliases(
-  settings: typeof pipelineSettings.$inferSelect,
-): string[] {
+export function getMetroAliases(settings: GeoFocusSettings): string[] {
   const configured = normalizeList(settings.metroAliases);
   if (configured.length) return configured;
-  return [...DEFAULT_WPB_METRO_ALIASES];
+  return [...stateGeoConfigForSettings(settings).defaultMetroAliases];
 }
 
-/** Accepted counties for metro geo — config-driven, defaults to Palm Beach + Broward. */
-export function getAcceptedCounties(
-  settings: typeof pipelineSettings.$inferSelect,
-): string[] {
+/** Accepted counties for metro geo — config-driven per active state. */
+export function getAcceptedCounties(settings: GeoFocusSettings): string[] {
   const configured = normalizeList(settings.focusCounties);
   if (configured.length) return configured;
 
   const legacy = settings.focusCounty?.trim();
   if (legacy) return [legacy];
 
-  const focus = normalizeList(
-    settings.focusCities?.length
-      ? settings.focusCities
-      : settings.focusCity
-        ? [settings.focusCity]
-        : ["West Palm Beach"],
-  );
-  if (focusUsesWpbMetro(focus)) {
-    return [...DEFAULT_WPB_FOCUS_COUNTIES];
+  return [...stateGeoConfigForSettings(settings).defaultFocusCounties];
+}
+
+function splitCountyToken(
+  county: string,
+): { name: string; stateAbbr: string | null } {
+  const match = county.trim().match(/^(.*?),\s*([A-Z]{2})$/i);
+  return {
+    name: match ? match[1].trim() : county.trim(),
+    stateAbbr: match ? match[2].toUpperCase() : null,
+  };
+}
+
+function countyFromLocationString(
+  location: string,
+  config: StateGeoConfig,
+  parsed: NonNullable<ReturnType<typeof parseJobLocation>>,
+): string | null {
+  const loc = normalize(location);
+  if (!loc) return null;
+  for (const county of config.counties) {
+    const countyToken = splitCountyToken(county);
+    const countyName = normalize(countyToken.name);
+    const countyStateMatches =
+      !countyToken.stateAbbr ||
+      !parsed.stateAbbr ||
+      parsed.stateAbbr.toUpperCase() === countyToken.stateAbbr;
+    if (!countyStateMatches) continue;
+    if (loc.includes(`${countyName} county`)) {
+      return county;
+    }
   }
-  return [];
+  return null;
+}
+
+function resolveConfiguredCounty(
+  parsed: NonNullable<ReturnType<typeof parseJobLocation>>,
+  location: string,
+  config: StateGeoConfig,
+): string[] {
+  const fromString = countyFromLocationString(location, config, parsed);
+  if (fromString) return [fromString];
+  return resolveCountyForCity(config, parsed.city, parsed.stateAbbr);
 }
 
 function matchesCountyFocus(
   location: string,
   parsed: NonNullable<ReturnType<typeof parseJobLocation>>,
-  settings: typeof pipelineSettings.$inferSelect,
+  settings: GeoFocusSettings,
 ): boolean | null {
   const accepted = getAcceptedCounties(settings);
   if (!accepted.length) return null;
+  const config = stateGeoConfigForSettings(settings);
 
-  const fromString = countyFromLocationString(location);
-  if (fromString && countyInFocus(fromString, accepted)) return true;
-  if (fromString && !countyInFocus(fromString, accepted)) return false;
-
-  const county = resolveFloridaCounty(parsed.city, location);
-  if (!county) return null;
-  return countyInFocus(county, accepted);
+  const counties = resolveConfiguredCounty(parsed, location, config);
+  if (!counties.length) return null;
+  return counties.some((county) => countyInFocus(county, accepted));
 }
 
 /** True when county-based geo is active for this market. */
-export function isCountyGeoActive(
-  settings: typeof pipelineSettings.$inferSelect,
-): boolean {
+export function isCountyGeoActive(settings: GeoFocusSettings): boolean {
   return getAcceptedCounties(settings).length > 0;
 }
 
 function matchesMetroCityOrAlias(
   location: string,
-  settings: typeof pipelineSettings.$inferSelect,
+  settings: GeoFocusSettings,
 ): boolean {
   const loc = normalize(normalizeJobLocationString(location));
   if (!loc) return false;
@@ -150,7 +156,7 @@ function matchesMetroCityOrAlias(
 /** Classify a scraped job location — never silently drop; unknown ≠ out-of-metro. */
 export function classifyJobLocation(
   location: string | null | undefined,
-  settings: typeof pipelineSettings.$inferSelect,
+  settings: GeoFocusSettings,
 ): GeoMatchResult {
   if (!location?.trim()) return "location_unknown";
 
@@ -174,7 +180,7 @@ export function classifyJobLocation(
 /** True when a scraped job listing location falls inside admin geo focus. */
 export function jobLocationInFocus(
   location: string | null | undefined,
-  settings: typeof pipelineSettings.$inferSelect,
+  settings: GeoFocusSettings,
 ): boolean {
   if (!location?.trim()) return false;
 
@@ -182,7 +188,7 @@ export function jobLocationInFocus(
   const parsed = parseJobLocation(normalized);
   if (!parsed) return false;
 
-  const zones = buildGeoZones(settings);
+  const config = stateGeoConfigForSettings(settings);
 
   if (settings.geographicScope === "national") {
     return true;
@@ -221,14 +227,14 @@ export function jobLocationInFocus(
     ? settings.focusCities
     : settings.focusCity
       ? [settings.focusCity]
-      : ["West Palm Beach"];
+      : config.defaultFocusCities;
 
   return cities.some((city) => {
     const zone = buildGeoZones({
       ...settings,
       geographicScope: "city",
       focusCities: [city],
-    })[0];
+    }, config)[0];
     if (!parsed.city) return false;
     const zoneParsed = parseJobLocation(zone.location);
     if (!zoneParsed?.city) return cityMatches(parsed.city, city);
@@ -241,9 +247,10 @@ export function jobLocationInFocus(
 }
 
 export function focusGeoLabel(
-  settings: typeof pipelineSettings.$inferSelect,
+  settings: GeoFocusSettings,
 ): string {
-  const zones = buildGeoZones(settings)
+  const config = stateGeoConfigForSettings(settings);
+  const zones = buildGeoZones(settings, config)
     .map((z: GeoZone) => z.label)
     .join("; ");
   const metro = getMetroCities(settings);
@@ -258,5 +265,12 @@ export function focusGeoLabel(
 
 export const getGeoFocusSettings = cache(async () => {
   const { getOrCreateSettings } = await import("@/lib/pipeline-config");
-  return getOrCreateSettings();
+  const { getStateGeoConfigForState } = await import(
+    "@/lib/state-geo-config-store"
+  );
+  const settings = await getOrCreateSettings();
+  return {
+    ...settings,
+    stateGeoConfig: await getStateGeoConfigForState(settings.focusState),
+  };
 });

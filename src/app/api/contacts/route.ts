@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { unauthorized, verifyWorkerAuth } from "@/lib/auth";
 import { db } from "@/lib/db";
@@ -53,6 +53,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ contacts: rows });
   }
 
+  // iMessage checks only apply to contacts that have a personal email — the
+  // only ones the UI shows an iMessage badge for. Excluding email-less
+  // "discovered" contacts keeps them from flooding the 50-row batch and
+  // starving real candidates (which left badges stuck on "Checking…").
   const rows = await db
     .select({
       id: contacts.id,
@@ -67,7 +71,10 @@ export async function GET(request: NextRequest) {
     })
     .from(contacts)
     .innerJoin(companies, eq(companies.id, contacts.companyId))
-    .where(isNull(contacts.imessageCapable))
+    .where(
+      and(isNull(contacts.imessageCapable), isNotNull(contacts.personalEmail)),
+    )
+    .orderBy(desc(contacts.createdAt))
     .limit(limit);
 
   return NextResponse.json({ contacts: rows });

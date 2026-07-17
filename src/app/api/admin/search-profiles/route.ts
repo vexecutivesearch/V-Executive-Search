@@ -39,16 +39,42 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "name and search_term required" }, { status: 400 });
   }
 
+  const searchTerm = body.search_term.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!searchTerm) {
+    return NextResponse.json({ error: "search_term required" }, { status: 400 });
+  }
+
+  const existing = await db
+    .select()
+    .from(searchProfiles)
+    .where(eq(searchProfiles.searchTerm, searchTerm))
+    .limit(1);
+  if (existing.length) {
+    return NextResponse.json(
+      { error: "That keyword already exists", profile: existing[0] },
+      { status: 409 },
+    );
+  }
+
+  const maxOrder = await db
+    .select({ sortOrder: searchProfiles.sortOrder })
+    .from(searchProfiles)
+    .orderBy(asc(searchProfiles.sortOrder));
+  const nextOrder =
+    (maxOrder.length ? Math.max(...maxOrder.map((r) => r.sortOrder ?? 0)) : 0) +
+    1;
+
   const [created] = await db
     .insert(searchProfiles)
     .values({
-      name: body.name,
-      searchTerm: body.search_term,
+      name: body.name.trim(),
+      searchTerm,
       isActive: body.is_active ?? true,
       isRemote: body.is_remote ?? null,
       resultsWanted: body.results_wanted ?? 50,
-      hoursOld: body.hours_old ?? 24,
-      linkedinDistance: body.linkedin_distance ?? null,
+      hoursOld: body.hours_old ?? 168,
+      linkedinDistance: body.linkedin_distance ?? 25,
+      sortOrder: nextOrder,
     })
     .returning();
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyJobLocation,
+  type GeoFocusSettings,
   jobLocationInFocus,
 } from "@/lib/geo-focus";
 import { evaluateIcp, isStaffingAgency } from "@/lib/icp-filter";
@@ -9,11 +10,14 @@ import {
   parseJobLocation,
 } from "@/lib/location-match";
 import { DEFAULT_WPB_METRO_CITIES } from "@/lib/metro-defaults";
-import type { pipelineSettings } from "@/lib/db/schema";
+import {
+  getDefaultGeoSelection,
+  getStateGeoConfig,
+} from "@/lib/state-geo-config";
 
 function wpbSettings(
-  overrides: Partial<typeof pipelineSettings.$inferSelect> = {},
-): typeof pipelineSettings.$inferSelect {
+  overrides: Partial<GeoFocusSettings> = {},
+): GeoFocusSettings {
   return {
     id: "test",
     geographicScope: "city",
@@ -27,17 +31,41 @@ function wpbSettings(
     notificationEmail: "test@example.com",
     jobBoards: [],
     runRequestedAt: null,
+    runClaimedAt: null,
     contactoutSyncRequestedAt: null,
+    contactoutCreditsExhaustedAt: null,
     imessageCheckRequestedAt: null,
     dailyEnrichQuota: 25,
     minScoreForEnrich: 60,
     minScoreForPhone: 75,
     lastRunAt: null,
     workerLastSeenAt: null,
+    workerCommitSha: null,
+    workerBranch: null,
+    workerDirty: false,
+    workerAgentSummary: null,
+    workerStatusPayload: null,
+    workerStatusAt: null,
     missedRunAlertSlot: null,
     updatedAt: new Date(),
     ...overrides,
   };
+}
+
+function georgiaSettings(overrides: Partial<GeoFocusSettings> = {}): GeoFocusSettings {
+  const stateGeoConfig = getStateGeoConfig("Georgia");
+  const defaults = getDefaultGeoSelection("Georgia", "Atlanta");
+  return wpbSettings({
+    geographicScope: "city",
+    focusState: "Georgia",
+    focusCity: "Atlanta",
+    focusCities: defaults.focusCities,
+    focusCounties: defaults.focusCounties,
+    metroCities: defaults.metroCities,
+    metroAliases: defaults.metroAliases,
+    stateGeoConfig,
+    ...overrides,
+  });
 }
 
 const METRO_PASS_CASES = [
@@ -122,6 +150,44 @@ describe("geo normalization", () => {
       "location_unknown",
     );
     expect(jobLocationInFocus("Fictitious Village, FL", settings)).toBe(false);
+  });
+
+  it("preserves Florida parity from state geo defaults", () => {
+    const settings = wpbSettings({
+      metroCities: [],
+      metroAliases: [],
+      focusCounties: [],
+    });
+    expect(classifyJobLocation("Boca Raton, FL", settings)).toBe("in_metro");
+    expect(classifyJobLocation("Fort Lauderdale, FL", settings)).toBe(
+      "in_metro",
+    );
+    expect(classifyJobLocation("Miami, FL", settings)).toBe("out_of_metro");
+  });
+
+  it("accepts Atlanta metro cities and counties from Georgia config", () => {
+    const settings = georgiaSettings();
+    expect(classifyJobLocation("Atlanta, GA", settings)).toBe("in_metro");
+    expect(classifyJobLocation("Marietta, GA", settings)).toBe("in_metro");
+    expect(classifyJobLocation("Duluth, GA", settings)).toBe("in_metro");
+    expect(classifyJobLocation("Fulton County, GA", settings)).toBe("in_metro");
+    expect(jobLocationInFocus("Greater Atlanta Area", settings)).toBe(true);
+  });
+
+  it("does not pass Florida cities when Georgia is selected", () => {
+    const settings = georgiaSettings();
+    expect(classifyJobLocation("West Palm Beach, FL", settings)).toBe(
+      "location_unknown",
+    );
+    expect(jobLocationInFocus("West Palm Beach, FL", settings)).toBe(false);
+  });
+
+  it("routes unmapped Georgia cities to location_unknown", () => {
+    const settings = georgiaSettings();
+    expect(classifyJobLocation("Savannah, GA", settings)).toBe(
+      "location_unknown",
+    );
+    expect(jobLocationInFocus("Savannah, GA", settings)).toBe(false);
   });
 });
 

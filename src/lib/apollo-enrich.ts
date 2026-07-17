@@ -14,18 +14,26 @@ import {
   personMatchesLocation,
 } from "@/lib/location-match";
 import { enrichFromContactOut, dedupeCompanyPhones } from "@/lib/contactout-enrich";
-import { isContactOutCreditsAvailable, markContactOutCreditsExhausted } from "@/lib/contactout-credits";
+import { markContactOutCreditsExhausted } from "@/lib/contactout-credits";
 import {
   extractApolloPhones,
   mergeSourcedPhones,
-  pickPrimaryFromPhones,
   contactPhonesForDisplay,
-  syncContactPhoneFields,
   type SourcedPhone,
 } from "@/lib/contact-phones";
+import {
+  contactNeedsContactOutEnrichment,
+  directPhoneCount,
+  normalizeContactChannels,
+} from "@/lib/contact-enrichment-limits";
 import { isPersonalEmail } from "@/lib/phone-utils";
 import { db } from "@/lib/db";
 import { contacts } from "@/lib/db/schema";
+import {
+  assertPaidEgressAllowed,
+  recordProviderUsageEvent,
+  type PaidEgressContext,
+} from "@/lib/paid-egress";
 import {
   getOrCreateSettings,
   normalizeContactTitles,
@@ -125,13 +133,15 @@ function personSortKey(
   return [locationRank, t, s, title];
 }
 
-async function searchPeopleByCompanyName(
+export async function searchPeopleByCompanyName(
   apiKey: string,
   companyName: string,
   perPage: number,
   personLocations?: string[],
   personTitles: string[] = TARGET_TITLES,
   personSeniorities: string[] = TARGET_SENIORITIES,
+  context?: PaidEgressContext,
+  companyId?: string,
 ): Promise<Record<string, unknown>[]> {
   const payload: Record<string, unknown> = {
     q_organization_name: companyName,
@@ -145,6 +155,11 @@ async function searchPeopleByCompanyName(
   }
   if (personLocations?.length) payload.person_locations = personLocations;
 
+  await assertPaidEgressAllowed("apollo", "mixed_people/api_search", context, {
+    companyId,
+    estimatedCost: 1,
+    metadata: { companyName, personLocations },
+  });
   const resp = await fetch(`${APOLLO_BASE}/mixed_people/api_search`, {
     method: "POST",
     headers: apolloHeaders(apiKey),
@@ -152,16 +167,24 @@ async function searchPeopleByCompanyName(
   });
   if (!resp.ok) return [];
   const data = (await resp.json()) as { people?: Record<string, unknown>[] };
+  await recordProviderUsageEvent("apollo", "mixed_people/api_search", context ?? "automated_scrape", {
+    companyId,
+    recordsReturned: data.people?.length ?? 0,
+    estimatedCost: 1,
+    metadata: { companyName, personLocations },
+  });
   return data.people ?? [];
 }
 
-async function searchPeople(
+export async function searchPeople(
   apiKey: string,
   domain: string,
   perPage: number,
   personLocations?: string[],
   personTitles: string[] = TARGET_TITLES,
   personSeniorities: string[] = TARGET_SENIORITIES,
+  context?: PaidEgressContext,
+  companyId?: string,
 ): Promise<Record<string, unknown>[]> {
   const payload: Record<string, unknown> = {
     q_organization_domains_list: [domain],
@@ -175,6 +198,11 @@ async function searchPeople(
   }
   if (personLocations?.length) payload.person_locations = personLocations;
 
+  await assertPaidEgressAllowed("apollo", "mixed_people/api_search", context, {
+    companyId,
+    estimatedCost: 1,
+    metadata: { domain, personLocations },
+  });
   const resp = await fetch(`${APOLLO_BASE}/mixed_people/api_search`, {
     method: "POST",
     headers: apolloHeaders(apiKey),
@@ -182,13 +210,21 @@ async function searchPeople(
   });
   if (!resp.ok) throw new Error(`Apollo search failed: ${await resp.text()}`);
   const data = (await resp.json()) as { people?: Record<string, unknown>[] };
+  await recordProviderUsageEvent("apollo", "mixed_people/api_search", context ?? "automated_scrape", {
+    companyId,
+    recordsReturned: data.people?.length ?? 0,
+    estimatedCost: 1,
+    metadata: { domain, personLocations },
+  });
   return data.people ?? [];
 }
 
-async function matchPerson(
+export async function matchPerson(
   apiKey: string,
   personId: string,
   enrichPhone: boolean,
+  context?: PaidEgressContext,
+  companyId?: string,
 ): Promise<Record<string, unknown> | null> {
   const params = new URLSearchParams({ id: personId });
   const hook = webhookUrl();
@@ -197,6 +233,12 @@ async function matchPerson(
     params.set("webhook_url", hook);
   }
 
+  const estimatedCost = enrichPhone ? 8 : 1;
+  await assertPaidEgressAllowed("apollo", "people/match", context, {
+    companyId,
+    estimatedCost,
+    metadata: { personId, enrichPhone },
+  });
   const resp = await fetch(`${APOLLO_BASE}/people/match?${params}`, {
     method: "POST",
     headers: apolloHeaders(apiKey),
@@ -210,6 +252,13 @@ async function matchPerson(
     return null;
   }
   const data = (await resp.json()) as { person?: Record<string, unknown> };
+  await recordProviderUsageEvent("apollo", "people/match", context ?? "automated_scrape", {
+    companyId,
+    contactId: undefined,
+    recordsReturned: data.person ? 1 : 0,
+    estimatedCost,
+    metadata: { personId, enrichPhone },
+  });
   return data.person ?? null;
 }
 
@@ -237,6 +286,8 @@ export async function enrichCompanyContacts(options: {
   existingApolloIds?: Set<string>;
   contactOutApiKey?: string;
   contactOutAvailable?: boolean;
+  context?: PaidEgressContext;
+  companyId?: string;
 }): Promise<EnrichedContact[]> {
   const {
     apiKey,
@@ -247,6 +298,8 @@ export async function enrichCompanyContacts(options: {
     existingApolloIds = new Set(),
     contactOutApiKey,
     contactOutAvailable = true,
+    context,
+    companyId,
   } = options;
 
   const useContactOut = Boolean(contactOutApiKey) && contactOutAvailable;
@@ -263,7 +316,7 @@ export async function enrichCompanyContacts(options: {
 
   const perPage = Math.max(contactsPerCompany * 5, 10);
   const localPeople = apolloLocations.length
-    ? await searchPeople(apiKey, domain, perPage, apolloLocations, personTitles)
+    ? await searchPeople(apiKey, domain, perPage, apolloLocations, personTitles, TARGET_SENIORITIES, context, companyId)
     : [];
   const broadPeople = await searchPeople(
     apiKey,
@@ -271,6 +324,9 @@ export async function enrichCompanyContacts(options: {
     perPage,
     undefined,
     personTitles,
+    TARGET_SENIORITIES,
+    context,
+    companyId,
   );
   let people = mergePeople(localPeople, broadPeople);
 
@@ -283,6 +339,8 @@ export async function enrichCompanyContacts(options: {
           apolloLocations,
           FALLBACK_TITLES,
           FALLBACK_SENIORITIES,
+          context,
+          companyId,
         )
       : [];
     const fallbackBroad = await searchPeople(
@@ -292,6 +350,8 @@ export async function enrichCompanyContacts(options: {
       undefined,
       FALLBACK_TITLES,
       FALLBACK_SENIORITIES,
+      context,
+      companyId,
     );
     people = mergePeople(fallbackLocal, fallbackBroad);
   }
@@ -304,6 +364,9 @@ export async function enrichCompanyContacts(options: {
           perPage,
           apolloLocations,
           personTitles,
+          TARGET_SENIORITIES,
+          context,
+          companyId,
         )
       : [];
     const nameBroad = await searchPeopleByCompanyName(
@@ -312,6 +375,9 @@ export async function enrichCompanyContacts(options: {
       perPage,
       undefined,
       personTitles,
+      TARGET_SENIORITIES,
+      context,
+      companyId,
     );
     let namePeople = mergePeople(nameLocal, nameBroad);
     if (namePeople.length === 0) {
@@ -323,6 +389,8 @@ export async function enrichCompanyContacts(options: {
             apolloLocations,
             FALLBACK_TITLES,
             FALLBACK_SENIORITIES,
+            context,
+            companyId,
           )
         : [];
       const nameFallbackBroad = await searchPeopleByCompanyName(
@@ -332,6 +400,8 @@ export async function enrichCompanyContacts(options: {
         undefined,
         FALLBACK_TITLES,
         FALLBACK_SENIORITIES,
+        context,
+        companyId,
       );
       namePeople = mergePeople(nameFallbackLocal, nameFallbackBroad);
     }
@@ -353,7 +423,13 @@ export async function enrichCompanyContacts(options: {
     const personId = String(person.id ?? "");
     if (!personId || existingApolloIds.has(personId)) continue;
 
-    const enriched = await matchPerson(apiKey, personId, apolloPhone);
+    const enriched = await matchPerson(
+      apiKey,
+      personId,
+      apolloPhone && !useContactOut,
+      context,
+      companyId,
+    );
     if (!enriched?.email) continue;
 
     const first = String(enriched.first_name ?? person.first_name ?? "");
@@ -372,43 +448,52 @@ export async function enrichCompanyContacts(options: {
         ? String(person.linkedin_url)
         : null;
 
+    let workEmail = apolloWorkEmail;
     let personalEmail: string | null = isPersonalEmail(workEmailRaw)
       ? workEmailRaw
       : null;
-    let email = personalEmail ?? apolloWorkEmail;
+    let email = personalEmail ?? workEmail;
     let sourceProvider = "apollo";
 
     let phones = extractApolloPhones(enriched);
 
     if (useContactOut && linkedinUrl && contactOutApiKey) {
-      const co = await enrichFromContactOut(linkedinUrl, contactOutApiKey);
+      const co = await enrichFromContactOut(linkedinUrl, contactOutApiKey, {}, context, companyId);
       if (co?.phoneApiLocked) {
-        markContactOutCreditsExhausted();
+        await markContactOutCreditsExhausted();
       } else if (co && !co.phoneApiLocked) {
         phones = mergeSourcedPhones(phones, co.phones);
         if (co.personalEmail) {
           personalEmail = co.personalEmail;
-          email = co.personalEmail;
         }
-        if (co.personalEmail || co.phones.length) {
+        if (co.workEmail && !workEmail) {
+          workEmail = co.workEmail;
+        }
+        email = personalEmail ?? workEmail;
+        if (co.personalEmail || co.workEmail || co.phones.length) {
           sourceProvider = "apollo+contactout";
         }
       }
       await new Promise((r) => setTimeout(r, 400));
     }
 
-    const primary = pickPrimaryFromPhones(phones);
+    const normalized = normalizeContactChannels({
+      workEmail,
+      personalEmail,
+      email,
+      phones,
+    });
 
     results.push({
       name,
       title: String(enriched.title ?? person.title ?? ""),
-      email,
-      workEmail: apolloWorkEmail,
-      personalEmail,
-      phone: primary.phone,
-      personalPhone: primary.personalPhone,
-      companyPhone: primary.companyPhone,
-      phones,
+      email: normalized.email,
+      workEmail: normalized.workEmail,
+      personalEmail: normalized.personalEmail,
+      phone: normalized.phone,
+      personalPhone: normalized.personalPhone,
+      companyPhone: normalized.companyPhone,
+      phones: normalized.phones,
       linkedinUrl,
       apolloId: personId,
       sourceProvider,
@@ -433,12 +518,15 @@ function contactNeedsApolloRefresh(
     workEmail: string | null;
     email: string | null;
     linkedinUrl: string | null;
+    sourceProvider?: string | null;
   },
   contactOutAvailable: boolean,
 ): boolean {
-  const hasPhone =
-    Boolean(contact.personalPhone || contact.phone) ||
-    (contact.phones?.length ?? 0) > 0;
+  if (contactOutAvailable && !contactNeedsContactOutEnrichment(contact)) {
+    return !contact.linkedinUrl;
+  }
+
+  const hasPhone = directPhoneCount(contact) > 0;
   const needsLinkedIn = !contact.linkedinUrl;
   const needsWorkEmail = !contact.workEmail && !contact.email;
 
@@ -455,6 +543,7 @@ export async function refreshCompanyContactsFromApollo(
   companyId: string,
   apiKey: string,
   contactOutAvailable = true,
+  context?: PaidEgressContext,
 ): Promise<{
   updated: number;
   phonesRequested: number;
@@ -477,47 +566,52 @@ export async function refreshCompanyContactsFromApollo(
     }
 
     const beforePhones = contactPhonesForDisplay(contact).length;
-    phonesRequested += 1;
-    const enriched = await matchPerson(apiKey, contact.apolloId, ENRICH_PHONE);
+    const requestApolloPhone =
+      ENRICH_PHONE && !(contactOutAvailable && directPhoneCount(contact) > 0);
+    if (requestApolloPhone) phonesRequested += 1;
+    const enriched = await matchPerson(
+      apiKey,
+      contact.apolloId,
+      requestApolloPhone,
+      context,
+      companyId,
+    );
     if (!enriched) continue;
 
-    const apolloPhones = extractApolloPhones(enriched);
-    const phones = mergeSourcedPhones(contactPhonesForDisplay(contact), apolloPhones);
-    const synced = syncContactPhoneFields({ ...contact, phones });
-    const primary = pickPrimaryFromPhones(synced.phones);
-    const afterPhones = synced.phones.length;
-
-    const workEmail =
-      contact.workEmail ??
-      (contact.email && !isPersonalEmail(contact.email) ? contact.email : null);
-    const enrichedWork = enriched.email ? String(enriched.email) : null;
-    const nextWorkEmail =
-      workEmail ?? (enrichedWork && !isPersonalEmail(enrichedWork) ? enrichedWork : null);
-
-    let personalEmail = contact.personalEmail;
-    let email = contact.email;
-    if (enrichedWork && isPersonalEmail(enrichedWork)) {
-      personalEmail = enrichedWork;
-      email = enrichedWork;
-    }
-
+    const apolloPhones = requestApolloPhone ? extractApolloPhones(enriched) : [];
+    const normalized = normalizeContactChannels({
+      ...contact,
+      phones: mergeSourcedPhones(contactPhonesForDisplay(contact), apolloPhones),
+      workEmail:
+        contact.workEmail ??
+        (contact.email && !isPersonalEmail(contact.email) ? contact.email : null) ??
+        (enriched.email && !isPersonalEmail(String(enriched.email))
+          ? String(enriched.email)
+          : null),
+      personalEmail:
+        contact.personalEmail ??
+        (enriched.email && isPersonalEmail(String(enriched.email))
+          ? String(enriched.email)
+          : null),
+    });
+    const afterPhones = normalized.phones.length;
     const linkedinUrl =
       contact.linkedinUrl ??
       (enriched.linkedin_url ? String(enriched.linkedin_url) : null);
 
     const gainedPhone = afterPhones > beforePhones;
     const gainedEmail =
-      Boolean(nextWorkEmail && !contact.workEmail && !contact.email) ||
-      Boolean(personalEmail && !contact.personalEmail);
+      Boolean(normalized.workEmail && !contact.workEmail) ||
+      Boolean(normalized.personalEmail && !contact.personalEmail);
 
     const changed =
       linkedinUrl !== contact.linkedinUrl ||
-      personalEmail !== contact.personalEmail ||
-      email !== contact.email ||
-      nextWorkEmail !== contact.workEmail ||
-      JSON.stringify(synced.phones) !== JSON.stringify(contact.phones ?? []) ||
-      primary.phone !== contact.phone ||
-      primary.personalPhone !== contact.personalPhone;
+      normalized.personalEmail !== contact.personalEmail ||
+      normalized.email !== contact.email ||
+      normalized.workEmail !== contact.workEmail ||
+      JSON.stringify(normalized.phones) !== JSON.stringify(contact.phones ?? []) ||
+      normalized.phone !== contact.phone ||
+      normalized.personalPhone !== contact.personalPhone;
 
     if (!changed) continue;
 
@@ -525,13 +619,13 @@ export async function refreshCompanyContactsFromApollo(
       .update(contacts)
       .set({
         linkedinUrl,
-        email,
-        workEmail: nextWorkEmail ?? contact.workEmail,
-        personalEmail,
-        phones: synced.phones,
-        phone: primary.phone,
-        personalPhone: primary.personalPhone,
-        companyPhone: primary.companyPhone,
+        email: normalized.email,
+        workEmail: normalized.workEmail,
+        personalEmail: normalized.personalEmail,
+        phones: normalized.phones,
+        phone: normalized.phone,
+        personalPhone: normalized.personalPhone,
+        companyPhone: normalized.companyPhone,
         title: contact.title || String(enriched.title ?? ""),
       })
       .where(eq(contacts.id, contact.id));

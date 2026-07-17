@@ -15,6 +15,9 @@ import { parseJobLocation } from "@/lib/location-match";
 import { contactIsCallable } from "@/lib/lead-score";
 import { compareContactsForOutreach } from "@/lib/contact-title-priority";
 import { getFilteredBacklogEmailLeads, getTopRankedJobPosts } from "@/lib/backlog-email";
+import { getHotListingsForEmail } from "@/lib/hot-listings-query";
+import { getOrCreateSettings } from "@/lib/pipeline-config";
+import { normalizeEmailReportPreferences } from "@/lib/email-report-preferences";
 import type { Contact } from "@/lib/db/schema";
 
 export type DailyReportPhone = SourcedPhone & {
@@ -49,6 +52,10 @@ export type DailyCallSheet = {
   /** Top ranked job posts — always included, enriched or not. */
   top_job_posts: import("@/lib/backlog-email").BacklogEmailLead[];
   backlog_leads: import("@/lib/backlog-email").BacklogEmailLead[];
+  /** Hot Listings — same shared filter as /today?tab=hot-listings; default ON. */
+  hot_listings: import("@/lib/hot-listings").HotListingEmailItem[];
+  hot_listings_count: number;
+  hot_listings_included: boolean;
 };
 
 function resolveEmails(contact: {
@@ -167,6 +174,15 @@ export async function getDailyCallSheet(): Promise<DailyCallSheet> {
     });
   }
 
+  const settings = await getOrCreateSettings();
+  const emailPrefs = normalizeEmailReportPreferences(
+    settings.emailReportPreferences,
+  );
+  const hot = await getHotListingsForEmail({
+    include: emailPrefs.includeHotListingsSection !== false,
+    limit: emailPrefs.hotListingsLimit,
+  });
+
   return {
     run_date: runDate,
     listings_scraped: run?.listingsScraped ?? 0,
@@ -182,6 +198,9 @@ export async function getDailyCallSheet(): Promise<DailyCallSheet> {
             includeBacklogSection: true,
             backlogLeadLimit: 10,
           }),
+    hot_listings: hot.items,
+    hot_listings_count: hot.total,
+    hot_listings_included: hot.included,
   };
 }
 

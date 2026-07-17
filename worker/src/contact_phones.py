@@ -5,6 +5,8 @@ from typing import Any, Literal
 PhoneSource = Literal["apollo", "contactout"]
 PhoneKind = Literal["mobile", "work", "company", "other"]
 
+MAX_PERSONAL_PHONES_PER_CONTACT = 3
+
 
 def _parse_phone(raw: str | dict[str, Any] | None) -> str | None:
     if not raw:
@@ -140,6 +142,19 @@ def extract_contactout_phones(raw: list[Any]) -> list[dict[str, str]]:
     return dedupe_sourced_phones(out)
 
 
+def trim_phones_for_contact(
+    phones: list[dict[str, str]],
+    max_personal: int = MAX_PERSONAL_PHONES_PER_CONTACT,
+) -> list[dict[str, str]]:
+    sorted_phones = sorted(phones, key=_direct_dial_rank)
+    direct = [p for p in sorted_phones if p.get("kind") != "company"]
+    company = next((p for p in sorted_phones if p.get("kind") == "company"), None)
+    trimmed = direct[:max_personal]
+    if company and not trimmed:
+        trimmed.append(company)
+    return trimmed
+
+
 def dedupe_sourced_phones(phones: list[dict[str, str]]) -> list[dict[str, str]]:
     seen: set[str] = set()
     out: list[dict[str, str]] = []
@@ -160,7 +175,7 @@ def merge_sourced_phones(*groups: list[dict[str, str]] | None) -> list[dict[str,
     for group in groups:
         if group:
             merged.extend(group)
-    return dedupe_sourced_phones(merged)
+    return trim_phones_for_contact(dedupe_sourced_phones(merged))
 
 
 def pick_primary_from_phones(phones: list[dict[str, str]]) -> dict[str, str | None]:
@@ -202,7 +217,7 @@ def contact_phones_for_display(contact: dict[str, Any]) -> list[dict[str, str]]:
 
     phones = contact.get("phones") or []
     if phones:
-        return dedupe_sourced_phones(phones)
+        return trim_phones_for_contact(dedupe_sourced_phones(phones))
 
     legacy: list[dict[str, str]] = []
     personal_phone = parse_phone_value(contact.get("personal_phone"))
