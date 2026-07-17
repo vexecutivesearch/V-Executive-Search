@@ -1,9 +1,8 @@
 "use client";
 
 /**
- * VillatoroHero3D — interactive 3D-motion hero for the Villatoro platform landing page.
- * Stack: React + Tailwind CSS + Framer Motion (motion/react) + lucide-react.
- * Palette remapped to dark-glass landing tokens (bg #0a0d17, accent #6c8bff).
+ * Villatoro hero — Harvv-inspired left/right editorial layout.
+ * Keeps typewriter + interest pills + scrub video ambience.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -11,8 +10,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Check, ArrowRight } from "lucide-react";
 import { CRM_URL, VIDEO_SRC } from "./constants";
 
-/* ── Typewriter hook ──────────────────────────────────────────────────────── */
-function useTypewriter(text: string, speed = 38, startDelay = 600) {
+function useTypewriter(text: string, speed = 34, startDelay = 400) {
   const [displayed, setDisplayed] = useState("");
   const [done, setDone] = useState(false);
 
@@ -38,7 +36,6 @@ function useTypewriter(text: string, speed = 38, startDelay = 600) {
   return { displayed, done };
 }
 
-/* ── Background video with native mouse scrubbing ─────────────────────────── */
 function ScrubVideo() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const prevX = useRef<number | null>(null);
@@ -95,105 +92,102 @@ function ScrubVideo() {
   }, []);
 
   return (
-    <div className="order-last lg:order-none relative lg:absolute lg:inset-0 lg:z-0 overflow-hidden pointer-events-none w-full aspect-square md:aspect-video lg:aspect-auto lg:h-full bg-[#0e1220]/80 lg:bg-transparent">
-      <video
-        ref={videoRef}
-        src={VIDEO_SRC}
-        muted
-        playsInline
-        preload="auto"
-        className="w-full h-full object-cover object-right lg:object-right-bottom opacity-70 lg:opacity-55"
-      />
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          background:
-            "linear-gradient(90deg, rgba(10,13,23,.92) 0%, rgba(10,13,23,.55) 45%, rgba(10,13,23,.15) 100%)",
-        }}
-        aria-hidden="true"
-      />
+    <div className="scrub-video" aria-hidden="true">
+      <video ref={videoRef} src={VIDEO_SRC} muted playsInline preload="auto" />
     </div>
   );
 }
 
-/* ── Navbar ───────────────────────────────────────────────────────────────── */
 function Navbar({ onBookDemo }: { onBookDemo: () => void }) {
-  const [isMobileMenuOpen, setMobileMenuOpen] = useState(false);
-
   return (
-    <>
-      <header className="fixed top-0 inset-x-0 z-20 px-5 sm:px-8 py-4 sm:py-5 flex flex-row justify-between items-center bg-[rgba(10,13,23,.72)] backdrop-blur-xl border-b border-white/[0.06]">
-        <a href="#top" className="flex flex-row items-center gap-2.5">
-          <span className="w-7 h-7 rounded-lg bg-white text-[#0a0d17] flex items-center justify-center font-extrabold text-base select-none">
-            V
-          </span>
-          <span className="leading-none">
-            <span className="block text-[13px] tracking-[0.08em] font-bold text-[#f4f6fc]">
-              VILLATORO
-            </span>
-            <span className="block text-[9px] tracking-[0.16em] text-[#8b93ab] mt-[-2px]">
-              EXECUTIVE SEARCH
-            </span>
-          </span>
+    <nav className="landing-nav">
+      <div className="wrap nav-in">
+        <a className="logo" href="#top">
+          <span className="logo-mark">V</span>
+          <span className="logo-name">Villatoro</span>
         </a>
-
-        <div className="hidden md:flex items-center gap-3">
-          <button type="button" onClick={onBookDemo} className="btn btn-ghost">
+        <div className="nav-cta">
+          <button type="button" className="nav-linkish" onClick={onBookDemo}>
             Book a demo
           </button>
-          <a href={CRM_URL} className="btn btn-primary">
-            Try for free
+          <a className="btn btn-primary" href={CRM_URL}>
+            Try for free <span className="arrow">→</span>
           </a>
         </div>
-
-        <button
-          type="button"
-          aria-label="Menu"
-          onClick={() => setMobileMenuOpen((v) => !v)}
-          className="md:hidden flex flex-col gap-[5px] p-2"
-        >
-          <span
-            className={`w-6 h-[2px] bg-[#f4f6fc] transition-all duration-300 ${
-              isMobileMenuOpen ? "rotate-45 translate-y-[7px]" : ""
-            }`}
-          />
-          <span
-            className={`w-6 h-[2px] bg-[#f4f6fc] transition-all duration-300 ${
-              isMobileMenuOpen ? "opacity-0" : ""
-            }`}
-          />
-          <span
-            className={`w-6 h-[2px] bg-[#f4f6fc] transition-all duration-300 ${
-              isMobileMenuOpen ? "-rotate-45 -translate-y-[7px]" : ""
-            }`}
-          />
-        </button>
-      </header>
-
-      <div
-        className={`md:hidden fixed inset-0 z-[19] bg-[rgba(10,13,23,.96)] backdrop-blur-sm transition-opacity duration-300 flex flex-col items-center justify-center gap-6 text-xl ${
-          isMobileMenuOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
-        }`}
-      >
-        <button
-          type="button"
-          onClick={() => {
-            setMobileMenuOpen(false);
-            onBookDemo();
-          }}
-          className="btn btn-ghost"
-        >
-          Book a demo
-        </button>
-        <a
-          href={CRM_URL}
-          onClick={() => setMobileMenuOpen(false)}
-          className="btn btn-primary"
-        >
-          Try for free
-        </a>
       </div>
-    </>
+    </nav>
+  );
+}
+
+function HeroStage() {
+  return (
+    <div className="stage">
+      <div className="stage-glow" />
+      <ScrubVideo />
+
+      <motion.div
+        className="case-card"
+        initial={{ opacity: 0, y: 28, rotate: -2 }}
+        animate={{ opacity: 1, y: 0, rotate: -1.2 }}
+        transition={{ duration: 0.7, delay: 0.2 }}
+      >
+        <div className="case-top">
+          <span className="case-label">villatoro://signal</span>
+          <span className="case-badge">hot · live</span>
+        </div>
+        <div className="case-title">Same role reposted 8× in 21 days</div>
+        <div className="case-meta">Menzies Aviation · Charlotte, NC · score 95</div>
+        <p className="case-body">
+          They&apos;ve been stuck hiring an Accounting Clerk for three weeks.{" "}
+          <b>CEO found · verified mobile · iMessage ready.</b> Ranked #1 on today&apos;s
+          call sheet.
+        </p>
+        <span className="case-action">⧉ open call sheet</span>
+      </motion.div>
+
+      <motion.div
+        className="case-card"
+        initial={{ opacity: 0, y: 36 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.7, delay: 0.35 }}
+      >
+        <div className="case-top">
+          <span className="case-label">pipeline · ranked by ICP fit</span>
+          <span className="case-badge" style={{ color: "var(--ok)", background: "var(--ok-sunk)", borderColor: "rgba(52,229,160,.28)" }}>
+            475 hot
+          </span>
+        </div>
+        <div className="pipe-mini" style={{ marginTop: 4, border: 0, background: "transparent" }}>
+          <div className="pipe-row" style={{ paddingLeft: 0, paddingRight: 0 }}>
+            <span className="score-ring">92</span>
+            <div className="pipe-co">
+              <b>Alzheimer&apos;s Community Care</b>
+              <small>West Palm Beach · Director of Nursing · CEO + HR</small>
+            </div>
+            <span className="pipe-cta">Call</span>
+          </div>
+          <div className="pipe-row" style={{ paddingLeft: 0, paddingRight: 0 }}>
+            <span
+              className="score-ring"
+              style={{
+                color: "var(--watch)",
+                background: "var(--watch-sunk)",
+                borderColor: "rgba(255,194,75,.3)",
+              }}
+            >
+              84
+            </span>
+            <div className="pipe-co">
+              <b>Palm Beach Ortho Group</b>
+              <small>West Palm Beach · Practice Admin · HR found</small>
+            </div>
+            <span className="pipe-cta">Call</span>
+          </div>
+        </div>
+      </motion.div>
+
+      <p className="scrub-hint">↘ move your mouse — the stage scrubs the 3D scene live</p>
+    </div>
   );
 }
 
@@ -201,9 +195,8 @@ type VillatoroHero3DProps = {
   onBookDemo: (interests: string[]) => void;
 };
 
-/* ── Hero ─────────────────────────────────────────────────────────────────── */
 export function VillatoroHero3D({ onBookDemo }: VillatoroHero3DProps) {
-  const { displayed, done } = useTypewriter("know who's hiring\nbefore anyone else.");
+  const { displayed, done } = useTypewriter("Know who's hiring\nbefore anyone else.");
   const [services, setServices] = useState<string[]>([]);
   const options = [
     "Client prospecting",
@@ -217,152 +210,164 @@ export function VillatoroHero3D({ onBookDemo }: VillatoroHero3DProps) {
       prev.includes(opt) ? prev.filter((s) => s !== opt) : [...prev, opt],
     );
 
+  // Emphasize trailing phrase once typed (Harvv dotted underline treatment)
+  const renderHeadline = () => {
+    const emphasis = "anyone else.";
+    if (done && displayed.endsWith(emphasis)) {
+      const idx = displayed.lastIndexOf(emphasis);
+      return (
+        <>
+          {displayed.slice(0, idx)}
+          <span className="em">{emphasis}</span>
+        </>
+      );
+    }
+    return (
+      <>
+        {displayed}
+        {!done && (
+          <span
+            className="animate-blink"
+            style={{
+              display: "inline-block",
+              width: 2,
+              height: "0.9em",
+              background: "var(--signal)",
+              marginLeft: 2,
+              verticalAlign: "middle",
+            }}
+          />
+        )}
+      </>
+    );
+  };
+
   return (
-    <div
-      id="top"
-      className="relative text-[#f4f6fc] antialiased overflow-x-hidden flex flex-col lg:block lg:min-h-screen"
-    >
+    <>
       <Navbar onBookDemo={() => onBookDemo(services)} />
-      <ScrubVideo />
-
-      <div className="relative z-10 flex flex-col order-first lg:order-none w-full bg-transparent pb-8 lg:pb-0 lg:min-h-screen">
-        <main
-          id="spade-hero"
-          className="w-full max-w-7xl mx-auto px-6 pt-28 pb-12 flex-1 flex flex-col justify-center"
-        >
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-          >
-            <span className="inline-block text-xs font-semibold text-[#6c8bff] bg-[rgba(108,139,255,.22)] border border-[rgba(108,139,255,.4)] px-3.5 py-1.5 rounded-full mb-5">
-              Palm Beach–based · Recruiting intelligence, built by recruiters
-            </span>
-            <h1 className="text-5xl md:text-6xl lg:text-[60px] font-extrabold tracking-tight text-[#f4f6fc] leading-[1.08] mb-6 select-none w-full whitespace-pre-wrap">
-              {displayed}
-              {!done && (
-                <span className="inline-block w-[2px] h-[1.1em] bg-[#6c8bff] align-middle ml-[2px] animate-blink" />
-              )}
-            </h1>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.1 }}
-          >
-            <p className="text-lg md:text-[17px] text-[#aeb6cc] leading-relaxed font-normal mb-8 max-w-2xl">
-              Our platform scans the job market every morning, scores every company on how
-              badly they need help, and hands you the decision-maker&apos;s direct line —
-              so you spend your day in conversations, not research.
-            </p>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.18 }}
-            className="flex flex-wrap gap-3 mb-4"
-          >
-            <a href={CRM_URL} className="btn btn-primary">
-              Try for free
-            </a>
-            <button
-              type="button"
-              onClick={() => onBookDemo(services)}
-              className="btn btn-ghost"
+      <header className="landing-hero" id="top">
+        <div className="wrap hero-grid">
+          <div>
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5 }}
             >
-              Book a demo
-            </button>
-          </motion.div>
-          <p className="text-xs text-[#7e8aa6] mb-12">
-            Live nationwide — every state, every major metro · no credit card required
-          </p>
+              <div className="chips">
+                <span className="chip">Recruiting intel</span>
+                <span className="chip">Nationwide</span>
+                <span className="chip">Built by recruiters</span>
+                <span className="chip">Palm Beach</span>
+              </div>
+              <h1>{renderHeadline()}</h1>
+            </motion.div>
 
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.25 }}
-          >
-            <h2 className="text-2xl font-semibold tracking-tight mb-2 !mt-0">
-              What are you looking to solve?
-            </h2>
-            <p className="text-[#8b93ab] mb-6 text-sm">Select all that apply</p>
+            <motion.p
+              className="sub"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.08 }}
+            >
+              Our platform scans the job market every morning, scores every company on how
+              badly they need help, and hands you the{" "}
+              <b>decision-maker&apos;s direct line</b> — so you spend your day in
+              conversations, not research.
+            </motion.p>
 
-            <div className="flex flex-wrap gap-3">
-              {options.map((opt) => {
-                const active = services.includes(opt);
-                return (
-                  <motion.button
-                    key={opt}
-                    type="button"
-                    onClick={() => toggle(opt)}
-                    whileTap={{ scale: 0.96 }}
-                    className={`flex items-center gap-2 px-5 py-2.5 rounded-full text-[15px] font-medium transition-colors border ${
-                      active
-                        ? "bg-[#6c8bff] text-white border-[rgba(108,139,255,.5)] shadow-[0_6px_24px_rgba(108,139,255,.35)]"
-                        : "bg-white/[0.05] text-[#f4f6fc] border-white/[0.09] hover:bg-white/[0.09]"
-                    }`}
-                  >
-                    <AnimatePresence>
-                      {active && (
-                        <motion.span
-                          initial={{ scale: 0, opacity: 0 }}
-                          animate={{ scale: 1, opacity: 1 }}
-                          exit={{ scale: 0, opacity: 0 }}
-                          transition={{ type: "spring", stiffness: 300, damping: 20 }}
-                          className="flex"
-                        >
-                          <Check size={15} />
-                        </motion.span>
-                      )}
-                    </AnimatePresence>
-                    {opt}
-                  </motion.button>
-                );
-              })}
-            </div>
+            <motion.div
+              className="hero-cta"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.14 }}
+            >
+              <a className="btn btn-primary" href={CRM_URL}>
+                Try for free <span className="arrow">→</span>
+              </a>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => onBookDemo(services)}
+              >
+                Book a demo <span className="arrow">→</span>
+              </button>
+            </motion.div>
+            <p className="note">
+              Live nationwide — every state, every major metro · no credit card required
+            </p>
 
-            <div className="mt-6 min-h-[52px]">
-              <AnimatePresence mode="wait">
-                {services.length === 0 ? (
-                  <motion.p
-                    key="empty"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 0.55 }}
-                    exit={{ opacity: 0 }}
-                    className="italic text-xs text-[#8b93ab]"
-                  >
-                    Please click to select what you&apos;d like to see above.
-                  </motion.p>
-                ) : (
-                  <motion.div
-                    key="selected"
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: "auto" }}
-                    exit={{ opacity: 0, height: 0 }}
-                    transition={{ type: "spring", stiffness: 260, damping: 26 }}
-                    className="overflow-hidden"
-                  >
-                    <div className="flex items-center justify-between gap-4 bg-white/[0.05] border border-white/[0.09] rounded-2xl px-5 py-4">
-                      <span className="text-sm text-[#f4f6fc]">
+            <motion.div
+              className="solve"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.22 }}
+            >
+              <h2>What are you looking to solve?</h2>
+              <p className="hint">Select all that apply</p>
+              <div className="pills">
+                {options.map((opt) => {
+                  const active = services.includes(opt);
+                  return (
+                    <motion.button
+                      key={opt}
+                      type="button"
+                      className={`pill-btn${active ? " active" : ""}`}
+                      onClick={() => toggle(opt)}
+                      whileTap={{ scale: 0.97 }}
+                    >
+                      <AnimatePresence>
+                        {active && (
+                          <motion.span
+                            initial={{ scale: 0, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0, opacity: 0 }}
+                            transition={{ type: "spring", stiffness: 300, damping: 20 }}
+                            className="flex"
+                          >
+                            <Check size={14} />
+                          </motion.span>
+                        )}
+                      </AnimatePresence>
+                      {opt}
+                    </motion.button>
+                  );
+                })}
+              </div>
+              <div className="ready">
+                <AnimatePresence mode="wait">
+                  {services.length === 0 ? (
+                    <motion.p
+                      key="empty"
+                      className="ready-empty"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 0.7 }}
+                      exit={{ opacity: 0 }}
+                    >
+                      Click to select what you&apos;d like to see above.
+                    </motion.p>
+                  ) : (
+                    <motion.div
+                      key="selected"
+                      className="ready-banner"
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                    >
+                      <span>
                         Ready to see: <b>{services.join(", ")}</b>
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => onBookDemo(services)}
-                        className="flex items-center gap-1.5 text-[#6c8bff] uppercase text-xs font-semibold tracking-wide hover:opacity-70 transition-opacity"
-                      >
-                        Let&apos;s go <ArrowRight size={14} />
+                      <button type="button" onClick={() => onBookDemo(services)}>
+                        Let&apos;s go <ArrowRight size={13} />
                       </button>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          </motion.div>
-        </main>
-      </div>
-    </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            </motion.div>
+          </div>
+
+          <HeroStage />
+        </div>
+      </header>
+    </>
   );
 }
