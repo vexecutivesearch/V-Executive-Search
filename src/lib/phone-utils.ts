@@ -3,6 +3,20 @@ export function phoneDigits(phone: string): string {
   return phone.replace(/\D/g, "");
 }
 
+/**
+ * A dialable phone must have enough digits to be a real number. Short codes
+ * / hotlines like "16224" (Egyptian corporate line Apollo sometimes returns
+ * as corporate_phone) are not callable leads and must be rejected.
+ * US/international direct numbers have >= 10 significant digits (7 local +
+ * area/country); we accept >= 8 to be safe for a few short national formats.
+ */
+const MIN_PHONE_DIGITS = 8;
+
+export function isDialablePhone(value: string | null | undefined): boolean {
+  if (!value) return false;
+  return phoneDigits(value).length >= MIN_PHONE_DIGITS;
+}
+
 /** Parse Apollo JSON phone blobs, nested objects, or plain strings. */
 export function parsePhoneValue(raw: unknown): string | null {
   if (raw == null) return null;
@@ -22,17 +36,16 @@ export function parsePhoneValue(raw: unknown): string | null {
   if (trimmed.startsWith("{")) {
     try {
       const obj = JSON.parse(trimmed) as Record<string, string>;
-      return (
-        obj.sanitized_number ||
-        obj.number ||
-        obj.raw_number ||
-        null
-      );
+      const value =
+        obj.sanitized_number || obj.number || obj.raw_number || null;
+      return value && isDialablePhone(value) ? value : null;
     } catch {
       return null;
     }
   }
 
+  // Reject short codes / hotlines that can't be dialed as a real lead.
+  if (!isDialablePhone(trimmed)) return null;
   return trimmed;
 }
 
