@@ -232,6 +232,12 @@ export const companies = pgTable("companies", {
    * nullable — historical rows are derived from job locations at read time.
    */
   sourceMarket: text("source_market"),
+  /**
+   * Set when a reveal-off discovery search completed for this company.
+   * The candidate cache: re-opening the picker never re-searches — the
+   * search credit is paid once per company, ever.
+   */
+  discoveryCompletedAt: timestamp("discovery_completed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -268,6 +274,16 @@ export const contacts = pgTable("contacts", {
   locationMatched: boolean("location_matched").default(false).notNull(),
   contactLocation: text("contact_location"),
   jobLocation: text("job_location"),
+  /**
+   * Selective enrichment state: 'discovered' = found by a reveal-off search
+   * (no email/phone credits spent), 'revealed' = reveal credits spent on
+   * selection. NULL = legacy contact from the pre-split enrich flow.
+   */
+  revealStatus: text("reveal_status"),
+  /** Channels paid for at reveal: 'email' | 'email_phone'. */
+  revealChannels: text("reveal_channels"),
+  /** Best contact for outreach (picker pre-selection). */
+  isPrimary: boolean("is_primary").default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
