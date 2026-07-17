@@ -56,7 +56,9 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
   ) {
     let latest = updated ?? null;
     if (!latest) {
-      const res = await fetch(`/api/companies/${row.id}`, { cache: "no-store" });
+      const res = await fetch(`/api/companies/${row.id}?skipGeo=1`, {
+        cache: "no-store",
+      });
       if (res.ok) {
         const data = (await res.json()) as { company: CompanyCardData };
         latest = data.company;

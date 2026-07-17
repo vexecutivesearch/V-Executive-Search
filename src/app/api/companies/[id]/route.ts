@@ -17,11 +17,14 @@ const VALID_STATUSES = new Set<string>([
 ]);
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const company = await getCompanyById(id);
+  // CRM/Pipeline callers pass ?skipGeo=1 so job listings stay visible
+  // regardless of the current Admin scrape focus.
+  const skipGeoFilter = request.nextUrl.searchParams.get("skipGeo") === "1";
+  const company = await getCompanyById(id, { skipGeoFilter });
   if (!company) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }

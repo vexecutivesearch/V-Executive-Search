@@ -110,7 +110,8 @@ export async function POST(
     revalidatePath("/crm");
     revalidatePath(`/companies/${id}`);
 
-    const company = await getCompanyById(id);
+    // CRM is decoupled from Admin geo — keep job listings visible post-reveal.
+    const company = await getCompanyById(id, { skipGeoFilter: true });
     const parts: string[] = [];
     if (result.revealed > 0) {
       parts.push(

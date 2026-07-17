@@ -407,6 +407,7 @@ export async function getCompaniesByStatus(
 
 export async function getCompanyById(
   id: string,
+  options?: { skipGeoFilter?: boolean },
 ): Promise<CompanyCardData | null> {
   const rows = await db
     .select()
@@ -415,7 +416,12 @@ export async function getCompanyById(
     .limit(1);
 
   if (rows.length === 0) return null;
-  const enriched = await enrichCompanies(rows, await getGeoFocusSettings());
+  // The CRM/Pipeline is decoupled from the Admin geo focus, so callers there
+  // must pass skipGeoFilter to keep a company's job listings visible after an
+  // enrich even when Admin is scraping a different market ("No active job" bug).
+  const enriched = await enrichCompanies(rows, await getGeoFocusSettings(), {
+    skipGeoFilter: options?.skipGeoFilter,
+  });
   return enriched[0];
 }
 
