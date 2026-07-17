@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { Nav } from "@/components/Nav";
+import { AppShell } from "@/components/AppShell";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,8 +14,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "allthejobs",
-  description: "Daily recruiter outreach list",
+  title: {
+    default: "Villatoro Executive Search",
+    template: "%s · Villatoro",
+  },
+  description:
+    "Recruiting intelligence platform — know who's hiring before anyone else.",
 };
 
 export default function RootLayout({
@@ -29,8 +33,7 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-gray-50 dark:bg-gray-950">
-        <Nav />
-        <main className="flex-1">{children}</main>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );
