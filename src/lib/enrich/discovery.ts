@@ -566,7 +566,7 @@ export async function revealSelectedContacts(options: {
      */
     let workEmail = contact.workEmail ?? null;
     let personalEmail = contact.personalEmail ?? null;
-    let personalEmails = [...(contact.personalEmails ?? [])];
+    const personalEmails = [...(contact.personalEmails ?? [])];
     let phones = contact.phones ?? [];
     let linkedinUrl = contact.linkedinUrl ?? null;
     let contactLocation = contact.contactLocation ?? null;
