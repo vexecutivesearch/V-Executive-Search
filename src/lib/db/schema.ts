@@ -5,6 +5,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  real,
   text,
   timestamp,
   uniqueIndex,
@@ -350,6 +351,43 @@ export const callListEntries = pgTable(
   ],
 );
 
+/**
+ * ICP scoring annotations — a sibling table so the ICP layer cannot alter
+ * existing company rows. Annotations only: nothing here deletes, hides, or
+ * reorders pipeline data; the CRM view applies reversible filters on top.
+ */
+export const companyIcp = pgTable(
+  "company_icp",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    /** Snapshot of the hiring-signal score at scoring time (dual-score view). */
+    baseLeadScore: integer("base_lead_score"),
+    /** base × recruiter-fit multiplier + bonuses, clamped 0–100. */
+    icpAdjustedScore: integer("icp_adjusted_score"),
+    /** e.g. ["fortune_500","public_sector","staffing_agency"]. */
+    exclusionFlags: jsonb("exclusion_flags").$type<string[]>(),
+    /** Per-flag confidence 0–1 — every flag MUST have an entry. */
+    exclusionConfidence: jsonb("exclusion_confidence").$type<
+      Record<string, number>
+    >(),
+    roleType: text("role_type"),
+    roleTypeConfidence: real("role_type_confidence"),
+    compAnnualMin: integer("comp_annual_min"),
+    compAnnualMax: integer("comp_annual_max"),
+    /** True when comp was estimated from the config table, not the listing. */
+    compEstimatedFlag: boolean("comp_estimated_flag"),
+    compConfidence: text("comp_confidence"),
+    companySizeBand: text("company_size_band"),
+    likelyToUseRecruiter: real("likely_to_use_recruiter"),
+    enrichmentTier: text("enrichment_tier"),
+    scoredAt: timestamp("scored_at").defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("company_icp_company_uq").on(table.companyId)],
+);
+
 export const companyActivities = pgTable("company_activities", {
   id: uuid("id").defaultRandom().primaryKey(),
   companyId: uuid("company_id")
@@ -377,6 +415,7 @@ export type PipelineSettings = typeof pipelineSettings.$inferSelect;
 export type StateGeoConfigRow = typeof stateGeoConfigs.$inferSelect;
 export type SearchProfile = typeof searchProfiles.$inferSelect;
 export type CallListEntry = typeof callListEntries.$inferSelect;
+export type CompanyIcp = typeof companyIcp.$inferSelect;
 export type CallStatus = (typeof callStatusEnum.enumValues)[number];
 export type CompanyStatus = (typeof companyStatusEnum.enumValues)[number];
 export type GeographicScope = (typeof geographicScopeEnum.enumValues)[number];

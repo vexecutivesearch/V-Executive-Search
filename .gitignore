@@ -32,3 +32,4 @@ worker/*.egg-info/
 
 # Drizzle
 drizzle/
+icp-shadow-report.json
