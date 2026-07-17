@@ -598,17 +598,8 @@ def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
             len(funnel.board_failures),
             "; ".join(funnel.board_failures),
         )
-    if linkedin_count:
-        from src.linkedin_posters import attach_linkedin_hiring_teams
 
-        posters_found = attach_linkedin_hiring_teams(all_listings, funnel=funnel)
-        logger.info("LinkedIn hiring-team posters captured: %d", posters_found)
-        logger.info(
-            "Poster funnel: fetched=%d public_block=%d meet_team_html=%d parsed_listings=%d",
-            funnel.poster_pages_fetched,
-            funnel.poster_public_block_in_html,
-            funnel.meet_team_in_html,
-            funnel.poster_parsed,
-        )
+    # LinkedIn poster crawl runs AFTER CRM jobs-only ingest in pipeline.py.
+    # Keeping it here blocked ingest for hours and lost whole runs on interrupt.
 
     return all_listings, funnel

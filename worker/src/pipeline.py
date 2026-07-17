@@ -435,6 +435,44 @@ def _run_pipeline_impl(
             result.companies_scored = int(rescore.get("scored") or 0)
             result.icp_match_count = int(rescore.get("icpMatch") or 0)
 
+    # Poster crawl is optional enrichment AFTER listings are safely in CRM.
+    # Previously this ran inside scrape_all and blocked ingest for hours.
+    linkedin_listings = sum(1 for listing in listings if listing.board == "linkedin")
+    if linkedin_listings and ingest_ok:
+        from src.linkedin_posters import attach_linkedin_hiring_teams
+
+        logger.info(
+            "=== Stage 2b: LinkedIn hiring-team posters (post-ingest) ==="
+        )
+        posters_found = attach_linkedin_hiring_teams(
+            listings, funnel=result.scrape_funnel
+        )
+        logger.info("LinkedIn hiring-team posters captured: %d", posters_found)
+        if result.scrape_funnel is not None:
+            logger.info(
+                "Poster funnel: fetched=%d public_block=%d meet_team_html=%d parsed_listings=%d",
+                result.scrape_funnel.poster_pages_fetched,
+                result.scrape_funnel.poster_public_block_in_html,
+                result.scrape_funnel.meet_team_in_html,
+                result.scrape_funnel.poster_parsed,
+            )
+        if posters_found and crm.is_configured and not skip_crm:
+            companies_with_posters = apply_coarse_sectors(
+                collapse_to_companies(listings)
+            )
+            if limit is not None:
+                companies_with_posters = companies_with_posters[:limit]
+            poster_payload = _build_jobs_only_payload(companies_with_posters, result)
+            # Avoid double-counting listings on additive daily_runs counters.
+            meta = poster_payload.setdefault("metadata", {})
+            meta["listings_scraped"] = 0
+            meta["errors"] = []
+            meta.pop("funnel", None)
+            if not crm.ingest_batch(poster_payload):
+                result.errors.append("CRM poster ingest failed")
+            else:
+                logger.info("Poster seed contacts ingested to CRM")
+
     if scrape_only:
         logger.info(
             "Scrape-only complete — %d listings, %d companies%s",
