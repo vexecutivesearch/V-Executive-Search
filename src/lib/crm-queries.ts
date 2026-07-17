@@ -22,6 +22,7 @@ import { getGeoFocusSettings } from "@/lib/geo-focus";
 import { getMarketIndex } from "@/lib/market-index";
 import {
   deriveMarketFromListings,
+  marketForJobLocation,
   UNKNOWN_MARKET_VALUE,
   type MarketIndex,
 } from "@/lib/market-attribution";
@@ -451,6 +452,331 @@ export async function getCrmFilterOptions(): Promise<CrmFilterOptions> {
       (a, b) => a.city.localeCompare(b.city) || a.stateAbbr.localeCompare(b.stateAbbr),
     ),
     sectors,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Job Listings tab — listing-centric, one row per posting, reposts    */
+/* shown individually (they feed the hot signal). The old Companies →  */
+/* "Job listings" tab freed from the Admin geo scope.                  */
+/* ------------------------------------------------------------------ */
+
+export const CRM_LISTINGS_PAGE_SIZE = 200;
+
+export type CrmListingSort = "newest" | "reposts";
+
+export type CrmListingFilters = {
+  market?: string;
+  board?: string;
+  state?: string;
+  search?: string;
+  sort?: CrmListingSort;
+  page?: number;
+};
+
+export type CrmListingRow = {
+  id: string;
+  title: string;
+  board: string | null;
+  url: string | null;
+  location: string | null;
+  postedAt: Date | null;
+  firstSeenAt: Date;
+  lastSeenRunDate: string | null;
+  sightingsCount: number;
+  companyId: string;
+  companyName: string;
+  companyDomain: string | null;
+  contactCount: number;
+  marketLabel: string | null;
+};
+
+export type CrmListingsResult = {
+  rows: CrmListingRow[];
+  totalMatched: number;
+  page: number;
+  pageCount: number;
+  boards: string[];
+};
+
+function listingOrderBy(sort: CrmListingSort) {
+  if (sort === "reposts") {
+    return [desc(jobListings.sightingsCount), desc(jobListings.lastSeenAt)];
+  }
+  return [
+    sql`${jobListings.postedAt} DESC NULLS LAST`,
+    desc(jobListings.firstSeenAt),
+  ];
+}
+
+function listingMarketPrefilterSql(marketLabel: string, index: MarketIndex): SQL {
+  const cities = index.citiesByLabel.get(marketLabel) ?? [];
+  const aliases = index.aliasesByLabel.get(marketLabel) ?? [];
+  const patterns = [
+    ...cities.map(({ city }) => `%${escapeLike(city)}%`),
+    ...aliases.map((alias) => `%${escapeLike(alias)}%`),
+  ];
+  const locationMatch = patterns.length
+    ? sql.join(
+        patterns.map((p) => sql`${jobListings.location} ILIKE ${p}`),
+        sql` OR `,
+      )
+    : sql`FALSE`;
+  return sql`(${companies.sourceMarket} = ${marketLabel} OR (${locationMatch}))`;
+}
+
+/** Every scraped posting, all markets/dates — server-side filters first. */
+export async function getConsolidatedListings(
+  filters: CrmListingFilters = {},
+): Promise<CrmListingsResult> {
+  const sort = filters.sort ?? "newest";
+  const page = Math.max(1, filters.page ?? 1);
+  const index = await getMarketIndex();
+
+  const conditions: SQL[] = [];
+
+  if (filters.board) {
+    conditions.push(sql`${eq(jobListings.board, filters.board)}`);
+  }
+
+  const term = filters.search?.trim();
+  if (term) {
+    const pattern = `%${escapeLike(term)}%`;
+    conditions.push(sql`(
+      ${jobListings.title} ILIKE ${pattern}
+      OR ${jobListings.location} ILIKE ${pattern}
+      OR ${companies.name} ILIKE ${pattern}
+    )`);
+  }
+
+  if (filters.state) {
+    const abbr = filters.state.toUpperCase();
+    const name = stateNameForAbbr(filters.state);
+    conditions.push(
+      name
+        ? sql`(${jobListings.location} ILIKE ${`%, ${abbr}%`} OR ${jobListings.location} ILIKE ${`%${escapeLike(name)}%`})`
+        : sql`${jobListings.location} ILIKE ${`%, ${abbr}%`}`,
+    );
+  }
+
+  const marketFilter = filters.market;
+  if (marketFilter && marketFilter !== UNKNOWN_MARKET_VALUE) {
+    conditions.push(listingMarketPrefilterSql(marketFilter, index));
+  }
+
+  const whereClause = conditions.length
+    ? and(...conditions.map((c) => sql`(${c})`))
+    : undefined;
+
+  const selection = {
+    id: jobListings.id,
+    title: jobListings.title,
+    board: jobListings.board,
+    url: jobListings.url,
+    location: jobListings.location,
+    postedAt: jobListings.postedAt,
+    firstSeenAt: jobListings.firstSeenAt,
+    lastSeenRunDate: jobListings.lastSeenRunDate,
+    sightingsCount: jobListings.sightingsCount,
+    companyId: companies.id,
+    companyName: companies.name,
+    companyDomain: companies.domain,
+    companySourceMarket: companies.sourceMarket,
+    contactCount: sql<number>`(
+      SELECT count(*)::int FROM contacts ct WHERE ct.company_id = ${companies.id}
+    )`,
+  };
+
+  const toRow = (r: {
+    id: string;
+    title: string;
+    board: string | null;
+    url: string | null;
+    location: string | null;
+    postedAt: Date | null;
+    firstSeenAt: Date;
+    lastSeenRunDate: string | null;
+    sightingsCount: number | null;
+    companyId: string;
+    companyName: string;
+    companyDomain: string | null;
+    companySourceMarket: string | null;
+    contactCount: number;
+  }): CrmListingRow => ({
+    id: r.id,
+    title: r.title,
+    board: r.board,
+    url: r.url,
+    location: r.location,
+    postedAt: r.postedAt,
+    firstSeenAt: r.firstSeenAt,
+    lastSeenRunDate: r.lastSeenRunDate,
+    sightingsCount: r.sightingsCount ?? 1,
+    companyId: r.companyId,
+    companyName: r.companyName,
+    companyDomain: r.companyDomain,
+    contactCount: r.contactCount,
+    marketLabel:
+      marketForJobLocation(r.location, index) ?? r.companySourceMarket,
+  });
+
+  const boardsRows = await db
+    .selectDistinct({ board: jobListings.board })
+    .from(jobListings)
+    .where(sql`${jobListings.board} IS NOT NULL`);
+  const boards = boardsRows
+    .map((b) => b.board)
+    .filter((b): b is string => Boolean(b))
+    .sort();
+
+  // Market filter needs an exact per-row pass (cross-state metros), so pull
+  // the SQL-prefiltered candidate set and finish in TS before the cap.
+  if (marketFilter) {
+    const candidates = await db
+      .select(selection)
+      .from(jobListings)
+      .innerJoin(companies, eq(jobListings.companyId, companies.id))
+      .where(whereClause)
+      .orderBy(...listingOrderBy(sort));
+
+    const matched = candidates.map(toRow).filter((row) => {
+      if (marketFilter === UNKNOWN_MARKET_VALUE) return row.marketLabel === null;
+      return row.marketLabel === marketFilter;
+    });
+
+    const totalMatched = matched.length;
+    const start = (page - 1) * CRM_LISTINGS_PAGE_SIZE;
+    return {
+      rows: matched.slice(start, start + CRM_LISTINGS_PAGE_SIZE),
+      totalMatched,
+      page,
+      pageCount: Math.max(1, Math.ceil(totalMatched / CRM_LISTINGS_PAGE_SIZE)),
+      boards,
+    };
+  }
+
+  const [{ count: totalMatched }] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(jobListings)
+    .innerJoin(companies, eq(jobListings.companyId, companies.id))
+    .where(whereClause);
+
+  const pageRows = await db
+    .select(selection)
+    .from(jobListings)
+    .innerJoin(companies, eq(jobListings.companyId, companies.id))
+    .where(whereClause)
+    .orderBy(...listingOrderBy(sort))
+    .limit(CRM_LISTINGS_PAGE_SIZE)
+    .offset((page - 1) * CRM_LISTINGS_PAGE_SIZE);
+
+  return {
+    rows: pageRows.map(toRow),
+    totalMatched,
+    page,
+    pageCount: Math.max(1, Math.ceil(totalMatched / CRM_LISTINGS_PAGE_SIZE)),
+    boards,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Market rail + KPI cards                                             */
+/* ------------------------------------------------------------------ */
+
+export type MarketRailEntry = {
+  label: string;
+  /** UNKNOWN_MARKET_VALUE for the null bucket. */
+  value: string;
+  count: number;
+};
+
+/** Per-market company counts from source_market (backfilled provenance). */
+export async function getMarketRailCounts(): Promise<{
+  total: number;
+  markets: MarketRailEntry[];
+}> {
+  const notListing = not(ilike(companies.name, "(Listing)%"));
+  const rows = await db
+    .select({
+      sourceMarket: companies.sourceMarket,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(companies)
+    .where(notListing)
+    .groupBy(companies.sourceMarket)
+    .orderBy(sql`count(*) DESC`);
+
+  let total = 0;
+  let unknown = 0;
+  const markets: MarketRailEntry[] = [];
+  for (const row of rows) {
+    total += row.count;
+    if (row.sourceMarket) {
+      markets.push({ label: row.sourceMarket, value: row.sourceMarket, count: row.count });
+    } else {
+      unknown += row.count;
+    }
+  }
+  if (unknown > 0) {
+    markets.push({
+      label: "No market match",
+      value: UNKNOWN_MARKET_VALUE,
+      count: unknown,
+    });
+  }
+  return { total, markets };
+}
+
+export type CrmKpis = {
+  totalCompanies: number;
+  newToday: number;
+  enriched: number;
+  hot: number;
+  dueToday: number;
+  totalListings: number;
+};
+
+/** Header KPI cards — cheap unfiltered counts. */
+export async function getCrmKpis(todayDate: string): Promise<CrmKpis> {
+  const notListing = not(ilike(companies.name, "(Listing)%"));
+  const [[totalRow], [newRow], [enrichedRow], [hotRow], [dueRow], [listingsRow]] =
+    await Promise.all([
+      db.select({ n: sql<number>`count(*)::int` }).from(companies).where(notListing),
+      db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(companies)
+        .where(and(notListing, sql`${companies.firstSeen} = ${todayDate}::date`)),
+      db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(companies)
+        .where(
+          and(
+            notListing,
+            sql`(${companies.enrichedAt} IS NOT NULL OR ${CALLABLE_CONTACT_EXISTS})`,
+          ),
+        ),
+      db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(companies)
+        .where(
+          and(
+            notListing,
+            sql`${companies.hiringSignals} IS NOT NULL AND ${companies.hiringSignals}::text <> '{}'`,
+          ),
+        ),
+      db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(callListEntries)
+        .where(sql`${callListEntries.nextFollowUpDate} <= ${todayDate}::date`),
+      db.select({ n: sql<number>`count(*)::int` }).from(jobListings),
+    ]);
+  return {
+    totalCompanies: totalRow.n,
+    newToday: newRow.n,
+    enriched: enrichedRow.n,
+    hot: hotRow.n,
+    dueToday: dueRow.n,
+    totalListings: listingsRow.n,
   };
 }
 
