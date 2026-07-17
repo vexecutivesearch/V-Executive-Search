@@ -7,12 +7,18 @@ from typing import Any
 
 import requests
 
+from src.crm_config import crm_base_url
+
 logger = logging.getLogger(__name__)
 
 
 class CRMClient:
     def __init__(self) -> None:
-        self.base_url = (os.environ.get("CRM_API_URL") or "").rstrip("/")
+        try:
+            self.base_url = crm_base_url(required=False)
+        except RuntimeError as exc:
+            logger.error("%s", exc)
+            self.base_url = ""
         self.api_key = os.environ.get("CRM_API_KEY", "")
 
     @property

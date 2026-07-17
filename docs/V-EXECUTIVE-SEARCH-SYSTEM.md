@@ -270,13 +270,13 @@ Rough framing for one recruiter:
 
 | URL | Use when |
 |-----|----------|
-| `https://v-executive-search.vercel.app/` → `/crm` | **Home / daily driver** — Pipeline: All Leads · Job Listings · Call List · Hot, filter by market/state/city |
-| `https://v-executive-search.vercel.app/crm?tab=call-list` | Work the persistent call queue (statuses, follow-ups, notes) |
-| `https://v-executive-search.vercel.app/runs` | Run health + credits per scrape |
-| `https://v-executive-search.vercel.app/companies/[id]` | Deep dive + find/reveal contacts + log call + activity history |
-| `https://v-executive-search.vercel.app/legacy` | Old Today's List + Companies views (out of the menu, still live) |
-| `https://v-executive-search.vercel.app/admin` | Change settings, trigger runs from phone |
-| **6 AM email** | First look — ranked leads + funnel stats |
+| `https://v-executive-search-delta.vercel.app/` → `/crm` | **Home / daily driver** — Pipeline: All Leads · Job Listings · Call List · Hot, filter by market/state/city |
+| `https://v-executive-search-delta.vercel.app/crm?tab=call-list` | Work the persistent call queue (statuses, follow-ups, notes) |
+| `https://v-executive-search-delta.vercel.app/runs` | Run health + credits per scrape |
+| `https://v-executive-search-delta.vercel.app/companies/[id]` | Deep dive + find/reveal contacts + log call + activity history |
+| `https://v-executive-search-delta.vercel.app/legacy` | Old Today's List + Companies views (out of the menu, still live) |
+| `https://v-executive-search-delta.vercel.app/admin` | Change settings, trigger runs from phone |
+| **5 AM email** | First look — ranked leads + funnel stats |
 
 ---
 

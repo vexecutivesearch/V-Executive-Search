@@ -194,7 +194,7 @@ export async function getTopRankedLeads(limit = 5): Promise<CompanyCardData[]> {
       and(
         eq(companies.status, "new"),
         or(
-          ne(companies.icpStatus, "fail"),
+          eq(companies.icpStatus, "pass"),
           sql`EXISTS (
             SELECT 1 FROM contacts AS ct
             WHERE ct.company_id = ${companies.id}

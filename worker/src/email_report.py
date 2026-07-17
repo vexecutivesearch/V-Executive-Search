@@ -9,14 +9,22 @@ import requests
 
 from src.report_format import format_call_sheet_card, has_contact_data
 from src.config_loader import parse_email_recipients
+from src.crm_config import crm_base_url
 
 logger = logging.getLogger(__name__)
 
-CRM_BASE_URL = (os.environ.get("CRM_API_URL") or "https://v-executive-search.vercel.app").rstrip("/")
+
+def _crm_base_url() -> str:
+    """Resolve after env load — never hardcode the legacy Vercel host."""
+    try:
+        return crm_base_url(required=True)
+    except RuntimeError as exc:
+        logger.error("%s", exc)
+        return ""
 
 
 def fetch_daily_report_from_crm() -> dict[str, Any] | None:
-    base = (os.environ.get("CRM_API_URL") or "").rstrip("/")
+    base = _crm_base_url()
     api_key = os.environ.get("CRM_API_KEY", "")
     if not base or not api_key:
         return None
@@ -146,6 +154,11 @@ def send_daily_report(
     else:
         summary = result_summary
 
+    CRM_BASE_URL = _crm_base_url()
+    if not CRM_BASE_URL:
+        logger.error("Refusing to send call sheet email without a valid CRM_API_URL")
+        return False
+
     leads = _leads_from_crm_or_rows(crm_data, rows)
     run_date = html.escape(str(summary.get("run_date", "today")))
     safe_geo = html.escape(geo_label)
@@ -157,7 +170,7 @@ def send_daily_report(
         body_leads = (
             '<p style="font-size:15px;color:#4b5563;margin:24px 0">'
             f"No enriched call sheet today — scraped {scraped} listings, "
-            f"{icp} ICP matches. Top job posts are below — hit "
+            f"{icp} ICP matches. Best-fit ICP posts are below — hit "
             "<strong>Enrich contacts</strong> in the CRM to unlock phones and emails."
             "</p>"
         )
@@ -186,7 +199,7 @@ def send_daily_report(
                 f"</div>"
             )
         body_top_jobs = (
-            '<h3 style="margin:28px 0 12px;font-size:16px">Top job posts today</h3>'
+            '<h3 style="margin:28px 0 12px;font-size:16px">Best-fit ICP posts</h3>'
             + "".join(top_cards)
         )
     else:

@@ -3,10 +3,20 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+# Legacy Miguel / first-Vercel project — never ingest or link here.
+FORBIDDEN_CRM_HOSTS = frozenset(
+    {
+        "v-executive-search.vercel.app",
+        "www.v-executive-search.vercel.app",
+    }
+)
+CANONICAL_CRM_HOST = "v-executive-search-delta.vercel.app"
 
 
 def _headers() -> dict[str, str]:
@@ -16,8 +26,32 @@ def _headers() -> dict[str, str]:
     }
 
 
+def crm_base_url(*, required: bool = True) -> str:
+    """Resolve CRM base URL after env load. Never fall back to the legacy host."""
+    raw = (os.environ.get("CRM_API_URL") or "").strip().rstrip("/")
+    if not raw:
+        if required:
+            raise RuntimeError(
+                "CRM_API_URL is not set. Canonical target is "
+                f"https://{CANONICAL_CRM_HOST}"
+            )
+        return ""
+
+    host = (urlparse(raw).hostname or "").lower()
+    if host in FORBIDDEN_CRM_HOSTS:
+        raise RuntimeError(
+            f"CRM_API_URL points at forbidden legacy host {host!r}. "
+            f"Use https://{CANONICAL_CRM_HOST} only."
+        )
+    return raw
+
+
 def _base() -> str:
-    return (os.environ.get("CRM_API_URL") or "").rstrip("/")
+    try:
+        return crm_base_url(required=False)
+    except RuntimeError as exc:
+        logger.error("%s", exc)
+        return ""
 
 
 def fetch_pipeline_config() -> dict[str, Any] | None:

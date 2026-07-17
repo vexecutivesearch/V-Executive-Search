@@ -50,12 +50,18 @@ function companyToBacklogEmailLead(
   };
 }
 
-/** Always-on top job posts for the daily email — enriched or not. */
+/** Always-on best-fit job posts for the daily email — ICP pass only, min score. */
 export async function getTopRankedJobPosts(limit = 5): Promise<BacklogEmailLead[]> {
-  const ranked = await getTopRankedLeads(limit);
-  return ranked.map((company, index) =>
-    companyToBacklogEmailLead(company, index + 1),
-  );
+  const settings = await getOrCreateSettings();
+  const minScore = settings.minScoreForEnrich ?? 60;
+  const ranked = await getTopRankedLeads(Math.max(limit * 4, 20));
+  return ranked
+    .filter(
+      (company) =>
+        company.icpStatus === "pass" && (company.leadScore ?? 0) >= minScore,
+    )
+    .slice(0, limit)
+    .map((company, index) => companyToBacklogEmailLead(company, index + 1));
 }
 
 export async function getFilteredBacklogEmailLeads(

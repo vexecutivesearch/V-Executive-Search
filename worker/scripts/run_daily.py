@@ -183,6 +183,16 @@ def main() -> int:
 
     load_worker_env()
 
+    try:
+        from src.crm_config import crm_base_url
+
+        crm_url = crm_base_url(required=True)
+        logging.getLogger(__name__).info("CRM target: %s", crm_url)
+    except RuntimeError as exc:
+        logging.basicConfig(level=logging.ERROR)
+        logging.getLogger(__name__).error("%s", exc)
+        return 1
+
     from datetime import date
 
     run_date_override = date.fromisoformat(args.run_date) if args.run_date else None

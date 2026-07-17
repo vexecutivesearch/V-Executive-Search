@@ -100,7 +100,7 @@ export async function checkMissedPipelineRun(): Promise<{
           <li>Or trigger manually: Admin → Run now in the CRM.</li>
         </ol>
         <p style="color:#666;font-size:12px;margin-top:24px">
-          <a href="https://v-executive-search.vercel.app/today">Open CRM</a>
+          <a href="${process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") || "https://v-executive-search-delta.vercel.app"}/today">Open CRM</a>
         </p>
       </body></html>
     `,

@@ -81,7 +81,7 @@ if [[ ! -f .env ]]; then
   echo "→ Created worker/.env from .env.example"
   echo "  Edit these before the pipeline can run:"
   echo "    APOLLO_API_KEY   — Apollo.io API key"
-  echo "    CRM_API_URL      — https://v-executive-search.vercel.app"
+  echo "    CRM_API_URL      — https://v-executive-search-delta.vercel.app"
   echo "    CRM_API_KEY      — same as WORKER_API_KEY on Vercel"
   echo "    ALERT_EMAIL      — your email for failure alerts"
   echo "    RESEND_API_KEY   — Resend.com API key (daily report)"
