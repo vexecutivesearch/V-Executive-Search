@@ -52,6 +52,22 @@ export const activityTypeEnum = pgEnum("activity_type", [
   "meeting",
 ]);
 
+/** Outreach workflow statuses for the persistent CRM call list. */
+export const callStatusEnum = pgEnum("call_status", [
+  "new",
+  "ready_to_call",
+  "called_no_answer",
+  "voicemail_left",
+  "spoke_follow_up",
+  "email_sent",
+  "meeting_scheduled",
+  "proposal_sent",
+  "client_won",
+  "not_interested",
+  "bad_contact",
+  "do_not_contact",
+]);
+
 export const pipelineSettings = pgTable("pipeline_settings", {
   id: uuid("id").defaultRandom().primaryKey(),
   geographicScope: geographicScopeEnum("geographic_scope")
@@ -207,6 +223,12 @@ export const companies = pgTable("companies", {
   industry: text("industry"),
   enrichedAt: timestamp("enriched_at"),
   enrichRunDate: date("enrich_run_date"),
+  /**
+   * Market active in Admin when this company was first scraped
+   * (e.g. "Charlotte, NC"). Provenance tag for the consolidated CRM view;
+   * nullable — historical rows are derived from job locations at read time.
+   */
+  sourceMarket: text("source_market"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -292,6 +314,39 @@ export const jobListings = pgTable("job_listings", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+/**
+ * Persistent CRM call list — one entry per approved company.
+ * Company/contact/job facts stay on their own tables and are joined live;
+ * this table only owns the mutable call-tracking workflow fields.
+ */
+export const callListEntries = pgTable(
+  "call_list_entries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    /** Best contact to dial — switchable if a better contact turns up. */
+    primaryContactId: uuid("primary_contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    callStatus: callStatusEnum("call_status").default("ready_to_call").notNull(),
+    /** Editable override; falls back to companies.reason_to_call when null. */
+    outreachAngle: text("outreach_angle"),
+    attempts: integer("attempts").default(0).notNull(),
+    lastContactAt: timestamp("last_contact_at"),
+    nextFollowUpDate: date("next_follow_up_date"),
+    notes: text("notes"),
+    assignedTo: text("assigned_to"),
+    finalResult: text("final_result"),
+    addedAt: timestamp("added_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("call_list_entries_company_uq").on(table.companyId),
+  ],
+);
+
 export const companyActivities = pgTable("company_activities", {
   id: uuid("id").defaultRandom().primaryKey(),
   companyId: uuid("company_id")
@@ -318,6 +373,8 @@ export type ProviderUsageEvent = typeof providerUsageEvents.$inferSelect;
 export type PipelineSettings = typeof pipelineSettings.$inferSelect;
 export type StateGeoConfigRow = typeof stateGeoConfigs.$inferSelect;
 export type SearchProfile = typeof searchProfiles.$inferSelect;
+export type CallListEntry = typeof callListEntries.$inferSelect;
+export type CallStatus = (typeof callStatusEnum.enumValues)[number];
 export type CompanyStatus = (typeof companyStatusEnum.enumValues)[number];
 export type GeographicScope = (typeof geographicScopeEnum.enumValues)[number];
 export type IcpStatus = (typeof icpStatusEnum.enumValues)[number];
