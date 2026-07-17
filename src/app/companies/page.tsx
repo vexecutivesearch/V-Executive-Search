@@ -28,15 +28,31 @@ const FILTERS: { label: string; value?: CompanyStatus }[] = [
 type CompaniesView = "leads" | "jobs";
 type LeadList = "call-sheet" | "backlog" | "all";
 
-export default async function CompaniesPage({
+type CompaniesSearchParams = {
+  status?: string;
+  q?: string;
+  view?: string;
+  list?: string;
+  section?: string;
+};
+
+export default function CompaniesPage({
   searchParams,
 }: {
-  searchParams: Promise<{
-    status?: string;
-    q?: string;
-    view?: string;
-    list?: string;
-  }>;
+  searchParams: Promise<CompaniesSearchParams>;
+}) {
+  return (
+    <CompaniesPageContent searchParams={searchParams} basePath="/companies" />
+  );
+}
+
+/** Reused unchanged inside Legacy; basePath only keeps links in that shell. */
+export async function CompaniesPageContent({
+  searchParams,
+  basePath,
+}: {
+  searchParams: Promise<CompaniesSearchParams>;
+  basePath: "/companies" | "/legacy";
 }) {
   const { status, q, view: viewParam, list: listParam } = await searchParams;
   const view: CompaniesView = viewParam === "jobs" ? "jobs" : "leads";
@@ -99,20 +115,22 @@ export default async function CompaniesPage({
 
   function tabHref(nextView: CompaniesView) {
     const params = new URLSearchParams();
+    if (basePath === "/legacy") params.set("section", "companies");
     params.set("view", nextView);
     if (filterStatus) params.set("status", filterStatus);
     if (q?.trim()) params.set("q", q.trim());
     if (showLeadSplit && leadList !== "call-sheet") params.set("list", leadList);
-    return `/companies?${params.toString()}`;
+    return `${basePath}?${params.toString()}`;
   }
 
   function listHref(nextList: LeadList) {
     const params = new URLSearchParams();
+    if (basePath === "/legacy") params.set("section", "companies");
     params.set("view", "leads");
     if (filterStatus) params.set("status", filterStatus);
     if (q?.trim()) params.set("q", q.trim());
     if (nextList !== "call-sheet") params.set("list", nextList);
-    return `/companies?${params.toString()}`;
+    return `${basePath}?${params.toString()}`;
   }
 
   return (
@@ -157,13 +175,14 @@ export default async function CompaniesPage({
           <div className="flex flex-wrap gap-2 mb-4">
             {FILTERS.map((f) => {
               const params = new URLSearchParams();
+              if (basePath === "/legacy") params.set("section", "companies");
               params.set("view", "leads");
               if (f.value) params.set("status", f.value);
               if (q?.trim()) params.set("q", q.trim());
               if (showLeadSplit && leadList !== "call-sheet") {
                 params.set("list", leadList);
               }
-              const href = `/companies?${params.toString()}`;
+              const href = `${basePath}?${params.toString()}`;
               const active = (filterStatus ?? undefined) === f.value;
               return (
                 <Link

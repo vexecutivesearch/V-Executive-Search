@@ -5,10 +5,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAV = [
-  { href: "/today", label: "Today's List" },
   { href: "/crm", label: "Pipeline" },
-  { href: "/companies", label: "Companies" },
   { href: "/runs", label: "Runs" },
+  { href: "/legacy", label: "Legacy" },
   { href: "/admin", label: "Admin" },
 ];
 
@@ -19,7 +18,7 @@ export function Nav() {
     <header className="border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-950/80 backdrop-blur sticky top-0 z-20">
       <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3 flex flex-wrap items-center justify-between gap-2">
         <Link
-          href="/today"
+          href="/legacy"
           className="shrink-0 leading-none"
           aria-label="allthejobs home"
         >
@@ -35,8 +34,7 @@ export function Nav() {
         <nav className="flex flex-wrap justify-end gap-0.5 sm:gap-1">
           {NAV.map((item) => {
             const active =
-              pathname === item.href ||
-              (item.href === "/companies" && pathname.startsWith("/companies"));
+              pathname === item.href || pathname.startsWith(`${item.href}/`);
             return (
               <Link
                 key={item.href}

@@ -26,12 +26,14 @@ export function TodayListRow({
   rank,
   showReasonToCall = false,
   listMode = "call-sheet",
+  navigationPath = "/today",
 }: {
   company: CompanyCardData;
   defaultExpanded?: boolean;
   rank?: number;
   showReasonToCall?: boolean;
   listMode?: "call-sheet" | "backlog";
+  navigationPath?: "/today" | "/legacy";
 }) {
   const router = useRouter();
   const [company, setCompany] = useState(initial);
@@ -121,7 +123,7 @@ export function TodayListRow({
       const params = new URLSearchParams(window.location.search);
       params.delete("tab");
       const qs = params.toString();
-      router.push(qs ? `/today?${qs}` : "/today");
+      router.push(qs ? `${navigationPath}?${qs}` : navigationPath);
     }
   }
 

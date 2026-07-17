@@ -29,6 +29,7 @@ export function TodayListView({
   listRange,
   showFunnel = true,
   filterOptions,
+  navigationPath = "/today",
 }: {
   companies: CompanyCardData[];
   geoLabel: string;
@@ -38,6 +39,8 @@ export function TodayListView({
   listRange?: ListDateRange;
   showFunnel?: boolean;
   filterOptions?: TodayFilterOptions;
+  /** Keep backlog promotion inside Legacy when this view is embedded there. */
+  navigationPath?: "/today" | "/legacy";
 }) {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortKey>("score");
@@ -501,6 +504,7 @@ export function TodayListView({
               rank={index + 1}
               showReasonToCall
               listMode={listMode}
+              navigationPath={navigationPath}
             />
           ))}
         </div>

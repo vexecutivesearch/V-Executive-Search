@@ -25,10 +25,31 @@ export const dynamic = "force-dynamic";
 
 type ListTab = "call-sheet" | "backlog" | "hot-listings";
 
-export default async function TodayPage({
+type TodaySearchParams = {
+  date?: string;
+  from?: string;
+  to?: string;
+  tab?: string;
+  section?: string;
+};
+
+export default function TodayPage({
   searchParams,
 }: {
-  searchParams: Promise<{ date?: string; from?: string; to?: string; tab?: string }>;
+  searchParams: Promise<TodaySearchParams>;
+}) {
+  return (
+    <TodayPageContent searchParams={searchParams} basePath="/today" />
+  );
+}
+
+/** Reused unchanged inside Legacy; basePath only keeps its links in that shell. */
+export async function TodayPageContent({
+  searchParams,
+  basePath,
+}: {
+  searchParams: Promise<TodaySearchParams>;
+  basePath: "/today" | "/legacy";
 }) {
   const params = await searchParams;
   const { date: dateParam, from: fromParam, to: toParam, tab: tabParam } = params;
@@ -93,6 +114,7 @@ export default async function TodayPage({
 
   function tabHref(nextTab: ListTab) {
     const qs = new URLSearchParams();
+    if (basePath === "/legacy") qs.set("section", "today");
     if (listRange.mode === "range") {
       qs.set("from", listRange.from);
       qs.set("to", listRange.to);
@@ -102,7 +124,7 @@ export default async function TodayPage({
     if (nextTab === "backlog") qs.set("tab", "backlog");
     if (nextTab === "hot-listings") qs.set("tab", "hot-listings");
     const s = qs.toString();
-    return s ? `/today?${s}` : "/today";
+    return s ? `${basePath}?${s}` : basePath;
   }
 
   const callSheetTabLabel = `Call sheet (${callSheetCompanies.length})`;
@@ -192,6 +214,7 @@ export default async function TodayPage({
           backlogCount={backlogCompanies.length}
           listRange={listRange}
           filterOptions={filterOptions}
+          navigationPath={basePath}
         />
       )}
     </div>
