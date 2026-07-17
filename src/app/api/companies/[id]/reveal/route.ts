@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { companies, contacts } from "@/lib/db/schema";
+import { apolloWebhookConfigured } from "@/lib/apollo-enrich";
 import { isContactOutCreditsAvailable } from "@/lib/contactout-credits";
 import {
   revealSelectedContacts,
@@ -59,8 +60,9 @@ export async function POST(
     );
   }
 
-  // The reveal waterfall runs ContactOut-first for email AND phone, so the
-  // availability check applies to every reveal, not just phone requests.
+  const wantsPhone = selections.some((s) => s.channels === "email_phone");
+  // The reveal waterfall uses ContactOut for personal email AND the phone,
+  // so the availability check applies to every reveal, not just phone requests.
   const sampleLinkedIn =
     (
       await db
@@ -109,16 +111,43 @@ export async function POST(
     revalidatePath(`/companies/${id}`);
 
     const company = await getCompanyById(id);
+    const parts: string[] = [];
+    if (result.revealed > 0) {
+      parts.push(
+        `Revealed ${result.revealed} contact${result.revealed === 1 ? "" : "s"} — ${result.emailsFound} email${result.emailsFound === 1 ? "" : "s"}, ${result.phonesFound} phone${result.phonesFound === 1 ? "" : "s"} found`,
+      );
+      if (result.phonesPending > 0) {
+        parts.push(
+          `${result.phonesPending} phone${result.phonesPending === 1 ? "" : "s"} still loading from Apollo — reopen in a few seconds`,
+        );
+      }
+      if (contactOutKey && !contactOutAvailable) {
+        parts.push("ContactOut locked/out of credits — Apollo fallback used");
+      } else if (!contactOutKey) {
+        parts.push("ContactOut not configured — Apollo fallback used");
+      }
+      if (
+        wantsPhone &&
+        result.phonesFound === 0 &&
+        result.phonesPending === 0 &&
+        !apolloWebhookConfigured()
+      ) {
+        parts.push(
+          "Apollo phone webhook not configured — set NEXT_PUBLIC_APP_URL on Vercel to receive Apollo phone reveals",
+        );
+      }
+    } else if (result.skippedAlreadyRevealed > 0) {
+      parts.push("Already revealed — no credits spent");
+    } else {
+      parts.push("No contact data found for the selection");
+    }
+
     return NextResponse.json({
       ok: true,
       ...result,
+      contactout_available: contactOutAvailable,
       company,
-      message:
-        result.revealed > 0
-          ? `Revealed ${result.revealed} contact${result.revealed === 1 ? "" : "s"} — ${result.emailsFound} email${result.emailsFound === 1 ? "" : "s"}, ${result.phonesFound} phone${result.phonesFound === 1 ? "" : "s"} found`
-          : result.skippedAlreadyRevealed > 0
-            ? "Already revealed — no credits spent"
-            : "No contact data found for the selection",
+      message: parts.join(" · "),
     });
   } catch (err) {
     if (err instanceof PaidEgressBlockedError) {

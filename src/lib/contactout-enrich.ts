@@ -184,9 +184,15 @@ export async function enrichFromContactOut(
       profile,
       email_type: emailTypes.join(","),
     }, context, companyId);
-    if (!emailData) return null;
-    base = parseContactOutPayload(emailData);
-    if (base.phoneApiLocked) return base;
+    if (emailData) {
+      base = parseContactOutPayload(emailData);
+      if (base.phoneApiLocked) return base;
+    } else if (!needPhone) {
+      // Email miss and no phone wanted — nothing left to fetch.
+      return null;
+    }
+    // Email miss must NOT abort the phone lookup: ContactOut frequently has
+    // a mobile for a person it has no email for.
   }
 
   if (!needPhone) {

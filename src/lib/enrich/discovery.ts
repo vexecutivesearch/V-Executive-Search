@@ -18,6 +18,7 @@ import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { companies, companyIcp, contacts, jobListings } from "@/lib/db/schema";
 import {
+  apolloWebhookConfigured,
   matchPerson,
   searchPeople,
   searchPeopleByCompanyName,
@@ -81,8 +82,12 @@ function candidateFromContact(
   const hasEmail = Boolean(
     contact.email || contact.workEmail || contact.personalEmail,
   );
+  // Company/HQ lines don't count as a direct phone — the upgrade must stay
+  // available until the contact has a personal/direct number.
   const hasPhone = Boolean(
-    contact.phone || contact.personalPhone || (contact.phones ?? []).length,
+    contact.phone ||
+      contact.personalPhone ||
+      (contact.phones ?? []).some((p) => p.kind !== "company"),
   );
   const callable = hasEmail || hasPhone;
   return {
@@ -378,6 +383,10 @@ export type RevealResult = {
   skippedAlreadyRevealed: number;
   emailsFound: number;
   phonesFound: number;
+  /** Apollo phone reveals still in flight via webhook (arrive in seconds). */
+  phonesPending: number;
+  /** Whether the ContactOut leg of the waterfall ran for this reveal. */
+  contactOutUsed: boolean;
 };
 
 /**
@@ -403,7 +412,14 @@ export async function revealSelectedContacts(options: {
 
   const ids = selections.map((s) => s.contactId);
   if (!ids.length) {
-    return { revealed: 0, skippedAlreadyRevealed: 0, emailsFound: 0, phonesFound: 0 };
+    return {
+      revealed: 0,
+      skippedAlreadyRevealed: 0,
+      emailsFound: 0,
+      phonesFound: 0,
+      phonesPending: 0,
+      contactOutUsed: false,
+    };
   }
 
   const rows = await db
@@ -416,6 +432,8 @@ export async function revealSelectedContacts(options: {
   let skippedAlreadyRevealed = 0;
   let emailsFound = 0;
   let phonesFound = 0;
+  let contactOutUsed = false;
+  const pendingApolloPhoneIds: string[] = [];
 
   for (const selection of selections) {
     const contact = byId.get(selection.contactId);
@@ -452,30 +470,71 @@ export async function revealSelectedContacts(options: {
     if (!contact.apolloId && !contact.linkedinUrl) continue;
 
     /*
-     * Waterfall (same order as the legacy enrich): search credits come from
-     * Apollo (already spent at discovery); the REVEAL runs through ContactOut
-     * first — personal email, work email, and mobile from the LinkedIn URL.
-     * Apollo people/match is the FALLBACK, used only when ContactOut is
-     * unavailable/locked or returns no email (and Apollo phone reveal only
-     * when phone was requested and ContactOut couldn't supply one).
+     * Legacy-faithful waterfall — the order that "worked before":
+     *  1. Apollo people/match (email-only, 1 credit) when we still need the
+     *     work email or a LinkedIn URL to feed ContactOut. Never requests the
+     *     Apollo phone here while ContactOut is available.
+     *  2. ContactOut (from the LinkedIn URL): personal email, missing work
+     *     email, and — when the phone channel was selected — the mobile.
+     *     This is the primary phone source.
+     *  3. Apollo phone reveal ONLY as the last resort when phone was
+     *     requested and ContactOut couldn't supply one (async via webhook —
+     *     awaited below so the result isn't misreported as "not found").
      */
     let workEmail = contact.workEmail ?? null;
     let personalEmail = contact.personalEmail ?? null;
     let phones = contact.phones ?? [];
     let linkedinUrl = contact.linkedinUrl ?? null;
+    let contactLocation = contact.contactLocation ?? null;
     let contactOutLocked = false;
+    let apolloPhoneRequested = false;
 
-    const useContactOut =
-      Boolean(contactOutApiKey) && contactOutAvailable && Boolean(linkedinUrl);
+    const contactOutReady = Boolean(contactOutApiKey) && contactOutAvailable;
+    const hasDirectPhone = () =>
+      alreadyHasPhone || phones.some((p) => p.kind !== "company");
 
-    if (useContactOut && linkedinUrl && contactOutApiKey) {
+    /* Step 1 — Apollo email match (also resolves the LinkedIn URL for CO). */
+    const needsApolloMatch =
+      Boolean(contact.apolloId) && (!workEmail || !linkedinUrl);
+    if (needsApolloMatch && contact.apolloId) {
+      const requestApolloPhone =
+        wantsPhone && !hasDirectPhone() && !contactOutReady;
+      if (requestApolloPhone) apolloPhoneRequested = true;
+      const enriched = await matchPerson(
+        apiKey,
+        contact.apolloId,
+        requestApolloPhone,
+        context,
+        companyId,
+      );
+      if (enriched) {
+        const emailRaw = enriched.email ? String(enriched.email) : null;
+        if (emailRaw && !isPersonalEmail(emailRaw) && !workEmail) {
+          workEmail = emailRaw;
+        }
+        if (emailRaw && isPersonalEmail(emailRaw) && !personalEmail) {
+          personalEmail = emailRaw;
+        }
+        if (requestApolloPhone) {
+          phones = mergeSourcedPhones(phones, extractApolloPhones(enriched));
+        }
+        linkedinUrl =
+          linkedinUrl ??
+          (enriched.linkedin_url ? String(enriched.linkedin_url) : null);
+        contactLocation = contactLocation ?? formatPersonLocation(enriched);
+      }
+    }
+
+    /* Step 2 — ContactOut: personal email + the phone (primary source). */
+    if (contactOutReady && linkedinUrl && contactOutApiKey) {
+      contactOutUsed = true;
       const co = await enrichFromContactOut(
         linkedinUrl,
         contactOutApiKey,
         {
           needPersonalEmail: !personalEmail,
           needWorkEmail: !workEmail,
-          needPhone: wantsPhone && !alreadyHasPhone,
+          needPhone: wantsPhone && !hasDirectPhone(),
         },
         context,
         companyId,
@@ -490,46 +549,24 @@ export async function revealSelectedContacts(options: {
       }
     }
 
-    // Apollo fallback: email when ContactOut found none; phone only when
-    // requested and ContactOut couldn't provide one.
-    const stillNeedsEmail = !workEmail && !personalEmail;
-    const stillNeedsPhone =
+    /* Step 3 — Apollo phone reveal, last resort (webhook-async): fires when
+     * the phone channel was selected and ContactOut couldn't supply one. */
+    if (
       wantsPhone &&
-      !alreadyHasPhone &&
-      !phones.some((p) => p.kind !== "company");
-    if (contact.apolloId && (stillNeedsEmail || stillNeedsPhone)) {
-      const apolloPhoneReveal =
-        stillNeedsPhone && (!useContactOut || contactOutLocked);
+      !hasDirectPhone() &&
+      contact.apolloId &&
+      !apolloPhoneRequested
+    ) {
+      apolloPhoneRequested = true;
       const enriched = await matchPerson(
         apiKey,
         contact.apolloId,
-        apolloPhoneReveal,
+        true,
         context,
         companyId,
       );
       if (enriched) {
-        const emailRaw = enriched.email ? String(enriched.email) : null;
-        if (emailRaw && !isPersonalEmail(emailRaw) && !workEmail) {
-          workEmail = emailRaw;
-        }
-        if (emailRaw && isPersonalEmail(emailRaw) && !personalEmail) {
-          personalEmail = emailRaw;
-        }
-        if (apolloPhoneReveal) {
-          phones = mergeSourcedPhones(phones, extractApolloPhones(enriched));
-        }
-        linkedinUrl =
-          linkedinUrl ??
-          (enriched.linkedin_url ? String(enriched.linkedin_url) : null);
-        if (!contact.contactLocation) {
-          const loc = formatPersonLocation(enriched);
-          if (loc) {
-            await db
-              .update(contacts)
-              .set({ contactLocation: loc })
-              .where(eq(contacts.id, contact.id));
-          }
-        }
+        phones = mergeSourcedPhones(phones, extractApolloPhones(enriched));
       }
     }
 
@@ -541,7 +578,7 @@ export async function revealSelectedContacts(options: {
     });
 
     const gotContactOutData =
-      useContactOut &&
+      contactOutUsed &&
       !contactOutLocked &&
       Boolean(personalEmail || normalized.phones.length);
 
@@ -556,6 +593,7 @@ export async function revealSelectedContacts(options: {
         companyPhone: normalized.companyPhone,
         phones: normalized.phones,
         linkedinUrl,
+        contactLocation,
         sourceProvider:
           contact.sourceProvider === "apollo_discovery"
             ? gotContactOutData
@@ -576,10 +614,41 @@ export async function revealSelectedContacts(options: {
     if (normalized.email || normalized.workEmail || normalized.personalEmail) {
       emailsFound += 1;
     }
-    if (normalized.phone || normalized.personalPhone) phonesFound += 1;
+    if (normalized.phone || normalized.personalPhone) {
+      phonesFound += 1;
+    } else if (apolloPhoneRequested && apolloWebhookConfigured()) {
+      // Apollo delivers revealed phones ASYNC via webhook — don't report
+      // "not found" while the number is still in flight.
+      pendingApolloPhoneIds.push(contact.id);
+    }
 
     await new Promise((r) => setTimeout(r, 300));
   }
 
-  return { revealed, skippedAlreadyRevealed, emailsFound, phonesFound };
+  // Wait briefly for the Apollo phone webhook (same as the legacy enrich),
+  // then re-read: numbers that landed count as found, not pending.
+  let phonesPending = 0;
+  if (pendingApolloPhoneIds.length) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const refreshed = await db
+      .select()
+      .from(contacts)
+      .where(inArray(contacts.id, pendingApolloPhoneIds));
+    for (const contact of refreshed) {
+      if (contact.phone || contact.personalPhone) {
+        phonesFound += 1;
+      } else {
+        phonesPending += 1;
+      }
+    }
+  }
+
+  return {
+    revealed,
+    skippedAlreadyRevealed,
+    emailsFound,
+    phonesFound,
+    phonesPending,
+    contactOutUsed,
+  };
 }
