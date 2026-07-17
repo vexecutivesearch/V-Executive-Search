@@ -43,6 +43,7 @@ export function CallListView({ items: initialItems }: { items: CallListItem[] })
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<CallStatus | "">("");
   const [assigneeFilter, setAssigneeFilter] = useState("");
+  const [marketFilter, setMarketFilter] = useState("");
   const [dueOnly, setDueOnly] = useState(false);
   const [showClosed, setShowClosed] = useState(false);
 
@@ -72,6 +73,18 @@ export function CallListView({ items: initialItems }: { items: CallListItem[] })
     [items],
   );
 
+  const markets = useMemo(
+    () =>
+      [
+        ...new Set(
+          items
+            .map((i) => i.marketLabel?.trim())
+            .filter((v): v is string => Boolean(v)),
+        ),
+      ].sort((a, b) => a.localeCompare(b)),
+    [items],
+  );
+
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     return items.filter((item) => {
@@ -80,6 +93,9 @@ export function CallListView({ items: initialItems }: { items: CallListItem[] })
         assigneeFilter &&
         (item.entry.assignedTo?.trim() ?? "") !== assigneeFilter
       ) {
+        return false;
+      }
+      if (marketFilter && (item.marketLabel ?? "") !== marketFilter) {
         return false;
       }
       if (dueOnly) {
@@ -100,7 +116,7 @@ export function CallListView({ items: initialItems }: { items: CallListItem[] })
         .toLowerCase();
       return haystack.includes(term);
     });
-  }, [items, search, statusFilter, assigneeFilter, dueOnly, today]);
+  }, [items, search, statusFilter, assigneeFilter, marketFilter, dueOnly, today]);
 
   const active = useMemo(
     () =>
@@ -165,6 +181,22 @@ export function CallListView({ items: initialItems }: { items: CallListItem[] })
               </option>
             ))}
           </select>
+
+          {markets.length > 0 && (
+            <select
+              value={marketFilter}
+              onChange={(e) => setMarketFilter(e.target.value)}
+              className="text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900"
+              aria-label="Filter by market"
+            >
+              <option value="">All markets</option>
+              {markets.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          )}
 
           {assignees.length > 0 && (
             <select

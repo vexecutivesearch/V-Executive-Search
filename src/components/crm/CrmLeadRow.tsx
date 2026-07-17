@@ -9,6 +9,7 @@ import {
   AddToCallListPrompt,
   OnCallListBadge,
 } from "@/components/AddToCallListButton";
+import { CallControls } from "./CallControls";
 import { ContactRow } from "@/components/ContactRow";
 import { EnrichButton } from "@/components/EnrichButton";
 import { StatusBadge, StatusSelect } from "@/components/StatusBadge";
@@ -26,6 +27,8 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [onList, setOnList] = useState(row.onCallList);
   const [showAddPrompt, setShowAddPrompt] = useState(false);
+  const [openerBusy, setOpenerBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const primaryJob = company.jobListings[0];
   const salaryJob = pickDisplayListing(company.jobListings);
@@ -67,6 +70,35 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
       setOnList(true);
       setNotice("Added to Call List — Ready to Call");
     }
+  }
+
+  async function generateOpener(force = false) {
+    setOpenerBusy(true);
+    try {
+      const res = await fetch(`/api/companies/${company.id}/generate-opener`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force }),
+      });
+      const data = (await res.json()) as {
+        call_opener?: string;
+        error?: string;
+      };
+      if (res.ok && data.call_opener) {
+        setCompany((c) => ({ ...c, callOpener: data.call_opener }));
+      } else if (data.error) {
+        setNotice(data.error);
+      }
+    } finally {
+      setOpenerBusy(false);
+    }
+  }
+
+  async function copyOpener() {
+    if (!company.callOpener) return;
+    await navigator.clipboard.writeText(company.callOpener);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
   return (
@@ -156,19 +188,32 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
         </div>
 
         <div className="flex items-center justify-end gap-1">
-          {hasCallable && !onList && (
+          {/* Action progression: Enrich → Add to list → Open (dossier). */}
+          {onList ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setExpanded(true);
+              }}
+              className="px-3 py-1.5 rounded-md text-xs font-medium bg-gray-900 text-white hover:bg-gray-700 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-200 whitespace-nowrap"
+            >
+              Open
+            </button>
+          ) : hasCallable ? (
             <AddToCallListButton
               companyId={company.id}
               compact
               onAdded={() => setOnList(true)}
             />
+          ) : (
+            <EnrichButton
+              companyId={company.id}
+              contactCount={company.contacts.length}
+              compact
+              onEnrichComplete={handleEnrichComplete}
+            />
           )}
-          <EnrichButton
-            companyId={company.id}
-            contactCount={company.contacts.length}
-            compact
-            onEnrichComplete={handleEnrichComplete}
-          />
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
@@ -232,6 +277,63 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
                 />
               )
             )}
+            <EnrichButton
+              companyId={company.id}
+              contactCount={company.contacts.length}
+              compact
+              onEnrichComplete={handleEnrichComplete}
+            />
+          </div>
+
+          {company.reasonToCall && (
+            <div className="mb-3 rounded-lg border border-orange-200 dark:border-orange-900 bg-orange-50/70 dark:bg-orange-950/30 px-3 py-2 text-sm text-orange-900 dark:text-orange-200">
+              <span className="text-[10px] font-medium uppercase tracking-wide mr-2">
+                Hiring signal
+              </span>
+              {company.reasonToCall}
+              {primaryJob?.location ? ` · ${primaryJob.location}` : ""}
+            </div>
+          )}
+
+          <div className="mb-3 rounded-lg border border-blue-200 dark:border-blue-900 bg-blue-50/60 dark:bg-blue-950/30 p-3">
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <p className="text-xs font-medium uppercase tracking-wide text-blue-800 dark:text-blue-200">
+                Suggested opener
+              </p>
+              <div className="flex gap-2">
+                {company.callOpener && (
+                  <button
+                    type="button"
+                    onClick={copyOpener}
+                    className="text-xs text-blue-700 dark:text-blue-300 hover:underline"
+                  >
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={openerBusy}
+                  onClick={() => generateOpener(Boolean(company.callOpener))}
+                  className="text-xs text-blue-700 dark:text-blue-300 hover:underline disabled:opacity-50"
+                >
+                  {openerBusy
+                    ? "Generating…"
+                    : company.callOpener
+                      ? "Regenerate"
+                      : "Generate"}
+                </button>
+              </div>
+            </div>
+            {company.callOpener ? (
+              <p className="text-sm text-blue-950 dark:text-blue-100 leading-relaxed">
+                {company.callOpener}
+              </p>
+            ) : (
+              <p className="text-sm text-blue-800/70 dark:text-blue-200/70 italic">
+                Generate a personalized opener from the hiring signal and job
+                posting.
+              </p>
+            )}
           </div>
 
           <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600 dark:text-gray-400">
@@ -286,6 +388,12 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
             <p className="text-sm text-gray-400 italic">
               No contacts enriched yet — Enrich pulls Apollo/ContactOut contacts.
             </p>
+          )}
+
+          {onList && (
+            <div className="mt-3">
+              <CallControls companyId={company.id} />
+            </div>
           )}
         </div>
       )}
