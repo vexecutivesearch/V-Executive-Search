@@ -133,7 +133,7 @@ function personSortKey(
   return [locationRank, t, s, title];
 }
 
-async function searchPeopleByCompanyName(
+export async function searchPeopleByCompanyName(
   apiKey: string,
   companyName: string,
   perPage: number,
@@ -176,7 +176,7 @@ async function searchPeopleByCompanyName(
   return data.people ?? [];
 }
 
-async function searchPeople(
+export async function searchPeople(
   apiKey: string,
   domain: string,
   perPage: number,
@@ -219,7 +219,7 @@ async function searchPeople(
   return data.people ?? [];
 }
 
-async function matchPerson(
+export async function matchPerson(
   apiKey: string,
   personId: string,
   enrichPhone: boolean,
