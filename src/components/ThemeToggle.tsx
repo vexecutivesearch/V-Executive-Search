@@ -20,7 +20,6 @@ export function ThemeToggle() {
     // Sync from the DOM (set pre-paint by the layout's no-flash script).
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsDark(currentIsDark());
   }, []);
 

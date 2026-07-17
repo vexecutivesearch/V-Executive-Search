@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { ThemeToggle } from "./ThemeToggle";
 
 // Legacy stays reachable at /legacy but is intentionally not in the menu.
 const NAV = [
@@ -15,7 +16,7 @@ export function Nav() {
   const pathname = usePathname();
 
   return (
-    <header className="border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-950/80 backdrop-blur sticky top-0 z-20">
+    <header className="app-nav border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-gray-950/80 backdrop-blur sticky top-0 z-20">
       <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3 flex flex-wrap items-center justify-between gap-2">
         <Link
           href="/crm"
@@ -50,6 +51,7 @@ export function Nav() {
               </Link>
             );
           })}
+          <ThemeToggle />
         </nav>
       </div>
     </header>
