@@ -184,6 +184,8 @@ export const dailyRuns = pgTable(
     runDate: date("run_date").notNull(),
     /** Scheduled batch: am (6 AM ET), pm (6 PM ET), or manual. */
     runSlot: text("run_slot").notNull().default("am"),
+    /** Market active in Admin when this run scraped (e.g. "Charlotte, NC"). */
+    market: text("market"),
     listingsScraped: integer("listings_scraped").default(0),
     companiesFound: integer("companies_found").default(0),
     companiesSkippedExisting: integer("companies_skipped_existing").default(0),
@@ -331,6 +333,7 @@ export const callListEntries = pgTable(
       onDelete: "set null",
     }),
     callStatus: callStatusEnum("call_status").default("ready_to_call").notNull(),
+    callStatusUpdatedAt: timestamp("call_status_updated_at"),
     /** Editable override; falls back to companies.reason_to_call when null. */
     outreachAngle: text("outreach_angle"),
     attempts: integer("attempts").default(0).notNull(),

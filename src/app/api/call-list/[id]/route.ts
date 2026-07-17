@@ -58,6 +58,7 @@ export async function PATCH(
     }
     updates.callStatus = body.call_status;
     statusChanged = body.call_status !== entry.callStatus;
+    if (statusChanged) updates.callStatusUpdatedAt = new Date();
   }
 
   if (body.next_follow_up_date !== undefined) {

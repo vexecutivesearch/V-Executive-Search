@@ -190,6 +190,11 @@ export async function POST(request: NextRequest) {
   const enrichOnly = payload.import_mode === "enrich_only";
   const runSlot = normalizeRunSlot(payload.run_slot);
 
+  // Market active in Admin when this batch was scraped — provenance for the
+  // consolidated CRM (runs ledger + companies.source_market).
+  const ingestGeoSettings = await getGeoFocusSettings();
+  const sourceMarket = activeMarketLabel(ingestGeoSettings);
+
   const [existingRun] = await db
     .select()
     .from(dailyRuns)
@@ -203,6 +208,7 @@ export async function POST(request: NextRequest) {
     .values({
       runDate: payload.run_date,
       runSlot,
+      market: sourceMarket,
       listingsScraped: meta.listings_scraped ?? 0,
       companiesFound: meta.companies_found ?? 0,
       companiesSkippedExisting: meta.companies_skipped_existing ?? 0,
@@ -218,6 +224,7 @@ export async function POST(request: NextRequest) {
     .onConflictDoUpdate({
       target: [dailyRuns.runDate, dailyRuns.runSlot],
       set: {
+        market: existingRun?.market ?? sourceMarket,
         listingsScraped: jobsOnly
           ? (existingRun?.listingsScraped ?? 0) + (meta.listings_scraped ?? 0)
           : (meta.listings_scraped ?? existingRun?.listingsScraped ?? 0),
@@ -248,11 +255,6 @@ export async function POST(request: NextRequest) {
   let jobsInserted = 0;
   let jobsResighted = 0;
   const touchedCompanyIds: string[] = [];
-
-  // Market active in Admin when this batch was scraped — provenance tag for
-  // the consolidated CRM view. Existing rows keep their original market.
-  const ingestGeoSettings = await getGeoFocusSettings();
-  const sourceMarket = activeMarketLabel(ingestGeoSettings);
 
   for (const item of payload.companies) {
     const existing = await findCompany(item);
