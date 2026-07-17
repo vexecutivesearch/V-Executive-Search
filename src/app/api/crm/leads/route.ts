@@ -6,7 +6,15 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const COMPANY_STATUSES = new Set(["new", "contacted", "meeting", "client", "skipped"]);
-const SORTS = new Set(["score", "recent", "name"]);
+const SORTS = new Set(["icp", "score", "recent", "name"]);
+const HIDE_CATEGORIES = new Set([
+  "fortune",
+  "gov",
+  "schools",
+  "hospitals",
+  "staffing",
+  "third_party",
+]);
 
 /** Consolidated companies — all markets, all dates. Server-side filters. */
 export async function GET(request: NextRequest) {
@@ -26,7 +34,16 @@ export async function GET(request: NextRequest) {
     callableOnly: params.get("callable") === "1",
     enrichedOnly: params.get("enriched") === "1",
     hotOnly: params.get("hot") === "1",
-    sort: sort && SORTS.has(sort) ? (sort as CrmSort) : "score",
+    roleType: params.get("role") ?? undefined,
+    sizeBand: params.get("size") ?? undefined,
+    compMin: Number.parseInt(params.get("comp") ?? "", 10) || undefined,
+    includeEstimatedComp: params.get("est") !== "0",
+    icpMin: Number.parseInt(params.get("icpmin") ?? "", 10) || undefined,
+    hideCategories: (params.get("hide") ?? "")
+      .split(",")
+      .map((c) => c.trim())
+      .filter((c) => HIDE_CATEGORIES.has(c)),
+    sort: sort && SORTS.has(sort) ? (sort as CrmSort) : "icp",
     page: Math.max(1, Number.parseInt(params.get("page") ?? "1", 10) || 1),
   };
 

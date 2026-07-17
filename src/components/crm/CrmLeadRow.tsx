@@ -146,6 +146,40 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
                   Hot
                 </span>
               )}
+              {row.icp && row.icp.adjustedScore != null && (
+                <span
+                  className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded bg-violet-50 text-violet-800 dark:bg-violet-950/50 dark:text-violet-200"
+                  title={
+                    row.icp.flags.length
+                      ? `ICP ${row.icp.baseScore ?? "?"} → ${row.icp.adjustedScore} · ${row.icp.flags.join(", ")}`
+                      : `ICP ${row.icp.baseScore ?? "?"} → ${row.icp.adjustedScore} · no exclusion flags`
+                  }
+                >
+                  ICP {row.icp.adjustedScore}
+                </span>
+              )}
+              {row.icp?.roleType && row.icp.roleType !== "unknown" && (
+                <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 capitalize">
+                  {row.icp.roleType}
+                </span>
+              )}
+              {row.icp?.compAnnualMax != null && (
+                <span
+                  className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded ${
+                    row.icp.compEstimated
+                      ? "bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
+                      : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300"
+                  }`}
+                  title={
+                    row.icp.compEstimated
+                      ? `Estimated from title (${row.icp.compConfidence ?? "low"} confidence)`
+                      : "From the job listing"
+                  }
+                >
+                  {row.icp.compEstimated ? "est. " : ""}$
+                  {Math.round(row.icp.compAnnualMax / 1000)}k
+                </span>
+              )}
               {company.reasonToCall && (
                 <span className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 dark:bg-blue-950/50 dark:text-blue-200 max-w-[14rem] truncate">
                   {company.reasonToCall}

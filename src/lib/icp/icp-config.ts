@@ -65,6 +65,14 @@ export type IcpConfig = {
     pattern_deprioritize_penalty: number;
     multiplier_base: number;
     multiplier_span: number;
+    /** Recruiter-fit component weights (sum ≈ 1). */
+    fit_weights: {
+      private: number;
+      size: number;
+      role: number;
+      urgency: number;
+      ta: number;
+    };
   };
   thresholds: {
     comp_min_annual: number;

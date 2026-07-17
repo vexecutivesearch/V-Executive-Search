@@ -71,14 +71,14 @@ async function main() {
   let allOnConfig: IcpConfig = baseConfig;
   for (const flag of ICP_FLAG_NAMES) allOnConfig = withFlag(allOnConfig, flag, true);
   const allOn = icpScorer(inputs, allOnConfig);
-  const allOnById = new Map(allOn.map((a) => [a.companyId, a]));
 
   const flagCounts: Record<string, number> = {};
   const flagExamples: Record<string, string[]> = {};
   for (const a of current) {
     for (const flag of a.exclusionFlags) {
       flagCounts[flag] = (flagCounts[flag] ?? 0) + 1;
-      (flagExamples[flag] ??= []).length < 10 && flagExamples[flag].push(a.companyName);
+      const examples = (flagExamples[flag] ??= []);
+      if (examples.length < 10) examples.push(a.companyName);
     }
   }
 

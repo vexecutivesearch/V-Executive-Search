@@ -408,9 +408,15 @@ export function scoreLeadIcp(
   const urgency = clamp(Object.keys(signals).length / 2, 0, 1);
   const taFit = internalTa ? 0.3 : 1;
   const privateFit = inferredPrivate ? 1 : 0.5;
+  const fitWeights = weights.fit_weights;
   const likelyToUseRecruiter =
     Math.round(
-      ((privateFit + sizeFit + roleFit + urgency + taFit) / 5) * 100,
+      (privateFit * fitWeights.private +
+        sizeFit * fitWeights.size +
+        roleFit * fitWeights.role +
+        urgency * fitWeights.urgency +
+        taFit * fitWeights.ta) *
+        100,
     ) / 100;
 
   /* 6 — the EXACT score structure (multiplier first, then additive terms). */

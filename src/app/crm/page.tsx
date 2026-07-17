@@ -28,8 +28,26 @@ export const dynamic = "force-dynamic";
 type CrmTab = "all" | "listings" | "call-list" | "hot";
 
 const COMPANY_STATUSES = new Set(["new", "contacted", "meeting", "client", "skipped"]);
-const SORTS = new Set(["score", "recent", "name"]);
+const SORTS = new Set(["icp", "score", "recent", "name"]);
 const LISTING_SORTS = new Set(["newest", "reposts"]);
+const HIDE_CATEGORIES = new Set([
+  "fortune",
+  "gov",
+  "schools",
+  "hospitals",
+  "staffing",
+  "third_party",
+]);
+const ROLE_TYPES = new Set([
+  "leadership",
+  "management",
+  "professional",
+  "specialized",
+  "support",
+  "hourly",
+  "unknown",
+]);
+const SIZE_BANDS = new Set(["micro", "small", "mid", "large", "unknown"]);
 
 type CrmSearchParams = {
   tab?: string;
@@ -42,6 +60,12 @@ type CrmSearchParams = {
   q?: string;
   callable?: string;
   enriched?: string;
+  role?: string;
+  size?: string;
+  comp?: string;
+  est?: string;
+  icpmin?: string;
+  hide?: string;
   sort?: string;
   page?: string;
 };
@@ -68,7 +92,18 @@ function parseFilters(params: CrmSearchParams): CrmLeadFilters {
     search: params.q?.trim() || undefined,
     callableOnly: params.callable === "1",
     enrichedOnly: params.enriched === "1",
-    sort: params.sort && SORTS.has(params.sort) ? (params.sort as CrmSort) : "score",
+    roleType:
+      params.role && ROLE_TYPES.has(params.role) ? params.role : undefined,
+    sizeBand:
+      params.size && SIZE_BANDS.has(params.size) ? params.size : undefined,
+    compMin: Number.parseInt(params.comp ?? "", 10) || undefined,
+    includeEstimatedComp: params.est !== "0",
+    icpMin: Number.parseInt(params.icpmin ?? "", 10) || undefined,
+    hideCategories: (params.hide ?? "")
+      .split(",")
+      .map((c) => c.trim())
+      .filter((c) => HIDE_CATEGORIES.has(c)),
+    sort: params.sort && SORTS.has(params.sort) ? (params.sort as CrmSort) : "icp",
     page: Math.max(1, Number.parseInt(params.page ?? "1", 10) || 1),
   };
 }
@@ -141,6 +176,12 @@ export default async function CrmPage({
     q: params.q,
     callable: params.callable,
     enriched: params.enriched,
+    role: params.role,
+    size: params.size,
+    comp: params.comp,
+    est: params.est,
+    icpmin: params.icpmin,
+    hide: params.hide,
     sort: params.sort,
   };
 
@@ -258,7 +299,13 @@ export default async function CrmPage({
                   q: params.q ?? "",
                   callable: params.callable === "1",
                   enriched: params.enriched === "1",
-                  sort: filters.sort ?? "score",
+                  role: filters.roleType ?? "",
+                  size: filters.sizeBand ?? "",
+                  comp: params.comp ?? "",
+                  includeEstimated: params.est !== "0",
+                  icpMin: params.icpmin ?? "",
+                  hide: filters.hideCategories ?? [],
+                  sort: filters.sort ?? "icp",
                 }}
               />
               <CrmLeadsList result={leads!} tab={tab} params={params} />

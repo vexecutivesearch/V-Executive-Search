@@ -13,6 +13,13 @@ export type CrmActiveFilters = {
   callable: boolean;
   enriched: boolean;
   sort: string;
+  /* ICP annotation filters (view state only — reversible). */
+  role: string;
+  size: string;
+  comp: string;
+  includeEstimated: boolean;
+  icpMin: string;
+  hide: string[];
 };
 
 const STATUS_OPTIONS = [
@@ -21,6 +28,34 @@ const STATUS_OPTIONS = [
   { value: "meeting", label: "Meeting" },
   { value: "client", label: "Client" },
   { value: "skipped", label: "Skipped" },
+];
+
+const ROLE_TYPE_OPTIONS = [
+  { value: "leadership", label: "Leadership" },
+  { value: "management", label: "Management" },
+  { value: "specialized", label: "Specialized" },
+  { value: "professional", label: "Professional" },
+  { value: "support", label: "Support" },
+  { value: "hourly", label: "Hourly" },
+  { value: "unknown", label: "Unclassified" },
+];
+
+const SIZE_BAND_OPTIONS = [
+  { value: "micro", label: "Micro (<25)" },
+  { value: "small", label: "Small (25–99)" },
+  { value: "mid", label: "Mid (100–750)" },
+  { value: "large", label: "Large (750+)" },
+  { value: "unknown", label: "Size unknown" },
+];
+
+/** Sink-don't-hide: every hide toggle defaults OFF; flipping back restores. */
+const HIDE_CATEGORY_OPTIONS = [
+  { value: "fortune", label: "Fortune 500/1000" },
+  { value: "gov", label: "Government" },
+  { value: "schools", label: "Schools" },
+  { value: "hospitals", label: "Hospital systems" },
+  { value: "staffing", label: "Staffing agencies" },
+  { value: "third_party", label: "Third-party postings" },
 ];
 
 /**
@@ -78,7 +113,12 @@ export function CrmFilterBar({
     active.status ||
     active.q ||
     active.callable ||
-    active.enriched;
+    active.enriched ||
+    active.role ||
+    active.size ||
+    active.comp ||
+    active.icpMin ||
+    active.hide.length > 0;
 
   const selectClass =
     "text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900 max-w-[13rem]";
@@ -175,12 +215,13 @@ export function CrmFilterBar({
         <select
           value={active.sort}
           onChange={(e) =>
-            apply({ sort: e.target.value === "score" ? null : e.target.value })
+            apply({ sort: e.target.value === "icp" ? null : e.target.value })
           }
           className={selectClass}
           aria-label="Sort leads"
         >
-          <option value="score">Sort: Score</option>
+          <option value="icp">Sort: ICP fit</option>
+          <option value="score">Sort: Raw score</option>
           <option value="recent">Sort: Recently updated</option>
           <option value="name">Sort: Name</option>
         </select>
@@ -196,6 +237,126 @@ export function CrmFilterBar({
             Clear filters
           </button>
         )}
+      </div>
+
+      {/* ICP annotation filters — reversible view state, never data changes. */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center mt-2">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500">
+          ICP
+        </span>
+
+        <select
+          value={active.role}
+          onChange={(e) => apply({ role: e.target.value || null })}
+          className={selectClass}
+          aria-label="Filter by role type"
+        >
+          <option value="">Any role type</option>
+          {ROLE_TYPE_OPTIONS.map((r) => (
+            <option key={r.value} value={r.value}>
+              {r.label}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={active.size}
+          onChange={(e) => apply({ size: e.target.value || null })}
+          className={selectClass}
+          aria-label="Filter by company size band"
+        >
+          <option value="">Any company size</option>
+          {SIZE_BAND_OPTIONS.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+
+        <label className="inline-flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400">
+          Comp ≥
+          <input
+            type="number"
+            min={0}
+            step={10000}
+            value={active.comp}
+            onChange={(e) => apply({ comp: e.target.value || null })}
+            placeholder="$"
+            className="w-24 text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900"
+            aria-label="Minimum annual compensation"
+          />
+        </label>
+
+        {active.comp && (
+          <label className="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={active.includeEstimated}
+              onChange={(e) => apply({ est: e.target.checked ? null : "0" })}
+              className="rounded border-gray-300"
+            />
+            Include estimated
+          </label>
+        )}
+
+        <label className="inline-flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400">
+          ICP ≥
+          <input
+            type="number"
+            min={0}
+            max={100}
+            step={10}
+            value={active.icpMin}
+            onChange={(e) => apply({ icpmin: e.target.value || null })}
+            className="w-16 text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900"
+            aria-label="Minimum ICP score"
+          />
+        </label>
+
+        <details className="relative">
+          <summary
+            className={`cursor-pointer list-none text-sm px-2 py-1.5 rounded-md border select-none [&::-webkit-details-marker]:hidden ${
+              active.hide.length
+                ? "border-red-300 text-red-700 dark:text-red-400 dark:border-red-800"
+                : "border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400"
+            }`}
+          >
+            Hide categories{active.hide.length ? ` (${active.hide.length})` : ""} ▾
+          </summary>
+          <div className="absolute z-20 mt-1 w-56 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-2 shadow-lg space-y-1">
+            {HIDE_CATEGORY_OPTIONS.map((c) => {
+              const on = active.hide.includes(c.value);
+              return (
+                <label
+                  key={c.value}
+                  className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer px-1 py-0.5 rounded hover:bg-gray-50 dark:hover:bg-gray-800"
+                >
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={(e) => {
+                      const next = e.target.checked
+                        ? [...active.hide, c.value]
+                        : active.hide.filter((v) => v !== c.value);
+                      apply({ hide: next.length ? next.join(",") : null });
+                    }}
+                    className="rounded border-gray-300"
+                  />
+                  {c.label}
+                </label>
+              );
+            })}
+            {active.hide.length > 0 && (
+              <button
+                type="button"
+                onClick={() => apply({ hide: null })}
+                className="w-full text-left text-xs text-blue-600 dark:text-blue-400 hover:underline px-1 pt-1"
+              >
+                Show deprioritized (clear hides)
+              </button>
+            )}
+          </div>
+        </details>
       </div>
     </div>
   );

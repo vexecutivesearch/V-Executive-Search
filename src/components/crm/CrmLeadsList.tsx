@@ -23,6 +23,16 @@ export function CrmLeadsList({
     return s ? `/crm?${s}` : "/crm";
   }
 
+  /** "Show deprioritized": same view minus the hide toggles — instant, reversible. */
+  function showDeprioritizedHref(): string {
+    const qs = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value && key !== "page" && key !== "hide") qs.set(key, value);
+    }
+    const s = qs.toString();
+    return s ? `/crm?${s}` : "/crm";
+  }
+
   const from = (result.page - 1) * CRM_PAGE_SIZE + 1;
   const to = Math.min(result.totalMatched, result.page * CRM_PAGE_SIZE);
 
@@ -34,6 +44,15 @@ export function CrmLeadsList({
           : `Showing ${from.toLocaleString()}–${to.toLocaleString()} of ${result.totalMatched.toLocaleString()} leads`}
         {" · filtered server-side, then ranked"}
         {tab === "hot" && " · hot hiring signals only"}
+        {result.hiddenCount != null && result.hiddenCount > 0 && (
+          <span className="text-amber-700 dark:text-amber-400">
+            {" "}
+            · {result.hiddenCount.toLocaleString()} hidden by category toggles —{" "}
+            <Link href={showDeprioritizedHref()} className="underline">
+              show deprioritized
+            </Link>
+          </span>
+        )}
       </p>
 
       {result.rows.length === 0 ? (

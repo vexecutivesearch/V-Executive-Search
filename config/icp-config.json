@@ -24,12 +24,19 @@
       "unknown": 0
     },
     "private_bonus": 10,
-    "size_penalty_large": -15,
+    "size_penalty_large": -35,
     "comp_penalty_below_min": -5,
     "comp_estimate_adjustment_max": 5,
     "pattern_deprioritize_penalty": -10,
-    "multiplier_base": 0.6,
-    "multiplier_span": 0.6
+    "multiplier_base": 0.2,
+    "multiplier_span": 0.8,
+    "fit_weights": {
+      "private": 0.25,
+      "size": 0.35,
+      "role": 0.15,
+      "urgency": 0.15,
+      "ta": 0.1
+    }
   },
   "thresholds": {
     "comp_min_annual": 50000,

@@ -12,6 +12,7 @@ import { db } from "@/lib/db";
 import {
   callListEntries,
   companies,
+  companyIcp,
   jobListings,
   type CallListEntry,
   type CompanyStatus,
@@ -37,7 +38,21 @@ export const CRM_PAGE_SIZE = 500;
 /** Hydration batch size when exact market/state/city filtering is required. */
 const HYDRATE_CHUNK = 1000;
 
-export type CrmSort = "score" | "recent" | "name";
+export type CrmSort = "icp" | "score" | "recent" | "name";
+
+/**
+ * View-layer hide categories (sink-don't-hide by default: all OFF).
+ * Each maps to annotation flags; toggling only changes view state —
+ * flipping a toggle back restores the leads instantly, no data mutated.
+ */
+export const HIDE_CATEGORY_FLAGS: Record<string, string[]> = {
+  fortune: ["fortune_500", "fortune_1000"],
+  gov: ["gov_domain", "public_sector"],
+  schools: ["school"],
+  hospitals: ["hospital_system", "large_hospital_system"],
+  staffing: ["staffing_agency"],
+  third_party: ["third_party_posting"],
+};
 
 export type CrmLeadFilters = {
   /** Market label ("Charlotte, NC") or UNKNOWN_MARKET_VALUE bucket. */
@@ -53,6 +68,17 @@ export type CrmLeadFilters = {
   callableOnly?: boolean;
   enrichedOnly?: boolean;
   hotOnly?: boolean;
+  /* --- ICP annotation filters (Phase 2, view layer only) --- */
+  roleType?: string;
+  sizeBand?: string;
+  /** Comp floor in annual USD (reads comp_annual_max). */
+  compMin?: number;
+  /** Include comp estimates when applying compMin (default true). */
+  includeEstimatedComp?: boolean;
+  /** Minimum icp_adjusted_score. */
+  icpMin?: number;
+  /** Hide categories from HIDE_CATEGORY_FLAGS — every toggle defaults OFF. */
+  hideCategories?: string[];
   sort?: CrmSort;
   /** 1-based page over the filtered, ranked set. */
   page?: number;
@@ -60,10 +86,26 @@ export type CrmLeadFilters = {
   noCap?: boolean;
 };
 
+export type CrmLeadIcp = {
+  adjustedScore: number | null;
+  baseScore: number | null;
+  roleType: string | null;
+  roleTypeConfidence: number | null;
+  compAnnualMin: number | null;
+  compAnnualMax: number | null;
+  compEstimated: boolean;
+  compConfidence: string | null;
+  sizeBand: string | null;
+  flags: string[];
+  likelyToUseRecruiter: number | null;
+};
+
 export type CrmLeadRow = CompanyCardData & {
   /** source_market provenance, falling back to location-derived market. */
   marketLabel: string | null;
   onCallList: boolean;
+  /** ICP annotations (null until the annotate script has run). */
+  icp: CrmLeadIcp | null;
 };
 
 export type CrmLeadsResult = {
@@ -71,6 +113,8 @@ export type CrmLeadsResult = {
   totalMatched: number;
   page: number;
   pageCount: number;
+  /** Leads removed by active hide toggles (null when none are active). */
+  hiddenCount: number | null;
 };
 
 function escapeLike(term: string): string {
@@ -257,6 +301,15 @@ async function buildSqlConditions(
 }
 
 function orderBySql(sort: CrmSort) {
+  if (sort === "icp") {
+    // ICP fit sort — bad fits SINK, nothing is removed. Falls back to the
+    // raw lead score for rows not yet annotated.
+    return [
+      desc(sql`COALESCE(${companyIcp.icpAdjustedScore}, ${companies.leadScore})`),
+      desc(companies.leadScore),
+      desc(companies.updatedAt),
+    ];
+  }
   if (sort === "recent") {
     return [desc(companies.updatedAt), desc(companies.leadScore)];
   }
@@ -264,6 +317,66 @@ function orderBySql(sort: CrmSort) {
     return [companies.name, desc(companies.leadScore)];
   }
   return [desc(companies.leadScore), desc(companies.updatedAt)];
+}
+
+/** SQL for a hide category: no annotation row = never hidden. */
+function hideCategorySql(category: string): SQL | null {
+  const flags = HIDE_CATEGORY_FLAGS[category];
+  if (!flags?.length) return null;
+  const flagList = sql.join(
+    flags.map((f) => sql`${f}`),
+    sql`, `,
+  );
+  return sql`NOT COALESCE(${companyIcp.exclusionFlags} ?| ARRAY[${flagList}]::text[], FALSE)`;
+}
+
+/** ICP annotation filters — server-side, before the pagination cap. */
+function icpConditions(filters: CrmLeadFilters): SQL[] {
+  const conditions: SQL[] = [];
+
+  if (filters.roleType) {
+    conditions.push(sql`${companyIcp.roleType} = ${filters.roleType}`);
+  }
+  if (filters.sizeBand) {
+    conditions.push(sql`${companyIcp.companySizeBand} = ${filters.sizeBand}`);
+  }
+  if (filters.compMin != null && filters.compMin > 0) {
+    const compValue = sql`COALESCE(${companyIcp.compAnnualMax}, ${companyIcp.compAnnualMin})`;
+    const floor = filters.compMin;
+    if (filters.includeEstimatedComp === false) {
+      conditions.push(
+        sql`(${compValue} >= ${floor} AND ${companyIcp.compEstimatedFlag} = FALSE)`,
+      );
+    } else {
+      conditions.push(sql`${compValue} >= ${floor}`);
+    }
+  }
+  if (filters.icpMin != null && filters.icpMin > 0) {
+    conditions.push(sql`${companyIcp.icpAdjustedScore} >= ${filters.icpMin}`);
+  }
+  for (const category of filters.hideCategories ?? []) {
+    const condition = hideCategorySql(category);
+    if (condition) conditions.push(condition);
+  }
+
+  return conditions;
+}
+
+function rowIcp(icp: typeof companyIcp.$inferSelect | null): CrmLeadIcp | null {
+  if (!icp) return null;
+  return {
+    adjustedScore: icp.icpAdjustedScore,
+    baseScore: icp.baseLeadScore,
+    roleType: icp.roleType,
+    roleTypeConfidence: icp.roleTypeConfidence,
+    compAnnualMin: icp.compAnnualMin,
+    compAnnualMax: icp.compAnnualMax,
+    compEstimated: icp.compEstimatedFlag ?? false,
+    compConfidence: icp.compConfidence,
+    sizeBand: icp.companySizeBand,
+    flags: icp.exclusionFlags ?? [],
+    likelyToUseRecruiter: icp.likelyToUseRecruiter,
+  };
 }
 
 async function callListCompanyIdSet(): Promise<Set<string>> {
@@ -280,7 +393,7 @@ async function callListCompanyIdSet(): Promise<Set<string>> {
 export async function getCrmLeads(
   filters: CrmLeadFilters = {},
 ): Promise<CrmLeadsResult> {
-  const sort = filters.sort ?? "score";
+  const sort = filters.sort ?? "icp";
   const page = Math.max(1, filters.page ?? 1);
   const [geoSettings, index, onListIds] = await Promise.all([
     getGeoFocusSettings(),
@@ -288,28 +401,55 @@ export async function getCrmLeads(
     callListCompanyIdSet(),
   ]);
   const conditions = await buildSqlConditions(filters, index);
-  const whereClause = and(...conditions.map((c) => sql`(${c})`));
+  const icpConds = icpConditions(filters);
+  const whereClause = and(
+    ...[...conditions, ...icpConds].map((c) => sql`(${c})`),
+  );
+  // Same filters WITHOUT the hide toggles — for the reversible hidden count.
+  const hideActive = (filters.hideCategories ?? []).length > 0;
+  const whereWithoutHides = hideActive
+    ? and(
+        ...[
+          ...conditions,
+          ...icpConditions({ ...filters, hideCategories: [] }),
+        ].map((c) => sql`(${c})`),
+      )
+    : null;
 
   // Exact market/state/city matching needs hydrated listings, so those
   // filters finish in TS over SQL-prefiltered candidates — still before
   // the pagination cap.
   const needsExactPass = Boolean(filters.market || filters.state || filters.city);
 
+  const icpById = new Map<string, typeof companyIcp.$inferSelect>();
   const toRow = (company: CompanyCardData): CrmLeadRow => ({
     ...company,
     marketLabel: resolveMarketLabel(company, index),
     onCallList: onListIds.has(company.id),
+    icp: rowIcp(icpById.get(company.id) ?? null),
   });
 
   if (!needsExactPass) {
     const [{ count: totalMatched }] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(companies)
+      .leftJoin(companyIcp, eq(companyIcp.companyId, companies.id))
       .where(whereClause);
 
+    let hiddenCount: number | null = null;
+    if (whereWithoutHides) {
+      const [{ count: unfiltered }] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(companies)
+        .leftJoin(companyIcp, eq(companyIcp.companyId, companies.id))
+        .where(whereWithoutHides);
+      hiddenCount = Math.max(0, unfiltered - totalMatched);
+    }
+
     const baseQuery = db
-      .select()
+      .select({ company: companies, icp: companyIcp })
       .from(companies)
+      .leftJoin(companyIcp, eq(companyIcp.companyId, companies.id))
       .where(whereClause)
       .orderBy(...orderBySql(sort));
     const pageRows = filters.noCap
@@ -318,30 +458,43 @@ export async function getCrmLeads(
           .limit(CRM_PAGE_SIZE)
           .offset((page - 1) * CRM_PAGE_SIZE);
 
-    const hydrated = await enrichCompanies(pageRows, geoSettings, {
-      skipGeoFilter: true,
-    });
+    for (const r of pageRows) {
+      if (r.icp) icpById.set(r.company.id, r.icp);
+    }
+    const hydrated = await enrichCompanies(
+      pageRows.map((r) => r.company),
+      geoSettings,
+      { skipGeoFilter: true },
+    );
 
+    // Preserve the SQL ordering (enrichCompanies maps in input order already).
     return {
       rows: hydrated.map(toRow),
       totalMatched,
       page,
       pageCount: Math.max(1, Math.ceil(totalMatched / CRM_PAGE_SIZE)),
+      hiddenCount,
     };
   }
 
   const candidates = await db
-    .select()
+    .select({ company: companies, icp: companyIcp })
     .from(companies)
+    .leftJoin(companyIcp, eq(companyIcp.companyId, companies.id))
     .where(whereClause)
     .orderBy(...orderBySql(sort));
+  for (const r of candidates) {
+    if (r.icp) icpById.set(r.company.id, r.icp);
+  }
 
   const matched: CrmLeadRow[] = [];
   for (let i = 0; i < candidates.length; i += HYDRATE_CHUNK) {
     const chunk = candidates.slice(i, i + HYDRATE_CHUNK);
-    const hydrated = await enrichCompanies(chunk, geoSettings, {
-      skipGeoFilter: true,
-    });
+    const hydrated = await enrichCompanies(
+      chunk.map((r) => r.company),
+      geoSettings,
+      { skipGeoFilter: true },
+    );
     for (const company of hydrated) {
       const row = toRow(company);
       if (filters.market === UNKNOWN_MARKET_VALUE) {
@@ -362,6 +515,7 @@ export async function getCrmLeads(
     totalMatched,
     page,
     pageCount: Math.max(1, Math.ceil(totalMatched / CRM_PAGE_SIZE)),
+    hiddenCount: null,
   };
 }
 
