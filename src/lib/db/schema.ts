@@ -252,6 +252,8 @@ export const contacts = pgTable("contacts", {
   email: text("email"),
   workEmail: text("work_email"),
   personalEmail: text("personal_email"),
+  /** Additional personal emails from ContactOut (up to 2 total), best first. */
+  personalEmails: jsonb("personal_emails").$type<string[]>().default([]),
   phone: text("phone"),
   personalPhone: text("personal_phone"),
   companyPhone: text("company_phone"),

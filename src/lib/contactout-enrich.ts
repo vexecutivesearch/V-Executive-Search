@@ -19,6 +19,8 @@ const CONTACTOUT_LINKEDIN_URL = "https://api.contactout.com/v1/people/linkedin";
 
 export type ContactOutData = {
   personalEmail: string | null;
+  /** Top personal emails ContactOut found (up to 2), best first. */
+  personalEmails: string[];
   workEmail: string | null;
   personalPhone: string | null;
   phones: SourcedPhone[];
@@ -35,6 +37,25 @@ function normalizeLinkedIn(url: string): string {
   const trimmed = url.trim();
   if (trimmed.startsWith("http")) return trimmed;
   return `https://www.linkedin.com/in/${trimmed.replace(/^\/+/, "")}`;
+}
+
+/** All personal emails ContactOut returned, personal-domain ones first. */
+function collectPersonalEmails(emails: unknown[], max = 2): string[] {
+  const found: string[] = [];
+  const push = (email: string | null | undefined) => {
+    const e = email?.trim();
+    if (e && isPersonalEmail(e) && !found.includes(e)) found.push(e);
+  };
+  for (const entry of emails) {
+    if (typeof entry === "string") {
+      push(entry);
+      continue;
+    }
+    if (!entry || typeof entry !== "object") continue;
+    const obj = entry as Record<string, string>;
+    push(obj.email || obj.value || obj.address);
+  }
+  return found.slice(0, max);
 }
 
 function pickPersonalEmail(emails: unknown[]): string | null {
@@ -74,6 +95,7 @@ function parseContactOutPayload(data: Record<string, unknown>): ContactOutData {
   if (isContactOutSampleResponse(data)) {
     return {
       personalEmail: null,
+      personalEmails: [],
       workEmail: null,
       personalPhone: null,
       phones: [],
@@ -103,8 +125,10 @@ function parseContactOutPayload(data: Record<string, unknown>): ContactOutData {
   const personalPhone =
     phones.find((p) => p.kind === "mobile")?.number ?? phones[0]?.number ?? null;
 
+  const personalEmails = collectPersonalEmails(emailsRaw, 2);
   return {
-    personalEmail: pickPersonalEmail(emailsRaw),
+    personalEmail: pickPersonalEmail(emailsRaw) ?? personalEmails[0] ?? null,
+    personalEmails,
     workEmail: pickWorkEmail(workEmailsRaw),
     personalPhone,
     phones,
@@ -118,6 +142,9 @@ function mergeContactOutData(
 ): ContactOutData {
   return {
     personalEmail: base.personalEmail ?? phones.personalEmail,
+    personalEmails: [
+      ...new Set([...base.personalEmails, ...phones.personalEmails]),
+    ].slice(0, 2),
     workEmail: base.workEmail ?? phones.workEmail,
     personalPhone: phones.personalPhone ?? base.personalPhone,
     phones: mergeSourcedPhones(base.phones, phones.phones),

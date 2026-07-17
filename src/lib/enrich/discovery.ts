@@ -125,15 +125,19 @@ function candidateFromContact(
     contact.personalPhone ||
       (contact.phones ?? []).some((p) => p.kind !== "company"),
   );
+  const hasContactOutMobile = (contact.phones ?? []).some(
+    (p) => p.source === "contactout" && p.kind !== "company",
+  );
   const callable = hasEmail || hasPhone;
   const isDiscovered = contact.revealStatus === "discovered" || !hasEmail;
   const nameMasked = contact.name.includes("*");
   // A saved contact is refreshable when there's still something to fix:
-  // ContactOut could add a personal email / direct mobile, or the stored name
-  // is still Apollo-obfuscated and an Apollo match can un-mask it.
+  // ContactOut could add a personal email / a ContactOut cell (preferred over
+  // an existing Apollo phone), or the stored name is still Apollo-obfuscated.
   const refreshable =
     !isDiscovered &&
-    ((Boolean(contact.linkedinUrl) && (!hasPersonalEmail || !hasPhone)) ||
+    ((Boolean(contact.linkedinUrl) &&
+      (!hasPersonalEmail || !hasContactOutMobile)) ||
       (nameMasked && Boolean(contact.apolloId)));
   return {
     hasEmail,
@@ -506,6 +510,11 @@ export async function revealSelectedContacts(options: {
     const hasDirectPhoneNow =
       Boolean(contact.personalPhone) ||
       (contact.phones ?? []).some((p) => p.kind !== "company");
+    // ContactOut is the PREFERRED phone source. An existing Apollo phone does
+    // NOT satisfy a phone request — we still fetch the ContactOut cell.
+    const hasContactOutMobile = (contact.phones ?? []).some(
+      (p) => p.source === "contactout" && p.kind !== "company",
+    );
     // Apollo obfuscates last names in SEARCH results; the stored discovered
     // name contains "*" until a people/match reveals the real name.
     const nameMasked = contact.name.includes("*");
@@ -515,7 +524,13 @@ export async function revealSelectedContacts(options: {
     const needEmail = !hasAnyEmail;
     const needPersonalEmail =
       !hasPersonalEmail && contactOutReady && Boolean(contact.linkedinUrl);
-    const needPhone = wantsPhone && !hasDirectPhoneNow;
+    // Phone is needed if we don't yet have a ContactOut cell (preferred), OR
+    // — when ContactOut can't run — no direct phone at all.
+    const needPhone =
+      wantsPhone &&
+      (contactOutReady && contact.linkedinUrl
+        ? !hasContactOutMobile
+        : !hasDirectPhoneNow);
 
     // NEVER re-reveal when there is genuinely nothing new to fetch.
     if (!needName && !needEmail && !needPersonalEmail && !needPhone) {
@@ -551,6 +566,7 @@ export async function revealSelectedContacts(options: {
      */
     let workEmail = contact.workEmail ?? null;
     let personalEmail = contact.personalEmail ?? null;
+    let personalEmails = [...(contact.personalEmails ?? [])];
     let phones = contact.phones ?? [];
     let linkedinUrl = contact.linkedinUrl ?? null;
     let contactLocation = contact.contactLocation ?? null;
@@ -559,9 +575,14 @@ export async function revealSelectedContacts(options: {
 
     const hasDirectPhone = () =>
       alreadyHasPhone || phones.some((p) => p.kind !== "company");
+    const hasContactOutMobileNow = () =>
+      phones.some((p) => p.source === "contactout" && p.kind !== "company");
 
     /* Step 1 — Apollo email match: resolves the REAL full name (search results
-     * obfuscate the last name), the work email, and the LinkedIn URL for CO. */
+     * obfuscate the last name), the work email, and the LinkedIn URL for CO.
+     * Never requests the Apollo phone here when ContactOut can run (ContactOut
+     * is the preferred cell source). */
+    const contactOutCanRun = contactOutReady && Boolean(linkedinUrl);
     const needsApolloMatch =
       Boolean(contact.apolloId) && (!workEmail || !linkedinUrl || needName);
     if (needsApolloMatch && contact.apolloId) {
@@ -600,16 +621,18 @@ export async function revealSelectedContacts(options: {
       }
     }
 
-    /* Step 2 — ContactOut: personal email + the phone (primary source). */
+    /* Step 2 — ContactOut: the PRIMARY source for personal cell (top 3) and
+     * personal email (top 2). Runs for the phone even when an Apollo phone
+     * already exists, so we prefer the ContactOut cell. */
     if (contactOutReady && linkedinUrl && contactOutApiKey) {
       contactOutUsed = true;
       const co = await enrichFromContactOut(
         linkedinUrl,
         contactOutApiKey,
         {
-          needPersonalEmail: !personalEmail,
+          needPersonalEmail: personalEmails.length < 2,
           needWorkEmail: !workEmail,
-          needPhone: wantsPhone && !hasDirectPhone(),
+          needPhone: wantsPhone && !hasContactOutMobileNow(),
         },
         context,
         companyId,
@@ -619,13 +642,18 @@ export async function revealSelectedContacts(options: {
         await markContactOutCreditsExhausted();
       } else if (co) {
         phones = mergeSourcedPhones(phones, co.phones);
+        for (const e of co.personalEmails) {
+          if (!personalEmails.includes(e)) personalEmails.push(e);
+        }
         if (co.personalEmail && !personalEmail) personalEmail = co.personalEmail;
+        if (!personalEmail && personalEmails[0]) personalEmail = personalEmails[0];
         if (co.workEmail && !workEmail) workEmail = co.workEmail;
       }
     }
 
-    /* Step 3 — Apollo phone reveal, last resort (webhook-async): fires when
-     * the phone channel was selected and ContactOut couldn't supply one. */
+    /* Step 3 — Apollo phone reveal, last resort (webhook-async): fires only
+     * when phone was requested and ContactOut couldn't supply a cell (no
+     * LinkedIn URL, locked, or no ContactOut mobile found). */
     if (
       wantsPhone &&
       !hasDirectPhone() &&
@@ -651,6 +679,14 @@ export async function revealSelectedContacts(options: {
       email: personalEmail ?? workEmail,
       phones,
     });
+    // Keep up to 2 personal emails, primary first.
+    const finalPersonalEmails = [
+      ...new Set(
+        [normalized.personalEmail, ...personalEmails].filter(
+          (e): e is string => Boolean(e),
+        ),
+      ),
+    ].slice(0, 2);
 
     const gotContactOutData =
       contactOutUsed &&
@@ -664,6 +700,7 @@ export async function revealSelectedContacts(options: {
         email: normalized.email,
         workEmail: normalized.workEmail,
         personalEmail: normalized.personalEmail,
+        personalEmails: finalPersonalEmails,
         phone: normalized.phone,
         personalPhone: normalized.personalPhone,
         companyPhone: normalized.companyPhone,
