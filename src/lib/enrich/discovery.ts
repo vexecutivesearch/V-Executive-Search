@@ -61,7 +61,10 @@ export type DiscoveryCandidate = {
   /** Already has email/phone on file — viewing is free, never re-charged. */
   alreadyCallable: boolean;
   hasEmail: boolean;
+  hasPersonalEmail: boolean;
   hasPhone: boolean;
+  /** Saved, but ContactOut could still add a personal email / direct mobile. */
+  refreshable: boolean;
 };
 
 export type DiscoveryResult = {
@@ -74,6 +77,39 @@ export type DiscoveryResult = {
   searchesSpent: number;
 };
 
+function norm(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Apollo occasionally returns a company/license record as a "person" (e.g.
+ * "Accrue License 28141 L", title Owner). Filter these so discovery surfaces
+ * real decision-makers, not registry entities.
+ */
+function looksNonPersonal(
+  person: Record<string, unknown>,
+  companyNameKey: string,
+): boolean {
+  const first = String(person.first_name ?? "").trim();
+  const last = String(
+    person.last_name ?? person.last_name_obfuscated ?? "",
+  ).trim();
+  const full = norm(String(person.name ?? `${first} ${last}`));
+  if (!full) return true;
+  if (/\d/.test(full)) return true; // digits in a person name = record id
+  if (/\b(license|licensing|llc|inc|corp|company|holdings|trust|estate)\b/.test(full)) {
+    return true;
+  }
+  // Name is essentially the company name (the org's own entity record).
+  if (companyNameKey && full.startsWith(companyNameKey.split(" ")[0]) &&
+      full.replace(/[^a-z ]/g, "").includes(companyNameKey.split(" ")[0])) {
+    // First token equals the company's first token AND there's no plausible
+    // human last name — treat as the company entity.
+    if (!last || last.length <= 2 || /\d/.test(last)) return true;
+  }
+  return false;
+}
+
 function candidateFromContact(
   contact: typeof contacts.$inferSelect,
   sector: string,
@@ -82,17 +118,28 @@ function candidateFromContact(
   const hasEmail = Boolean(
     contact.email || contact.workEmail || contact.personalEmail,
   );
+  const hasPersonalEmail = Boolean(contact.personalEmail);
   // Company/HQ lines don't count as a direct phone — the upgrade must stay
   // available until the contact has a personal/direct number.
   const hasPhone = Boolean(
-    contact.phone ||
-      contact.personalPhone ||
+    contact.personalPhone ||
       (contact.phones ?? []).some((p) => p.kind !== "company"),
   );
   const callable = hasEmail || hasPhone;
+  const isDiscovered = contact.revealStatus === "discovered" || !hasEmail;
+  const nameMasked = contact.name.includes("*");
+  // A saved contact is refreshable when there's still something to fix:
+  // ContactOut could add a personal email / direct mobile, or the stored name
+  // is still Apollo-obfuscated and an Apollo match can un-mask it.
+  const refreshable =
+    !isDiscovered &&
+    ((Boolean(contact.linkedinUrl) && (!hasPersonalEmail || !hasPhone)) ||
+      (nameMasked && Boolean(contact.apolloId)));
   return {
     hasEmail,
+    hasPersonalEmail,
     hasPhone,
+    refreshable,
     contactId: contact.id,
     name: contact.name,
     title: contact.title,
@@ -294,20 +341,27 @@ export async function discoverCompanyContacts(options: {
 
   // De-duplicate + cap so one search can't balloon the candidate list.
   const maxCandidates = config.discovery.max_candidates;
+  const companyNameKey = norm(company.name).replace(
+    /\b(inc|llc|llp|lp|corp|corporation|co|company|ltd|group|partners)\b/g,
+    "",
+  ).trim();
   const seen = new Set<string>();
   const ranked = people
     .map((person) => ({
       person,
       rank: titlePriorityRank(String(person.title ?? ""), sector, sizeBand),
       inMarket: personMatchesLocation(person, parsedLocations),
+      junk: looksNonPersonal(person, companyNameKey),
     }))
     .sort((a, b) => {
+      // Real people rank above non-person entities (license/company records).
+      if (a.junk !== b.junk) return a.junk ? 1 : -1;
       if (a.inMarket !== b.inMarket) return a.inMarket ? -1 : 1;
       return a.rank - b.rank;
     });
 
   let inserted = 0;
-  for (const { person, inMarket } of ranked) {
+  for (const { person, inMarket, junk } of ranked) {
     if (inserted >= maxCandidates) break;
     const apolloId = String(person.id ?? "");
     if (!apolloId || seen.has(apolloId)) continue;
@@ -321,6 +375,8 @@ export async function discoverCompanyContacts(options: {
     const last = String(person.last_name ?? person.last_name_obfuscated ?? "");
     const name = String(person.name ?? `${first} ${last}`.trim());
     if (!name.trim()) continue;
+    // Skip obvious non-person records (e.g. "Accrue License 28141 L" as Owner).
+    if (junk) continue;
 
     // Discovered candidate: NO email, NO phone — zero reveal credits spent.
     await db.insert(contacts).values({
@@ -439,28 +495,37 @@ export async function revealSelectedContacts(options: {
     const contact = byId.get(selection.contactId);
     if (!contact || contact.companyId !== companyId) continue;
 
-    // NEVER re-reveal: already-revealed (or already-callable legacy) contacts
-    // are free to view and never re-charged.
-    const alreadyCallable = Boolean(
+    const wantsPhone = selection.channels === "email_phone";
+    const contactOutReady = Boolean(contactOutApiKey) && contactOutAvailable;
+
+    // Current state — company/HQ lines are NOT a direct phone.
+    const hasAnyEmail = Boolean(
       contact.email || contact.workEmail || contact.personalEmail,
     );
-    const wantsPhone = selection.channels === "email_phone";
-    const alreadyHasPhone = Boolean(contact.phone || contact.personalPhone);
-    if (
-      contact.revealStatus === "revealed" &&
-      (!wantsPhone || alreadyHasPhone)
-    ) {
+    const hasPersonalEmail = Boolean(contact.personalEmail);
+    const hasDirectPhoneNow =
+      Boolean(contact.personalPhone) ||
+      (contact.phones ?? []).some((p) => p.kind !== "company");
+    // Apollo obfuscates last names in SEARCH results; the stored discovered
+    // name contains "*" until a people/match reveals the real name.
+    const nameMasked = contact.name.includes("*");
+
+    // What can still be fetched this click? (never re-charges existing data)
+    const needName = nameMasked && Boolean(contact.apolloId);
+    const needEmail = !hasAnyEmail;
+    const needPersonalEmail =
+      !hasPersonalEmail && contactOutReady && Boolean(contact.linkedinUrl);
+    const needPhone = wantsPhone && !hasDirectPhoneNow;
+
+    // NEVER re-reveal when there is genuinely nothing new to fetch.
+    if (!needName && !needEmail && !needPersonalEmail && !needPhone) {
       skippedAlreadyRevealed += 1;
-      continue;
-    }
-    if (alreadyCallable && (!wantsPhone || alreadyHasPhone)) {
-      skippedAlreadyRevealed += 1;
-      if (contact.revealStatus !== "revealed") {
+      if (hasAnyEmail && contact.revealStatus !== "revealed") {
         await db
           .update(contacts)
           .set({
             revealStatus: "revealed",
-            revealChannels: alreadyHasPhone ? "email_phone" : "email",
+            revealChannels: hasDirectPhoneNow ? "email_phone" : "email",
           })
           .where(eq(contacts.id, contact.id));
       }
@@ -468,6 +533,9 @@ export async function revealSelectedContacts(options: {
     }
 
     if (!contact.apolloId && !contact.linkedinUrl) continue;
+
+    const alreadyHasPhone = hasDirectPhoneNow;
+    let revealedName = contact.name;
 
     /*
      * Legacy-faithful waterfall — the order that "worked before":
@@ -489,13 +557,13 @@ export async function revealSelectedContacts(options: {
     let contactOutLocked = false;
     let apolloPhoneRequested = false;
 
-    const contactOutReady = Boolean(contactOutApiKey) && contactOutAvailable;
     const hasDirectPhone = () =>
       alreadyHasPhone || phones.some((p) => p.kind !== "company");
 
-    /* Step 1 — Apollo email match (also resolves the LinkedIn URL for CO). */
+    /* Step 1 — Apollo email match: resolves the REAL full name (search results
+     * obfuscate the last name), the work email, and the LinkedIn URL for CO. */
     const needsApolloMatch =
-      Boolean(contact.apolloId) && (!workEmail || !linkedinUrl);
+      Boolean(contact.apolloId) && (!workEmail || !linkedinUrl || needName);
     if (needsApolloMatch && contact.apolloId) {
       const requestApolloPhone =
         wantsPhone && !hasDirectPhone() && !contactOutReady;
@@ -508,6 +576,13 @@ export async function revealSelectedContacts(options: {
         companyId,
       );
       if (enriched) {
+        // Un-mask the name from the match (real first + last name).
+        const first = String(enriched.first_name ?? "").trim();
+        const last = String(enriched.last_name ?? "").trim();
+        const matchName = String(enriched.name ?? `${first} ${last}`).trim();
+        if (matchName && !matchName.includes("*")) {
+          revealedName = matchName;
+        }
         const emailRaw = enriched.email ? String(enriched.email) : null;
         if (emailRaw && !isPersonalEmail(emailRaw) && !workEmail) {
           workEmail = emailRaw;
@@ -585,6 +660,7 @@ export async function revealSelectedContacts(options: {
     await db
       .update(contacts)
       .set({
+        name: revealedName,
         email: normalized.email,
         workEmail: normalized.workEmail,
         personalEmail: normalized.personalEmail,
@@ -594,11 +670,12 @@ export async function revealSelectedContacts(options: {
         phones: normalized.phones,
         linkedinUrl,
         contactLocation,
-        sourceProvider:
-          contact.sourceProvider === "apollo_discovery"
-            ? gotContactOutData
-              ? "apollo+contactout"
-              : "apollo"
+        // Upgrade the provider label whenever ContactOut contributed — this is
+        // how an Apollo-only saved contact becomes apollo+contactout on refresh.
+        sourceProvider: gotContactOutData
+          ? "apollo+contactout"
+          : contact.sourceProvider === "apollo_discovery"
+            ? "apollo"
             : contact.sourceProvider,
         revealStatus: "revealed",
         // Keep the widest channel set paid for across reveals (email → phone upgrade).

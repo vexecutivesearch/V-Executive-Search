@@ -15,12 +15,15 @@ type Candidate = {
   priorityRank: number;
   alreadyCallable: boolean;
   hasEmail: boolean;
+  hasPersonalEmail: boolean;
   hasPhone: boolean;
+  refreshable: boolean;
 };
 
-/** Saved with email only — still upgradeable to phone (a new, opt-in spend). */
-function canAddPhone(c: Candidate): boolean {
-  return c.revealStatus !== "discovered" && c.hasEmail && !c.hasPhone;
+const isDiscovered = (c: Candidate) => c.revealStatus === "discovered" || !c.hasEmail;
+/** Saved but ContactOut could still add a personal email and/or direct mobile. */
+function canRefresh(c: Candidate): boolean {
+  return !isDiscovered(c) && c.refreshable;
 }
 
 type DiscoveryResponse = {
@@ -121,7 +124,7 @@ export function ContactPickerButton({
     if (!discovery) await runDiscovery(false);
   }
 
-  function toggleSelected(contactId: string, forcePhone = false) {
+  function toggleSelected(contactId: string, autoPhone = false) {
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(contactId)) {
@@ -133,8 +136,8 @@ export function ContactPickerButton({
         });
       } else {
         next.add(contactId);
-        // Phone-upgrade selections are phone reveals by definition.
-        if (forcePhone) {
+        // Pure phone-upgrade selections default to including phone.
+        if (autoPhone) {
           setPhoneFor((p) => new Set(p).add(contactId));
         }
       }
@@ -185,13 +188,15 @@ export function ContactPickerButton({
   }
 
   const selectableCount = candidates.filter(
-    (c) => c.revealStatus === "discovered" || canAddPhone(c),
+    (c) => isDiscovered(c) || canRefresh(c),
   ).length;
   const phoneCount = phoneFor.size;
-  // Phone upgrades on saved contacts spend no new email credit.
-  const emailCount = [...selected].filter(
-    (id) => candidates.find((c) => c.contactId === id)?.revealStatus === "discovered",
-  ).length;
+  // Only brand-new discoveries can spend a new email credit; refreshing a
+  // saved contact re-uses the email already paid for.
+  const emailCount = [...selected].filter((id) => {
+    const c = candidates.find((x) => x.contactId === id);
+    return c ? isDiscovered(c) && !c.hasEmail : false;
+  }).length;
 
   const costPreview = discovery
     ? [
@@ -283,8 +288,11 @@ export function ContactPickerButton({
               )}
 
               {candidates.map((c) => {
-                const phoneUpgrade = canAddPhone(c);
-                const isSelectable = c.revealStatus === "discovered" || phoneUpgrade;
+                const discovered = isDiscovered(c);
+                const refreshable = canRefresh(c);
+                // A saved contact still missing a direct mobile can add phone.
+                const phoneUpgrade = refreshable && c.hasEmail && !c.hasPhone;
+                const isSelectable = discovered || refreshable;
                 const isChecked = selected.has(c.contactId);
                 return (
                   <div
@@ -300,16 +308,18 @@ export function ContactPickerButton({
                         <input
                           type="checkbox"
                           checked={isChecked}
-                          onChange={() => toggleSelected(c.contactId, phoneUpgrade)}
+                          onChange={() =>
+                            toggleSelected(c.contactId, phoneUpgrade && !c.hasEmail)
+                          }
                           className="mt-1 rounded border-gray-300"
                           aria-label={`Select ${c.name}`}
                         />
                       ) : (
                         <span
                           className="mt-0.5 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
-                          title="Already saved — free to view, never re-charged"
+                          title="Fully enriched — free to view, never re-charged"
                         >
-                          saved
+                          complete
                         </span>
                       )}
                       <div className="min-w-0 flex-1">
@@ -320,12 +330,16 @@ export function ContactPickerButton({
                               best contact
                             </span>
                           )}
-                          {c.revealStatus !== "discovered" && (
+                          {!discovered && (
                             <span className="ml-2 text-[10px] text-gray-500">
-                              {c.hasEmail ? "✉ email" : ""}
+                              {c.hasPersonalEmail
+                                ? "✉ personal"
+                                : c.hasEmail
+                                  ? "✉ work"
+                                  : ""}
                               {c.hasEmail && c.hasPhone ? " · " : ""}
                               {c.hasPhone ? "☎ phone" : ""}
-                              {phoneUpgrade ? " · no phone yet" : ""}
+                              {refreshable ? " · ContactOut can add more" : ""}
                             </span>
                           )}
                         </p>
@@ -362,20 +376,15 @@ export function ContactPickerButton({
                       )}
                     </div>
                     {isChecked && (
-                      <label
-                        className={`mt-1.5 ml-6 flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 ${
-                          phoneUpgrade ? "opacity-80" : "cursor-pointer"
-                        }`}
-                      >
+                      <label className="mt-1.5 ml-6 flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={phoneFor.has(c.contactId)}
-                          disabled={phoneUpgrade}
                           onChange={() => togglePhone(c.contactId)}
                           className="rounded border-gray-300"
                         />
-                        {phoneUpgrade
-                          ? "Reveal phone for this saved contact (email already paid — not re-charged)"
+                        {refreshable
+                          ? "Also reveal phone (email already paid — not re-charged)"
                           : "Also reveal phone (scarcest credit — opt-in)"}
                       </label>
                     )}
