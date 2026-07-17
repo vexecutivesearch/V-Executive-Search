@@ -16,6 +16,7 @@ import {
   type PipelineFunnel,
 } from "@/lib/pipeline-funnel";
 import { getGeoFocusSettings } from "@/lib/geo-focus";
+import { activeMarketLabel } from "@/lib/market-attribution";
 import { recomputeCompanyScores } from "@/lib/recompute-company-scores";
 import type { IcpStatus } from "@/lib/db/schema";
 import { normalizeRunSlot } from "@/lib/timezone";
@@ -248,6 +249,11 @@ export async function POST(request: NextRequest) {
   let jobsResighted = 0;
   const touchedCompanyIds: string[] = [];
 
+  // Market active in Admin when this batch was scraped — provenance tag for
+  // the consolidated CRM view. Existing rows keep their original market.
+  const ingestGeoSettings = await getGeoFocusSettings();
+  const sourceMarket = activeMarketLabel(ingestGeoSettings);
+
   for (const item of payload.companies) {
     const existing = await findCompany(item);
     let companyId: string;
@@ -273,6 +279,7 @@ export async function POST(request: NextRequest) {
           icpStatus: item.icp_status ?? existing.icpStatus,
           enrichedAt: enrichOnly ? new Date() : existing.enrichedAt,
           enrichRunDate: item.enrich_run_date ?? existing.enrichRunDate,
+          sourceMarket: existing.sourceMarket ?? sourceMarket,
           updatedAt: new Date(),
         })
         .where(eq(companies.id, companyId));
@@ -293,6 +300,7 @@ export async function POST(request: NextRequest) {
             : payload.run_date,
           enrichRunDate: item.enrich_run_date ?? null,
           enrichedAt: enrichOnly ? new Date() : null,
+          sourceMarket,
           dailyRunId: run.id,
         })
         .returning();
