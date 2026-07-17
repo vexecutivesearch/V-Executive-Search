@@ -59,6 +59,8 @@ export type DiscoveryCandidate = {
   priorityRank: number;
   /** Already has email/phone on file — viewing is free, never re-charged. */
   alreadyCallable: boolean;
+  hasEmail: boolean;
+  hasPhone: boolean;
 };
 
 export type DiscoveryResult = {
@@ -76,14 +78,16 @@ function candidateFromContact(
   sector: string,
   sizeBand: SizeBand,
 ): DiscoveryCandidate {
-  const callable = Boolean(
-    contact.email ||
-      contact.workEmail ||
-      contact.personalEmail ||
-      contact.phone ||
-      contact.personalPhone,
+  const hasEmail = Boolean(
+    contact.email || contact.workEmail || contact.personalEmail,
   );
+  const hasPhone = Boolean(
+    contact.phone || contact.personalPhone || (contact.phones ?? []).length,
+  );
+  const callable = hasEmail || hasPhone;
   return {
+    hasEmail,
+    hasPhone,
     contactId: contact.id,
     name: contact.name,
     title: contact.title,
@@ -204,30 +208,25 @@ export async function discoverCompanyContacts(options: {
     ...new Set(parsedLocations.flatMap(apolloLocationQueries)),
   ];
 
-  // ONE search per company: broad within the firm (allowlist titles only,
-  // no seniority narrowing — the allowlist IS the filter, per the spec).
+  // Bounded search chain (same shape as the legacy waterfall so companies
+  // that used to find contacts still do): domain-scoped allowlist search,
+  // then without location narrowing, then by company name, then the generic
+  // decision-maker fallback. Stops at the first hit; every step is gated,
+  // logged, and reveal-off.
   let searchesSpent = 0;
   let usedFallback = false;
 
-  async function runSearch(searchTitles: string[]) {
+  async function searchByDomain(
+    searchTitles: string[],
+    locations: string[] | undefined,
+  ) {
+    if (!company.domain) return [];
     searchesSpent += 1;
-    if (company.domain) {
-      return searchPeople(
-        apiKey,
-        company.domain,
-        perPage,
-        apolloLocations.length ? apolloLocations : undefined,
-        searchTitles,
-        [],
-        context,
-        companyId,
-      );
-    }
-    return searchPeopleByCompanyName(
+    return searchPeople(
       apiKey,
-      company.name,
+      company.domain,
       perPage,
-      apolloLocations.length ? apolloLocations : undefined,
+      locations,
       searchTitles,
       [],
       context,
@@ -235,28 +234,44 @@ export async function discoverCompanyContacts(options: {
     );
   }
 
-  let people = await runSearch(titles);
-
-  // Location-scoped search can be empty for multi-office firms — one broad
-  // retry without the location narrowing, same allowlist, before fallback.
-  if (people.length === 0 && apolloLocations.length && company.domain) {
+  async function searchByName(
+    searchTitles: string[],
+    locations: string[] | undefined,
+  ) {
     searchesSpent += 1;
-    people = await searchPeople(
+    return searchPeopleByCompanyName(
       apiKey,
-      company.domain,
+      company.name,
       perPage,
-      undefined,
-      titles,
+      locations,
+      searchTitles,
       [],
       context,
       companyId,
     );
   }
 
-  // Empty-result fallback: generic decision-makers — never an empty picker.
+  const localLocations = apolloLocations.length ? apolloLocations : undefined;
+
+  let people = await searchByDomain(titles, localLocations);
+  if (people.length === 0 && localLocations && company.domain) {
+    // Multi-office firms: retry without location narrowing.
+    people = await searchByDomain(titles, undefined);
+  }
   if (people.length === 0) {
+    // Domain misses (wrong/unverified domain): retry by company name.
+    people = await searchByName(titles, undefined);
+  }
+  if (people.length === 0) {
+    // Empty-result fallback: generic decision-makers — never an empty picker.
     usedFallback = true;
-    people = await runSearch(fallbackTitles(sector, config));
+    const generic = fallbackTitles(sector, config);
+    people = company.domain
+      ? await searchByDomain(generic, undefined)
+      : await searchByName(generic, undefined);
+    if (people.length === 0 && company.domain) {
+      people = await searchByName(generic, undefined);
+    }
   }
 
   const existingRows = await db
@@ -434,49 +449,87 @@ export async function revealSelectedContacts(options: {
       continue;
     }
 
-    if (!contact.apolloId) continue;
+    if (!contact.apolloId && !contact.linkedinUrl) continue;
 
-    const useContactOutPhone =
-      wantsPhone && Boolean(contactOutApiKey) && contactOutAvailable;
-    const enriched = await matchPerson(
-      apiKey,
-      contact.apolloId,
-      wantsPhone && !useContactOutPhone,
-      context,
-      companyId,
-    );
-    if (!enriched) continue;
+    /*
+     * Waterfall (same order as the legacy enrich): search credits come from
+     * Apollo (already spent at discovery); the REVEAL runs through ContactOut
+     * first — personal email, work email, and mobile from the LinkedIn URL.
+     * Apollo people/match is the FALLBACK, used only when ContactOut is
+     * unavailable/locked or returns no email (and Apollo phone reveal only
+     * when phone was requested and ContactOut couldn't supply one).
+     */
+    let workEmail = contact.workEmail ?? null;
+    let personalEmail = contact.personalEmail ?? null;
+    let phones = contact.phones ?? [];
+    let linkedinUrl = contact.linkedinUrl ?? null;
+    let contactOutLocked = false;
 
-    const emailRaw = enriched.email ? String(enriched.email) : null;
-    let workEmail =
-      contact.workEmail ??
-      (emailRaw && !isPersonalEmail(emailRaw) ? emailRaw : null);
-    let personalEmail =
-      contact.personalEmail ??
-      (emailRaw && isPersonalEmail(emailRaw) ? emailRaw : null);
-    let phones = mergeSourcedPhones(
-      contact.phones ?? [],
-      wantsPhone ? extractApolloPhones(enriched) : [],
-    );
+    const useContactOut =
+      Boolean(contactOutApiKey) && contactOutAvailable && Boolean(linkedinUrl);
 
-    const linkedinUrl =
-      contact.linkedinUrl ??
-      (enriched.linkedin_url ? String(enriched.linkedin_url) : null);
-
-    if (useContactOutPhone && linkedinUrl && contactOutApiKey) {
+    if (useContactOut && linkedinUrl && contactOutApiKey) {
       const co = await enrichFromContactOut(
         linkedinUrl,
         contactOutApiKey,
-        { needPhone: true, needPersonalEmail: !personalEmail },
+        {
+          needPersonalEmail: !personalEmail,
+          needWorkEmail: !workEmail,
+          needPhone: wantsPhone && !alreadyHasPhone,
+        },
         context,
         companyId,
       );
       if (co?.phoneApiLocked) {
+        contactOutLocked = true;
         await markContactOutCreditsExhausted();
       } else if (co) {
         phones = mergeSourcedPhones(phones, co.phones);
         if (co.personalEmail && !personalEmail) personalEmail = co.personalEmail;
         if (co.workEmail && !workEmail) workEmail = co.workEmail;
+      }
+    }
+
+    // Apollo fallback: email when ContactOut found none; phone only when
+    // requested and ContactOut couldn't provide one.
+    const stillNeedsEmail = !workEmail && !personalEmail;
+    const stillNeedsPhone =
+      wantsPhone &&
+      !alreadyHasPhone &&
+      !phones.some((p) => p.kind !== "company");
+    if (contact.apolloId && (stillNeedsEmail || stillNeedsPhone)) {
+      const apolloPhoneReveal =
+        stillNeedsPhone && (!useContactOut || contactOutLocked);
+      const enriched = await matchPerson(
+        apiKey,
+        contact.apolloId,
+        apolloPhoneReveal,
+        context,
+        companyId,
+      );
+      if (enriched) {
+        const emailRaw = enriched.email ? String(enriched.email) : null;
+        if (emailRaw && !isPersonalEmail(emailRaw) && !workEmail) {
+          workEmail = emailRaw;
+        }
+        if (emailRaw && isPersonalEmail(emailRaw) && !personalEmail) {
+          personalEmail = emailRaw;
+        }
+        if (apolloPhoneReveal) {
+          phones = mergeSourcedPhones(phones, extractApolloPhones(enriched));
+        }
+        linkedinUrl =
+          linkedinUrl ??
+          (enriched.linkedin_url ? String(enriched.linkedin_url) : null);
+        if (!contact.contactLocation) {
+          const loc = formatPersonLocation(enriched);
+          if (loc) {
+            await db
+              .update(contacts)
+              .set({ contactLocation: loc })
+              .where(eq(contacts.id, contact.id));
+          }
+        }
       }
     }
 
@@ -486,6 +539,11 @@ export async function revealSelectedContacts(options: {
       email: personalEmail ?? workEmail,
       phones,
     });
+
+    const gotContactOutData =
+      useContactOut &&
+      !contactOutLocked &&
+      Boolean(personalEmail || normalized.phones.length);
 
     await db
       .update(contacts)
@@ -498,15 +556,19 @@ export async function revealSelectedContacts(options: {
         companyPhone: normalized.companyPhone,
         phones: normalized.phones,
         linkedinUrl,
-        title: contact.title || String(enriched.title ?? "") || null,
         sourceProvider:
           contact.sourceProvider === "apollo_discovery"
-            ? "apollo"
+            ? gotContactOutData
+              ? "apollo+contactout"
+              : "apollo"
             : contact.sourceProvider,
         revealStatus: "revealed",
-        revealChannels: selection.channels,
-        contactLocation:
-          contact.contactLocation ?? formatPersonLocation(enriched),
+        // Keep the widest channel set paid for across reveals (email → phone upgrade).
+        revealChannels:
+          selection.channels === "email_phone" ||
+          contact.revealChannels === "email_phone"
+            ? "email_phone"
+            : "email",
       })
       .where(eq(contacts.id, contact.id));
 

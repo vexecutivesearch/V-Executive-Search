@@ -14,7 +14,14 @@ type Candidate = {
   isPrimary: boolean;
   priorityRank: number;
   alreadyCallable: boolean;
+  hasEmail: boolean;
+  hasPhone: boolean;
 };
+
+/** Saved with email only — still upgradeable to phone (a new, opt-in spend). */
+function canAddPhone(c: Candidate): boolean {
+  return c.revealStatus !== "discovered" && c.hasEmail && !c.hasPhone;
+}
 
 type DiscoveryResponse = {
   candidates?: Candidate[];
@@ -114,7 +121,7 @@ export function ContactPickerButton({
     if (!discovery) await runDiscovery(false);
   }
 
-  function toggleSelected(contactId: string) {
+  function toggleSelected(contactId: string, forcePhone = false) {
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(contactId)) {
@@ -126,6 +133,10 @@ export function ContactPickerButton({
         });
       } else {
         next.add(contactId);
+        // Phone-upgrade selections are phone reveals by definition.
+        if (forcePhone) {
+          setPhoneFor((p) => new Set(p).add(contactId));
+        }
       }
       return next;
     });
@@ -174,18 +185,21 @@ export function ContactPickerButton({
   }
 
   const selectableCount = candidates.filter(
-    (c) => c.revealStatus === "discovered",
+    (c) => c.revealStatus === "discovered" || canAddPhone(c),
   ).length;
   const phoneCount = phoneFor.size;
-  const emailCount = selected.size;
+  // Phone upgrades on saved contacts spend no new email credit.
+  const emailCount = [...selected].filter(
+    (id) => candidates.find((c) => c.contactId === id)?.revealStatus === "discovered",
+  ).length;
 
   const costPreview = discovery
     ? [
         discovery.cached
           ? "Discovery: cached — search credit already spent, none charged"
           : `Discovery: ${discovery.searchesSpent ?? 1} search credit${(discovery.searchesSpent ?? 1) === 1 ? "" : "s"} spent`,
-        emailCount > 0
-          ? `Reveal ${emailCount}: up to ${emailCount} email credit${emailCount === 1 ? "" : "s"}${phoneCount > 0 ? ` + ${phoneCount} phone reveal${phoneCount === 1 ? "" : "s"}` : ""}`
+        selected.size > 0
+          ? `Reveal ${selected.size}: up to ${emailCount} email credit${emailCount === 1 ? "" : "s"}${phoneCount > 0 ? `${emailCount > 0 ? " + " : " "}${phoneCount} phone reveal${phoneCount === 1 ? "" : "s"}` : ""} — via ContactOut first, Apollo fallback`
           : "Reveal: nothing selected — 0 credits",
       ].join(" · ")
     : null;
@@ -261,12 +275,16 @@ export function ContactPickerButton({
 
               {!loading && discovery && candidates.length === 0 && (
                 <p className="text-sm text-gray-500">
-                  No candidates found — try re-running discovery.
+                  No candidates found — the targeted search and the generic
+                  decision-maker fallback both came back empty (often an
+                  unverified domain). Re-running discovery tries again for one
+                  search credit.
                 </p>
               )}
 
               {candidates.map((c) => {
-                const isSelectable = c.revealStatus === "discovered";
+                const phoneUpgrade = canAddPhone(c);
+                const isSelectable = c.revealStatus === "discovered" || phoneUpgrade;
                 const isChecked = selected.has(c.contactId);
                 return (
                   <div
@@ -282,7 +300,7 @@ export function ContactPickerButton({
                         <input
                           type="checkbox"
                           checked={isChecked}
-                          onChange={() => toggleSelected(c.contactId)}
+                          onChange={() => toggleSelected(c.contactId, phoneUpgrade)}
                           className="mt-1 rounded border-gray-300"
                           aria-label={`Select ${c.name}`}
                         />
@@ -300,6 +318,14 @@ export function ContactPickerButton({
                           {c.isPrimary && (
                             <span className="ml-2 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 dark:bg-blue-950/50 dark:text-blue-200">
                               best contact
+                            </span>
+                          )}
+                          {c.revealStatus !== "discovered" && (
+                            <span className="ml-2 text-[10px] text-gray-500">
+                              {c.hasEmail ? "✉ email" : ""}
+                              {c.hasEmail && c.hasPhone ? " · " : ""}
+                              {c.hasPhone ? "☎ phone" : ""}
+                              {phoneUpgrade ? " · no phone yet" : ""}
                             </span>
                           )}
                         </p>
@@ -336,14 +362,21 @@ export function ContactPickerButton({
                       )}
                     </div>
                     {isChecked && (
-                      <label className="mt-1.5 ml-6 flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer">
+                      <label
+                        className={`mt-1.5 ml-6 flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 ${
+                          phoneUpgrade ? "opacity-80" : "cursor-pointer"
+                        }`}
+                      >
                         <input
                           type="checkbox"
                           checked={phoneFor.has(c.contactId)}
+                          disabled={phoneUpgrade}
                           onChange={() => togglePhone(c.contactId)}
                           className="rounded border-gray-300"
                         />
-                        Also reveal phone (scarcest credit — opt-in)
+                        {phoneUpgrade
+                          ? "Reveal phone for this saved contact (email already paid — not re-charged)"
+                          : "Also reveal phone (scarcest credit — opt-in)"}
                       </label>
                     )}
                   </div>

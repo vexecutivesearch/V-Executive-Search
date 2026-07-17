@@ -59,20 +59,19 @@ export async function POST(
     );
   }
 
-  const wantsPhone = selections.some((s) => s.channels === "email_phone");
-  const sampleLinkedIn = wantsPhone
-    ? (
-        await db
-          .select({ linkedinUrl: contacts.linkedinUrl })
-          .from(contacts)
-          .where(eq(contacts.companyId, id))
-          .limit(20)
-      ).find((c) => c.linkedinUrl)?.linkedinUrl ?? null
-    : null;
-  const contactOutAvailable =
-    wantsPhone && contactOutKey
-      ? await isContactOutCreditsAvailable(contactOutKey, sampleLinkedIn)
-      : false;
+  // The reveal waterfall runs ContactOut-first for email AND phone, so the
+  // availability check applies to every reveal, not just phone requests.
+  const sampleLinkedIn =
+    (
+      await db
+        .select({ linkedinUrl: contacts.linkedinUrl })
+        .from(contacts)
+        .where(eq(contacts.companyId, id))
+        .limit(20)
+    ).find((c) => c.linkedinUrl)?.linkedinUrl ?? null;
+  const contactOutAvailable = contactOutKey
+    ? await isContactOutCreditsAvailable(contactOutKey, sampleLinkedIn)
+    : false;
 
   try {
     const result = await revealSelectedContacts({
