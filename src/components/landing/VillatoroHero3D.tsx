@@ -83,8 +83,8 @@ function HeroStage() {
         <div className="case-meta">Menzies Aviation · Charlotte, NC · score 95</div>
         <p className="case-body">
           They&apos;ve been stuck hiring an Accounting Clerk for three weeks.{" "}
-          <b>CEO found · verified mobile · iMessage ready.</b> Ranked #1 on today&apos;s
-          call sheet.
+          <b>CEO found · verified mobile · iMessage ready.</b>
+          {" Ranked #1 on today's call sheet."}
         </p>
         <span className="case-action">⧉ open call sheet</span>
       </motion.div>
