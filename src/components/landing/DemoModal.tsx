@@ -54,13 +54,18 @@ function DemoModalForm({
       });
       if (!res.ok) throw new Error("relay failed");
       setSent(true);
+      setSubmitting(false);
     } catch {
+      // Fallback when Resend isn't configured on the deploy — opens the visitor's
+      // mail client addressed to the demo inbox.
       const body = encodeURIComponent(
         `Name: ${data.name}\nCompany: ${data.company || ""}\nEmail: ${data.email}\nPhone: ${data.phone || ""}\nInterested in: ${interests.length ? interests.join(", ") : "(general demo)"}\n\n${data.message || ""}`,
       );
       window.location.href = `mailto:${DEMO_EMAIL}?subject=${encodeURIComponent("New demo request — Villatoro platform")}&body=${body}`;
       setSubmitting(false);
-      setError("Could not send automatically — opening your email client.");
+      setError(
+        `Could not send automatically — opening your email client to ${DEMO_EMAIL}.`,
+      );
     }
   }
 

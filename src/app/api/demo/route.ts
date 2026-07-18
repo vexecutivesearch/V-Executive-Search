@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { sendAlertEmail } from "@/lib/alert-email";
 
-const DEMO_TO = "odv@vexecutivesearch.com";
+const DEMO_TO = "tech@vexecutivesearch.com";
 
 type DemoBody = {
   name?: string;
@@ -55,6 +55,16 @@ export async function POST(request: Request) {
       ${row("Message", body.message?.trim() || "—")}
     </table>
   `;
+
+  if (!process.env.RESEND_API_KEY) {
+    return NextResponse.json(
+      {
+        error: "Email delivery unavailable",
+        detail: "RESEND_API_KEY is not configured on this deployment",
+      },
+      { status: 503 },
+    );
+  }
 
   const sent = await sendAlertEmail({
     toEmail: process.env.DEMO_REQUEST_EMAIL ?? DEMO_TO,
