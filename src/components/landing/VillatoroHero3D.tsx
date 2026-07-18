@@ -199,7 +199,6 @@ export function VillatoroHero3D({ onBookDemo }: VillatoroHero3DProps) {
                 <span className="chip">Recruiting intel</span>
                 <span className="chip">Nationwide</span>
                 <span className="chip">Built by recruiters</span>
-                <span className="chip">Palm Beach</span>
               </div>
               <h1>{renderHeadline()}</h1>
             </motion.div>
