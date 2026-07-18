@@ -615,6 +615,20 @@
   padding: 112px 0;
 }
 
+/* Extra air above these mid-page kickers (felt cramped under the cards above) */
+.landing section#how,
+.landing section#firm,
+.landing section#faq {
+  padding-top: 160px;
+}
+
+.landing section#how .kicker,
+.landing section#firm .kicker,
+.landing section#faq .kicker {
+  display: inline-block;
+  margin-top: 8px;
+}
+
 .landing .features {
   display: grid;
   grid-template-columns: 1fr;
