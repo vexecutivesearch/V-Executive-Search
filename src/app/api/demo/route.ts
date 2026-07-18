@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { sendAlertEmail } from "@/lib/alert-email";
+import { sendAlertEmailDetailed } from "@/lib/alert-email";
 
 const DEMO_TO = "tech@vexecutivesearch.com";
 
@@ -56,25 +56,15 @@ export async function POST(request: Request) {
     </table>
   `;
 
-  if (!process.env.RESEND_API_KEY) {
-    return NextResponse.json(
-      {
-        error: "Email delivery unavailable",
-        detail: "RESEND_API_KEY is not configured on this deployment",
-      },
-      { status: 503 },
-    );
-  }
-
-  const sent = await sendAlertEmail({
+  const result = await sendAlertEmailDetailed({
     toEmail: process.env.DEMO_REQUEST_EMAIL ?? DEMO_TO,
     subject: "New demo request — Villatoro platform",
     html,
   });
 
-  if (!sent) {
+  if (!result.ok) {
     return NextResponse.json(
-      { error: "Email delivery unavailable" },
+      { error: "Email delivery unavailable", detail: result.error },
       { status: 503 },
     );
   }
