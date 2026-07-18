@@ -315,7 +315,7 @@ export function LandingSections({ onBookDemo }: LandingSectionsProps) {
             </a>
           </div>
         </div>
-        <div className="wrap" style={{ marginTop: 22 }}>
+        <div className="wrap foot-copy">
           © 2026 Villatoro Executive Search. All rights reserved.
         </div>
       </footer>
