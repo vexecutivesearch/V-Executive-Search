@@ -5,6 +5,7 @@
  * Typewriter + interest pills + floating product case cards.
  */
 
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Check, ArrowRight } from "lucide-react";
@@ -40,9 +41,15 @@ function Navbar({ onBookDemo }: { onBookDemo: () => void }) {
   return (
     <nav className="landing-nav">
       <div className="wrap nav-in">
-        <a className="logo" href="#top">
-          <span className="logo-mark">V</span>
-          <span className="logo-name">Villatoro</span>
+        <a className="logo" href="#top" aria-label="Villatoro home">
+          <Image
+            src="/allthejobs-logo.png"
+            alt="Villatoro"
+            width={952}
+            height={309}
+            className="logo-img"
+            priority
+          />
         </a>
         <div className="nav-cta">
           <button type="button" className="nav-linkish" onClick={onBookDemo}>

@@ -190,29 +190,14 @@
 .landing-nav .logo {
   display: flex;
   align-items: center;
-  gap: 10px;
+  line-height: 0;
 }
 
-.landing-nav .logo-mark {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: var(--signal);
-  color: #07070d;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 15px;
-}
-
-.landing-nav .logo-name {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 17px;
-  letter-spacing: -0.02em;
-  color: var(--text);
+.landing-nav .logo-img {
+  height: 32px;
+  width: auto;
+  /* Logo art is dark-on-transparent; invert for the dark landing canvas */
+  filter: invert(1);
 }
 
 .landing-nav .nav-cta {
