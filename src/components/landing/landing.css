@@ -115,7 +115,7 @@
   text-underline-offset: 6px;
 }
 
-/* buttons — Harvv: solid signal with dark ink text */
+/* buttons — solid signal with white label */
 .landing .btn {
   display: inline-flex;
   align-items: center;
@@ -145,11 +145,12 @@
 
 .landing .btn-primary {
   background: var(--signal);
-  color: #07070d;
+  color: #ffffff;
 }
 
 .landing .btn-primary:hover {
   background: var(--signal-hi);
+  color: #ffffff;
 }
 
 .landing .btn-ghost {
@@ -849,24 +850,29 @@
 /* final */
 .landing .final {
   text-align: left;
-  padding: 112px 0 96px;
+  padding: 120px 0 104px;
   border-top: 1px solid var(--line);
 }
 
+.landing .final .kicker {
+  display: inline-block;
+  margin-bottom: 14px;
+}
+
 .landing .final h2 {
-  margin-bottom: 16px;
+  margin: 0 0 18px;
 }
 
 .landing .final .hero-cta {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
-  margin-top: 4px;
+  margin-top: 0;
 }
 
 .landing .final p {
   color: var(--text-dim);
-  margin-bottom: 28px;
+  margin: 0 0 36px;
   max-width: 520px;
   line-height: 1.55;
 }
@@ -908,21 +914,26 @@ footer.landing-footer {
 
 @media (max-width: 720px) {
   .landing .final {
-    padding: 72px 0 64px;
+    /* Keep top air — previous 72px left the kicker flush to the rule */
+    padding: 88px 0 72px;
+  }
+
+  .landing .final .kicker {
+    margin-bottom: 16px;
   }
 
   .landing .final h2 {
-    margin-bottom: 14px;
+    margin-bottom: 16px;
   }
 
   .landing .final p {
-    margin-bottom: 24px;
+    margin-bottom: 32px;
   }
 
   .landing .final .hero-cta {
     flex-direction: column;
     align-items: stretch;
-    gap: 10px;
+    gap: 12px;
     margin-top: 0;
   }
 
@@ -932,18 +943,19 @@ footer.landing-footer {
   }
 
   footer.landing-footer {
-    padding: 40px 0 48px;
+    padding: 48px 0 56px;
   }
 
   .landing .foot {
     flex-direction: column;
-    gap: 22px;
+    gap: 24px;
   }
 
   .landing .foot .nav-cta {
     width: 100%;
     flex-direction: column;
     align-items: stretch;
+    gap: 12px;
   }
 
   .landing .foot .nav-cta .btn {
@@ -952,8 +964,8 @@ footer.landing-footer {
   }
 
   .landing .foot-copy {
-    margin-top: 24px;
-    padding-top: 18px;
+    margin-top: 28px;
+    padding-top: 20px;
   }
 }
 
