@@ -2,13 +2,13 @@
 
 /**
  * Villatoro hero — Harvv-inspired left/right editorial layout.
- * Keeps typewriter + interest pills + scrub video ambience.
+ * Typewriter + interest pills + floating product case cards.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Check, ArrowRight } from "lucide-react";
-import { CRM_URL, VIDEO_SRC } from "./constants";
+import { CRM_URL } from "./constants";
 
 function useTypewriter(text: string, speed = 34, startDelay = 400) {
   const [displayed, setDisplayed] = useState("");
@@ -36,68 +36,6 @@ function useTypewriter(text: string, speed = 34, startDelay = 400) {
   return { displayed, done };
 }
 
-function ScrubVideo() {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const prevX = useRef<number | null>(null);
-  const target = useRef(0);
-  const seeking = useRef(false);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    const onSeeked = () => {
-      seeking.current = false;
-      if (Math.abs(video.currentTime - target.current) > 0.02) {
-        seeking.current = true;
-        video.currentTime = target.current;
-      }
-    };
-
-    const onMove = (e: MouseEvent) => {
-      if (window.innerWidth < 1024) return;
-      if (!video.duration) return;
-      if (prevX.current === null) {
-        prevX.current = e.clientX;
-        return;
-      }
-      const delta = e.clientX - prevX.current;
-      prevX.current = e.clientX;
-      target.current = Math.min(
-        Math.max(target.current + (delta / window.innerWidth) * 0.8 * video.duration, 0),
-        video.duration,
-      );
-      if (!seeking.current) {
-        seeking.current = true;
-        video.currentTime = target.current;
-      }
-    };
-
-    video.addEventListener("seeked", onSeeked);
-    window.addEventListener("mousemove", onMove);
-    return () => {
-      video.removeEventListener("seeked", onSeeked);
-      window.removeEventListener("mousemove", onMove);
-    };
-  }, []);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (window.innerWidth < 1024) {
-      video.autoplay = true;
-      video.loop = true;
-      video.play().catch(() => {});
-    }
-  }, []);
-
-  return (
-    <div className="scrub-video" aria-hidden="true">
-      <video ref={videoRef} src={VIDEO_SRC} muted playsInline preload="auto" />
-    </div>
-  );
-}
-
 function Navbar({ onBookDemo }: { onBookDemo: () => void }) {
   return (
     <nav className="landing-nav">
@@ -123,7 +61,6 @@ function HeroStage() {
   return (
     <div className="stage">
       <div className="stage-glow" />
-      <ScrubVideo />
 
       <motion.div
         className="case-card"
@@ -185,8 +122,6 @@ function HeroStage() {
           </div>
         </div>
       </motion.div>
-
-      <p className="scrub-hint">↘ move your mouse — the stage scrubs the 3D scene live</p>
     </div>
   );
 }

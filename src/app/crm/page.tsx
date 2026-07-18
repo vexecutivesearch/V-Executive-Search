@@ -153,17 +153,32 @@ export default async function CrmPage({
         hotOnly: tab === "hot" ? true : filters.hotOnly,
       });
     }
-  } catch {
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    const missingDb =
+      /DATABASE_URL/i.test(message) ||
+      /connect/i.test(message) ||
+      /source_market|call_list_entries/i.test(message);
+
     return (
       <div className="max-w-6xl mx-auto px-4 py-8">
         <h1 className="text-2xl font-bold mb-2">Pipeline</h1>
-        <p className="text-gray-500">
-          Database not connected or schema out of date. Set DATABASE_URL and run{" "}
-          <code className="text-sm bg-gray-100 dark:bg-gray-800 px-1 rounded">
-            npm run db:push
-          </code>{" "}
-          (adds the call_list_entries table and companies.source_market column).
-        </p>
+        {missingDb ? (
+          <p className="text-gray-500">
+            Database not connected or schema out of date. Set DATABASE_URL and run{" "}
+            <code className="text-sm bg-gray-100 dark:bg-gray-800 px-1 rounded">
+              npm run db:push
+            </code>{" "}
+            (adds the call_list_entries table and companies.source_market column).
+          </p>
+        ) : (
+          <p className="text-gray-500">
+            Pipeline failed to load:{" "}
+            <code className="text-sm bg-gray-100 dark:bg-gray-800 px-1 rounded">
+              {message}
+            </code>
+          </p>
+        )}
       </div>
     );
   }

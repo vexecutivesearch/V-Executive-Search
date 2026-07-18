@@ -64,8 +64,13 @@ const STATE_NAME_TO_ABBR = Object.fromEntries(
   Object.entries(STATE_ABBR).map(([abbr, name]) => [name.toLowerCase(), abbr]),
 );
 
-function normalizeState(token: string): { abbr: string | null; name: string | null } {
-  const cleaned = token.trim().replace(/\.$/, "");
+function normalizeState(
+  token: string | null | undefined,
+): { abbr: string | null; name: string | null } {
+  if (token == null || !String(token).trim()) {
+    return { abbr: null, name: null };
+  }
+  const cleaned = String(token).trim().replace(/\.$/, "");
   const upper = cleaned.toUpperCase();
   if (STATE_ABBR[upper]) return { abbr: upper, name: STATE_ABBR[upper] };
   const abbr = STATE_NAME_TO_ABBR[cleaned.toLowerCase()];
@@ -99,9 +104,13 @@ export function parseJobLocation(location: string): ParsedLocation | null {
   const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
   if (!parts.length) return null;
 
+  // LinkedIn sometimes stores country-only strings ("United States", "US").
+  // Strip that suffix, then bail if nothing local remains — otherwise the
+  // multi-part branch below reads parts[1] as undefined and throws on trim.
   if (["US", "USA", "UNITED STATES"].includes(parts[parts.length - 1].toUpperCase())) {
     parts.pop();
   }
+  if (!parts.length) return null;
 
   let city: string | null = null;
   let stateAbbr: string | null = null;
