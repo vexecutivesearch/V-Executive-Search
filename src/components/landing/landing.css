@@ -596,9 +596,10 @@
   }
 }
 
-/* sections — generous vertical rhythm so blocks don't stack */
+/* sections — block padding only so .wrap keeps hero-matching side inset */
 .landing section {
-  padding: 112px 0;
+  padding-top: 112px;
+  padding-bottom: 112px;
 }
 
 /* Extra air above these mid-page kickers (felt cramped under the cards above) */
@@ -847,10 +848,11 @@
   margin: 0;
 }
 
-/* final */
+/* final — only set block padding so .wrap keeps the same side inset as the hero */
 .landing .final {
   text-align: left;
-  padding: 120px 0 104px;
+  padding-top: 120px;
+  padding-bottom: 104px;
   border-top: 1px solid var(--line);
 }
 
@@ -914,8 +916,9 @@ footer.landing-footer {
 
 @media (max-width: 720px) {
   .landing .final {
-    /* Keep top air — previous 72px left the kicker flush to the rule */
-    padding: 88px 0 72px;
+    /* Block only — do not zero out .wrap's left/right pad */
+    padding-top: 88px;
+    padding-bottom: 72px;
   }
 
   .landing .final .kicker {
