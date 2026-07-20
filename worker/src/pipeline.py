@@ -399,7 +399,7 @@ def _run_pipeline_impl(
 
     # Stage 1: Scrape (free)
     logger.info("=== Stage 1: Scraping job listings ===")
-    listings, scrape_funnel = scrape_all(config)
+    listings, scrape_funnel = scrape_all(config, run_slot=run_slot)
     result.listings_scraped = len(listings)
     result.scrape_funnel = scrape_funnel
 

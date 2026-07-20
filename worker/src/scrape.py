@@ -490,7 +490,10 @@ def run_search(search: dict[str, Any], boards: list[str]) -> list[JobListing]:
     return deduped
 
 
-def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
+def scrape_all(
+    config: dict[str, Any],
+    run_slot: str | None = None,
+) -> tuple[list[JobListing], ScrapeFunnel]:
     from src.serpapi_google import serpapi_google_enabled
 
     boards = normalize_boards(config.get("boards"))
@@ -500,6 +503,21 @@ def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
         logger.info("SERPAPI_API_KEY set — enabling Google Jobs via SerpApi")
 
     funnel = ScrapeFunnel()
+
+    # Google/SerpApi is metered and gated; all decisions live in the controller.
+    google_controller = None
+    if "google" in boards and serpapi_google_enabled():
+        from src.crm_client import CRMClient
+        from src.google_board import GoogleBoardController
+        from src.timezone import business_run_slot
+
+        crm = CRMClient()
+        google_controller = GoogleBoardController(
+            config,
+            run_slot=run_slot or business_run_slot(),
+            funnel=funnel,
+            crm=crm if crm.is_configured else None,
+        )
     logger.info(
         "Job boards enabled: %s (LinkedIn draws/search=%d Indeed draws/search=%d)",
         ", ".join(boards),
@@ -530,7 +548,10 @@ def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
                 indeed_union, _stats = _scrape_indeed_union(search)
                 merged.extend(indeed_union)
             elif board == "google":
-                merged.extend(_scrape_google_board(search))
+                if google_controller is not None:
+                    merged.extend(google_controller.scrape(search))
+                else:
+                    merged.extend(_scrape_google_board(search))
             else:
                 merged.extend(_scrape_search_board(search, board))
         search_listings = _dedupe_listings(merged)
@@ -554,9 +575,23 @@ def scrape_all(config: dict[str, Any]) -> tuple[list[JobListing], ScrapeFunnel]:
         by_board[key] = by_board.get(key, 0) + 1
     funnel.scrape_by_board = by_board
 
+    if google_controller is not None:
+        google_controller.finalize()
+
     for board in boards:
         count = by_board.get(board, 0)
         if count == 0:
+            if board == "google" and google_controller is not None and (
+                google_controller.google_intentionally_skipped
+            ):
+                # Schedule gate already logged board_skipped: schedule_gate —
+                # an intentional skip is never reported as a board failure.
+                continue
+            if board == "google" and any(
+                f.startswith("google: serpapi_") for f in funnel.board_failures
+            ):
+                # Budget guard / run cap already logged their own loud failure.
+                continue
             if board == "zip_recruiter":
                 msg = (
                     f"{board}: 0 listings this run "
