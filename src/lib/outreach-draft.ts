@@ -57,9 +57,27 @@ export const DEFAULT_STEP_SPECS: StepSpec[] = [
   { stepKind: "text_3", channel: "imessage" },
 ];
 
+export type DraftFailureReason =
+  | "missing_anthropic_api_key"
+  | "anthropic_request_failed"
+  | "empty_model_response"
+  | "parse_failed"
+  | "sanitizer_rejected";
+
+let lastDraftFailure: DraftFailureReason | null = null;
+
+/** Last failure reason from draftStep/draftSequence (for enroll error payloads). */
+export function getLastDraftFailureReason(): DraftFailureReason | null {
+  return lastDraftFailure;
+}
+
 async function anthropic(prompt: string, maxTokens = 700): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return null;
+  if (!apiKey) {
+    lastDraftFailure = "missing_anthropic_api_key";
+    console.error("[outreach] ANTHROPIC_API_KEY is not set — cannot draft");
+    return null;
+  }
   const model = process.env.OUTREACH_DRAFT_MODEL ?? process.env.OPENER_MODEL ?? DEFAULT_MODEL;
   try {
     const resp = await fetch("https://api.anthropic.com/v1/messages", {
@@ -76,14 +94,18 @@ async function anthropic(prompt: string, maxTokens = 700): Promise<string | null
       }),
     });
     if (!resp.ok) {
+      lastDraftFailure = "anthropic_request_failed";
       console.error("[outreach] anthropic draft failed:", await resp.text());
       return null;
     }
     const data = (await resp.json()) as {
       content?: Array<{ type: string; text?: string }>;
     };
-    return data.content?.find((c) => c.type === "text")?.text?.trim() || null;
+    const text = data.content?.find((c) => c.type === "text")?.text?.trim() || null;
+    if (!text) lastDraftFailure = "empty_model_response";
+    return text;
   } catch (error) {
+    lastDraftFailure = "anthropic_request_failed";
     console.error("[outreach] anthropic draft error:", error);
     return null;
   }
@@ -213,6 +235,7 @@ export async function draftStep(options: {
   context: DraftContext;
   priorSteps: DraftedStep[];
 }): Promise<DraftedStep | null> {
+  lastDraftFailure = null;
   const exemplars = await activeTemplatesForKind(options.spec.stepKind);
   let extraGuidance: string | undefined;
 
@@ -225,12 +248,14 @@ export async function draftStep(options: {
     if (options.spec.channel === "email") {
       const parsed = parseEmailDraft(raw);
       if (!parsed) {
+        lastDraftFailure = "parse_failed";
         extraGuidance = "Your previous answer was malformed. Use the exact SUBJECT:/BODY: format.";
         continue;
       }
       const subjectCheck = sanitizeSubject(parsed.subject);
       const bodyCheck = sanitizeOutreachBody(parsed.body, { channel: "email" });
       if (subjectCheck.ok && bodyCheck.ok) {
+        lastDraftFailure = null;
         return {
           stepKind: options.spec.stepKind,
           channel: "email",
@@ -239,10 +264,12 @@ export async function draftStep(options: {
           templateId: exemplars[0]?.id ?? null,
         };
       }
+      lastDraftFailure = "sanitizer_rejected";
       extraGuidance = `Your previous draft was rejected: ${[...subjectCheck.violations, ...bodyCheck.violations].join("; ")}. Fix these problems.`;
     } else {
       const bodyCheck = sanitizeOutreachBody(raw, { channel: "imessage" });
       if (bodyCheck.ok) {
+        lastDraftFailure = null;
         return {
           stepKind: options.spec.stepKind,
           channel: "imessage",
@@ -251,6 +278,7 @@ export async function draftStep(options: {
           templateId: exemplars[0]?.id ?? null,
         };
       }
+      lastDraftFailure = "sanitizer_rejected";
       extraGuidance = `Your previous draft was rejected: ${bodyCheck.violations.join("; ")}. Fix these problems.`;
     }
   }

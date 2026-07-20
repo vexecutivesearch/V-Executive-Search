@@ -12,6 +12,7 @@ import {
 import {
   DEFAULT_STEP_SPECS,
   draftSequence,
+  getLastDraftFailureReason,
   type DraftContext,
   type StepSpec,
 } from "@/lib/outreach-draft";
@@ -190,6 +191,11 @@ export async function enrollContact(
 
   const drafted = await draftSequence({ specs, context });
   if (!drafted) {
+    const draftFailure = getLastDraftFailureReason() ?? "unknown";
+    const reason =
+      draftFailure === "missing_anthropic_api_key"
+        ? "drafting failed: ANTHROPIC_API_KEY missing on this deploy"
+        : `drafting failed: ${draftFailure}`;
     await logEnrollmentEvent({
       eventType: "error",
       actor: options?.actor ?? "system",
@@ -197,10 +203,11 @@ export async function enrollContact(
         stage: "transactional_drafting",
         contact_id: contact.id,
         company_id: company.id,
-        detail: "one or more steps failed drafting/sanitization — no enrollment created; retried next pass",
+        draft_failure: draftFailure,
+        detail: reason,
       },
     });
-    return { enrolled: false, reason: "drafting failed (will retry next pass)" };
+    return { enrolled: false, reason };
   }
 
   const { versionId } = await ensureDefaultFlow();
