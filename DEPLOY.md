@@ -148,9 +148,18 @@ Setup checklist:
    for `email.delivered`, `email.bounced`, `email.complained`. The handler
    matches `resend_id` against outreach messages and ignores transactional app
    emails (a bounced daily report never dings a profile or suppresses anyone).
-4. Worker env (`~/.vsearch/worker.env`): `OUTREACH_IMAP_HOST/USER/PASSWORD`
-   for the Reply-To mailbox. The existing 5-min poll agent pumps iMessage
-   sends, chat.db inbound scans, and IMAP replies (`worker/scripts/outreach_pump.py`).
+4. Worker env (`~/.vsearch/worker.env`) for the Reply-To mailbox:
+   - `OUTREACH_IMAP_HOST=outlook.office365.com`
+   - `OUTREACH_IMAP_USER=…`
+   - **Preferred (M365 / GoDaddy):** `OUTREACH_MS_CLIENT_ID` (+ optional
+     `OUTREACH_MS_TENANT_ID`), then one-time
+     `scripts/outreach_imap_login.py` (device-code OAuth → MSAL cache).
+     Entra app must be a public client with delegated
+     `IMAP.AccessAsUser.All` (Office 365 Exchange Online).
+   - **Legacy:** `OUTREACH_IMAP_PASSWORD` (app password) when the tenant still
+     allows basic IMAP auth.
+   The existing 5-min poll agent pumps iMessage sends, chat.db inbound scans,
+   and IMAP replies (`worker/scripts/outreach_pump.py`).
 5. Domain rotation: Admin → Outreach → Domains → add a sending subdomain →
    create the shown SPF/DKIM/DMARC records → Verify DNS. Unverified profiles
    cannot send; verified ones warm up 5/day → +5 per clean week → ~50/day with

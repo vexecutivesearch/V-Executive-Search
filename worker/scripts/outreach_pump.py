@@ -14,8 +14,11 @@ State (last chat.db rowid, last IMAP UID) lives in ~/.vsearch/outreach_state.jso
 so release swaps never re-ingest history (the CRM also dedupes on external_id).
 
 Env:
-  OUTREACH_IMAP_HOST / OUTREACH_IMAP_USER / OUTREACH_IMAP_PASSWORD
+  OUTREACH_IMAP_HOST / OUTREACH_IMAP_USER
   OUTREACH_IMAP_FOLDER (default INBOX) / OUTREACH_IMAP_PORT (default 993)
+  Auth (prefer OAuth for M365 / GoDaddy — app passwords are often unavailable):
+    OUTREACH_MS_CLIENT_ID + MSAL cache from scripts/outreach_imap_login.py
+    OR legacy OUTREACH_IMAP_PASSWORD (basic auth)
 """
 
 from __future__ import annotations
@@ -41,6 +44,11 @@ WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
 
 from src.env_loader import load_worker_env  # noqa: E402
+from src.outreach_imap_oauth import (  # noqa: E402
+    acquire_access_token,
+    imap_authenticate_xoauth2,
+    oauth_configured,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -305,12 +313,37 @@ def _plain_body(message: email.message.Message) -> str:
     return str(message.get_payload() or "")
 
 
+def _imap_connect(host: str, port: int, user: str):
+    """Open IMAP SSL and authenticate via OAuth (preferred) or password."""
+    client = imaplib.IMAP4_SSL(host, port)
+    password = (os.environ.get("OUTREACH_IMAP_PASSWORD") or "").strip()
+    auth_mode = (os.environ.get("OUTREACH_IMAP_AUTH") or "auto").strip().lower()
+    use_oauth = auth_mode == "oauth" or (
+        auth_mode == "auto" and oauth_configured()
+    )
+    if use_oauth:
+        token = acquire_access_token(interactive_device_flow=False)
+        imap_authenticate_xoauth2(client, user, token)
+        return client
+    if auth_mode == "password" or password:
+        if not password:
+            raise RuntimeError("OUTREACH_IMAP_PASSWORD is empty")
+        client.login(user, password)
+        return client
+    raise RuntimeError(
+        "IMAP auth not configured — set OUTREACH_MS_CLIENT_ID (OAuth) "
+        "or OUTREACH_IMAP_PASSWORD"
+    )
+
+
 def poll_imap() -> int:
     """Poll the Reply-To mailbox for new mail; post to the CRM. Returns count."""
     host = os.environ.get("OUTREACH_IMAP_HOST", "")
     user = os.environ.get("OUTREACH_IMAP_USER", "")
-    password = os.environ.get("OUTREACH_IMAP_PASSWORD", "")
-    if not host or not user or not password:
+    password = (os.environ.get("OUTREACH_IMAP_PASSWORD") or "").strip()
+    if not host or not user:
+        return 0
+    if not oauth_configured() and not password:
         return 0
     crm = _crm()
     if not crm:
@@ -323,15 +356,14 @@ def poll_imap() -> int:
     last_uid = int(state.get("imap_last_uid") or 0)
 
     try:
-        client = imaplib.IMAP4_SSL(host, port)
-        client.login(user, password)
+        client = _imap_connect(host, port, user)
         client.select(folder, readonly=True)
         status, data = client.uid("search", None, f"UID {last_uid + 1}:*")
         if status != "OK":
             client.logout()
             return 0
         uids = [int(u) for u in (data[0] or b"").split() if int(u) > last_uid]
-    except (imaplib.IMAP4.error, OSError) as exc:
+    except (imaplib.IMAP4.error, OSError, RuntimeError) as exc:
         logger.warning("IMAP poll failed: %s", exc)
         return 0
 
