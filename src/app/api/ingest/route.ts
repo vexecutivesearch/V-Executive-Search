@@ -16,7 +16,11 @@ import {
   type PipelineFunnel,
 } from "@/lib/pipeline-funnel";
 import { getGeoFocusSettings } from "@/lib/geo-focus";
-import { activeMarketLabel } from "@/lib/market-attribution";
+import { getMarketIndex } from "@/lib/market-index";
+import {
+  activeMarketLabel,
+  inferMarketFromSearchNames,
+} from "@/lib/market-attribution";
 import { annotateCompaniesIcp } from "@/lib/icp/icp-annotate";
 import { recomputeCompanyScores } from "@/lib/recompute-company-scores";
 import type { IcpStatus } from "@/lib/db/schema";
@@ -197,14 +201,36 @@ export async function POST(request: NextRequest) {
   const enrichOnly = payload.import_mode === "enrich_only";
   const runSlot = normalizeRunSlot(payload.run_slot);
 
-  // Provenance for runs ledger + companies.source_market. Prefer the market
-  // the worker actually scraped (metadata.market_label) so a mid-run Admin
-  // flip to another state cannot stamp Florida listings as "Nashville, TN".
+  // Provenance for runs ledger + companies.source_market. Prefer what the
+  // worker actually scraped — never a live Admin re-read alone (Admin can
+  // flip to Nashville while the mini is still scraping West Palm Beach).
   const ingestGeoSettings = await getGeoFocusSettings();
+  const adminMarket = activeMarketLabel(ingestGeoSettings);
   const workerMarket =
     typeof meta.market_label === "string" ? meta.market_label.trim() : "";
-  const sourceMarket =
-    workerMarket || activeMarketLabel(ingestGeoSettings);
+  const searchNames = [
+    ...((meta.funnel as { linkedin_per_search?: Array<{ search?: string }> } | undefined)
+      ?.linkedin_per_search ?? []).map((e) => e.search),
+    ...payload.companies.flatMap((c) =>
+      (c.job_listings ?? []).map((jl) => jl.search_name),
+    ),
+  ];
+  const inferredMarket = inferMarketFromSearchNames(
+    searchNames,
+    await getMarketIndex(),
+  );
+  const sourceMarket = workerMarket || inferredMarket || adminMarket;
+  if (
+    inferredMarket &&
+    adminMarket &&
+    inferredMarket !== adminMarket &&
+    !workerMarket
+  ) {
+    console.warn(
+      `[ingest] Admin market "${adminMarket}" disagrees with scrape search names ` +
+        `("${inferredMarket}") — stamping source_market from scrape`,
+    );
+  }
 
   const [existingRun] = await db
     .select()
