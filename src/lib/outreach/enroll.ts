@@ -91,7 +91,14 @@ async function ineligibilityReason(
  */
 export async function enrollContact(
   contactId: string,
-  options?: { staggerDays?: number; actor?: string },
+  options?: {
+    staggerDays?: number;
+    actor?: string;
+    /** Skip the Approvals tab for this enrollment (call-list path). */
+    autoApprove?: boolean;
+    /** Advance the flow immediately so the intro is queued for dispatch. */
+    advanceNow?: boolean;
+  },
 ): Promise<EnrollmentResult> {
   const settings = await getOrCreateOutreachSettings();
   await seedOutreachTemplates();
@@ -154,13 +161,23 @@ export async function enrollContact(
     (spec) => spec.channel === "email" || textEligible,
   );
 
+  const jobTitles = [...new Set(listings.map((l) => l.title).filter(Boolean))];
+  const jobDetails = listings.map((l) => {
+    const parts = [l.title];
+    if (l.location) parts.push(`location: ${l.location}`);
+    if (l.salaryText) parts.push(`comp: ${l.salaryText}`);
+    if (l.board && l.board !== "manual_seed") parts.push(`board: ${l.board}`);
+    return parts.join(", ");
+  });
+
   const context: DraftContext = {
     contactName: contact.name || null,
     contactTitle: contact.title,
     companyName: company.name,
     industry: company.industry,
     estimatedEmployees: company.estimatedEmployees,
-    jobTitles: [...new Set(listings.map((l) => l.title).filter(Boolean))],
+    jobTitles,
+    jobDetails,
     jobLocation: listings[0]?.location ?? null,
     hiringSignals: Object.entries(company.hiringSignals ?? {})
       .filter(([, v]) => v)
@@ -208,6 +225,7 @@ export async function enrollContact(
     })
     .returning();
 
+  const approvedAt = options?.autoApprove ? new Date() : null;
   await db.insert(outreachMessages).values(
     drafted.map((step) => ({
       enrollmentId: enrollment.id,
@@ -217,6 +235,7 @@ export async function enrollContact(
       subject: step.subject,
       body: step.body,
       templateId: step.templateId,
+      approvedAt,
     })),
   );
 
@@ -231,6 +250,8 @@ export async function enrollContact(
       channel_plan: textEligible ? "email_and_text" : "email_only",
       steps: drafted.map((s) => s.stepKind),
       stagger_days: options?.staggerDays ?? 0,
+      job_titles: jobTitles,
+      auto_approve: Boolean(options?.autoApprove),
     },
   });
   await logEnrollmentEvent({
@@ -238,6 +259,28 @@ export async function enrollContact(
     eventType: "drafted",
     payload: { steps: drafted.length, transactional: true },
   });
+  if (options?.autoApprove) {
+    await logEnrollmentEvent({
+      enrollmentId: enrollment.id,
+      eventType: "approved",
+      actor: options.actor ?? "system",
+      payload: { steps: drafted.length, source: options.actor ?? "system" },
+    });
+  }
+
+  if (options?.advanceNow) {
+    try {
+      const { advanceEnrollment } = await import("@/lib/outreach/flow-engine");
+      const [fresh] = await db
+        .select()
+        .from(sequenceEnrollments)
+        .where(eq(sequenceEnrollments.id, enrollment.id))
+        .limit(1);
+      if (fresh) await advanceEnrollment(fresh, new Date());
+    } catch (error) {
+      console.error("[outreach] advance after enroll failed", error);
+    }
+  }
 
   return {
     enrolled: true,

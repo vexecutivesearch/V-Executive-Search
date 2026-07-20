@@ -35,6 +35,10 @@ const SYNTHETIC_CONTEXT: DraftContext = {
   industry: "Advanced Manufacturing",
   estimatedEmployees: 180,
   jobTitles: ["Senior Controls Engineer", "Plant Operations Manager"],
+  jobDetails: [
+    "Senior Controls Engineer, location: Charlotte, NC, comp: $140k to $170k",
+    "Plant Operations Manager, location: Charlotte, NC",
+  ],
   jobLocation: "Charlotte, NC",
   hiringSignals: ["multiple openings", "reposted role"],
   reasonToCall: "Two engineering roles reposted this month",

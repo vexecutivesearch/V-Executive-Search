@@ -36,13 +36,23 @@ export async function contextForEnrollment(
     .orderBy(desc(jobListings.lastSeenAt))
     .limit(8);
 
+  const jobTitles = [...new Set(listings.map((l) => l.title).filter(Boolean))];
+  const jobDetails = listings.map((l) => {
+    const parts = [l.title];
+    if (l.location) parts.push(`location: ${l.location}`);
+    if (l.salaryText) parts.push(`comp: ${l.salaryText}`);
+    if (l.board && l.board !== "manual_seed") parts.push(`board: ${l.board}`);
+    return parts.join(", ");
+  });
+
   return {
     contactName: contact.name || null,
     contactTitle: contact.title,
     companyName: company.name,
     industry: company.industry,
     estimatedEmployees: company.estimatedEmployees,
-    jobTitles: [...new Set(listings.map((l) => l.title).filter(Boolean))],
+    jobTitles,
+    jobDetails,
     jobLocation: listings[0]?.location ?? null,
     hiringSignals: Object.entries(company.hiringSignals ?? {})
       .filter(([, v]) => v)

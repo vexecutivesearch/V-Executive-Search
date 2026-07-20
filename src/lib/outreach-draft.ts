@@ -24,6 +24,8 @@ export type DraftContext = {
   industry: string | null;
   estimatedEmployees: number | null;
   jobTitles: string[];
+  /** Richer listing lines for personalization (title + location + salary). */
+  jobDetails: string[];
   jobLocation: string | null;
   hiringSignals: string[];
   reasonToCall: string | null;
@@ -123,6 +125,12 @@ function contextBlock(context: DraftContext): string {
     context.jobTitles.length
       ? `Open roles they posted: ${context.jobTitles.slice(0, 5).join("; ")}`
       : null,
+    context.jobDetails?.length
+      ? `Job listing details (personalize off these):\n${context.jobDetails
+          .slice(0, 5)
+          .map((line) => `- ${line}`)
+          .join("\n")}`
+      : null,
     context.jobLocation ? `Role location: ${context.jobLocation}` : null,
     context.hiringSignals.length
       ? `Hiring signals: ${context.hiringSignals.join(", ")}`
@@ -178,7 +186,9 @@ ${exemplarBlock || "(no exemplars — write in a warm, direct, professional recr
 
 HARD RULES:
 - Plain text only. No links or URLs. No images. No markdown. No emojis.
-- No placeholders like [Name] or {{company}} — if a fact is missing, write around it.
+- No placeholders like [Name] or {{company}}. If a fact is missing, write around it.
+- Prefer commas over em dashes or double hyphens. Write naturally, like a person texting or emailing.
+- Ground the message in the specific open role(s) above. Do not send a generic agency pitch.
 - Sound like a busy human recruiter, not marketing copy or an AI.
 - Never use phrases like "I hope this email finds you well".
 - ${isEmail ? "Keep the body between 350 and 1200 characters." : "Keep it under 380 characters, 1-3 sentences."}

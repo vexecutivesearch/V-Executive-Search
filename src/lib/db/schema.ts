@@ -763,7 +763,7 @@ export const outreachSettings = pgTable("outreach_settings", {
   requireApproval: boolean("require_approval").default(true).notNull(),
   /** System-level daily cap across all profiles (0 = no extra cap). */
   dailySendCap: integer("daily_send_cap").default(50).notNull(),
-  /** Auto-enroll on enrich ingest (manual enroll always available). */
+  /** Auto-enroll on call-list add (+ enrich ingest). Manual enroll always available. */
   autoEnroll: boolean("auto_enroll").default(true).notNull(),
   maxContactsPerCompany: integer("max_contacts_per_company").default(3).notNull(),
   /** Stagger intro emails for 2nd/3rd contact at a company (days). */

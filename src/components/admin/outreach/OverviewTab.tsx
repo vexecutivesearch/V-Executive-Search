@@ -80,9 +80,9 @@ export function OverviewTab() {
     },
     {
       key: "autoEnroll",
-      title: "Auto-enroll after enrichment",
+      title: "Auto-enroll on call list",
       description:
-        "Eligible contacts enroll automatically when enrich ingest completes. Manual enroll stays available either way.",
+        "When you add a company to the call list, the primary contact is enrolled with a personalized email + SMS sequence drafted from their job listings (also runs after enrich ingest). Manual enroll stays available either way.",
     },
     {
       key: "workEmailPreferred",

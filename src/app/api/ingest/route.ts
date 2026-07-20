@@ -453,9 +453,8 @@ export async function POST(request: NextRequest) {
     console.error("ICP annotate failed post-ingest:", err);
   }
 
-  // Outreach auto-enrollment — enrich ingest only (contacts just landed on
-  // the call list). Non-fatal by design: enrollment problems never break
-  // ingest; failures are logged to enrollment_events and retried next pass.
+  // Outreach auto-enrollment (secondary path). Primary trigger is Add to
+  // Call List. Non-fatal: enrollment problems never break ingest.
   let outreachEnrolled = 0;
   if (enrichOnly && uniqueIds.length) {
     try {
