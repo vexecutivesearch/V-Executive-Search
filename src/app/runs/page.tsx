@@ -2,7 +2,9 @@ import { getBacklogCompanies, getRecentRuns } from "@/lib/queries";
 import { categorizeRunErrors } from "@/lib/run-errors";
 import {
   formatDbFunnelLine,
+  formatGooglePerQueryLine,
   formatRunFunnelLine,
+  formatSerpapiMeterLine,
   type PipelineFunnel,
 } from "@/lib/pipeline-funnel";
 import { businessListDate, formatRunSlot } from "@/lib/timezone";
@@ -24,8 +26,15 @@ function runHealth(run: DailyRun): RunHealth {
   if ((run.listingsScraped ?? 0) === 0 && (run.companiesFound ?? 0) === 0) {
     return { state: "none", label: "no run" };
   }
+  // board_skips (schedule gate) are intentional and never affect health.
   const boardFailure = funnel?.board_failures?.[0];
   if (boardFailure) {
+    if (boardFailure.includes("serpapi_budget")) {
+      return { state: "warn", label: "serpapi budget" };
+    }
+    if (boardFailure.includes("serpapi_run_cap")) {
+      return { state: "warn", label: "serpapi cap" };
+    }
     // e.g. "zip_recruiter: 0 listings this run (often blocked …)"
     const short = boardFailure.split("(")[0].split(":")[0].trim();
     return { state: "warn", label: short.replace("zip_recruiter", "zip 403") };
@@ -112,6 +121,8 @@ export default async function RunsPage() {
                 const health = runHealth(run);
                 const isToday = run.runDate === today;
                 const credits = run.creditsUsed ?? 0;
+                const funnel = (run.funnelJson ?? null) as PipelineFunnel | null;
+                const serpapiLine = funnel ? formatSerpapiMeterLine(funnel) : null;
                 const hasDetail =
                   Boolean(run.funnelJson) ||
                   domainSkipped.length > 0 ||
@@ -132,19 +143,47 @@ export default async function RunsPage() {
                           today
                         </span>
                       )}
+                      {serpapiLine && (
+                        <p
+                          className="mt-1 text-[10px] text-gray-500 font-mono whitespace-normal"
+                          title="SerpApi meter — per-run + month-to-date searches vs plan"
+                        >
+                          {serpapiLine}
+                        </p>
+                      )}
                       {hasDetail && (
                         <details className="mt-1">
                           <summary className="cursor-pointer text-xs text-blue-600 dark:text-blue-400 hover:underline select-none">
                             Funnel detail
                           </summary>
                           <div className="mt-1 max-w-xl space-y-1">
-                            {run.funnelJson ? (
+                            {funnel ? (
                               <>
                                 <p className="text-[10px] text-gray-500 font-mono whitespace-normal">
-                                  {formatRunFunnelLine(run.funnelJson as PipelineFunnel)}
+                                  {formatRunFunnelLine(funnel)}
                                 </p>
+                                {funnel.board_skips?.length ? (
+                                  <p className="text-[10px] text-sky-700 dark:text-sky-400 font-mono whitespace-normal">
+                                    Skipped (intentional):{" "}
+                                    {funnel.board_skips.join("; ")}
+                                  </p>
+                                ) : null}
+                                {funnel.google_per_query?.length ? (
+                                  <p className="text-[10px] text-gray-500 font-mono whitespace-normal">
+                                    Google pages:{" "}
+                                    {funnel.google_per_query
+                                      .map(formatGooglePerQueryLine)
+                                      .join("; ")}
+                                  </p>
+                                ) : null}
+                                {funnel.google_adaptive_skips?.length ? (
+                                  <p className="text-[10px] text-gray-400 font-mono whitespace-normal">
+                                    Adaptive title skips:{" "}
+                                    {funnel.google_adaptive_skips.join("; ")}
+                                  </p>
+                                ) : null}
                                 <p className="text-[10px] text-gray-400 font-mono whitespace-normal">
-                                  DB: {formatDbFunnelLine(run.funnelJson as PipelineFunnel)}
+                                  DB: {formatDbFunnelLine(funnel)}
                                 </p>
                               </>
                             ) : null}

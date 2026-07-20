@@ -19,6 +19,29 @@ export type LinkedInPerSearchFunnel = {
   linkedin_distance?: number | null;
 };
 
+/** One SerpApi page fetch: results + net-new ratio vs the DB (resights). */
+export type GooglePageStat = {
+  page?: number;
+  results?: number;
+  new?: number | null;
+  new_ratio?: number | null;
+};
+
+/** Per-Google-query pagination funnel — yield behavior visible, not guessed. */
+export type GooglePerQueryFunnel = {
+  search?: string;
+  zone?: string | null;
+  pages?: GooglePageStat[];
+  searches_attempted?: number;
+  searches_failed?: number;
+  listings?: number;
+  new_listings?: number;
+  new_companies?: number;
+  stop_reason?: string | null;
+  cold_start?: boolean;
+  max_pages?: number;
+};
+
 /** Per-run funnel — persisted on daily_runs.funnel_json after each scrape/ingest. */
 export type PipelineFunnel = {
   scrape_linkedin_raw?: number;
@@ -27,6 +50,19 @@ export type PipelineFunnel = {
   scrape_linkedin_cap_per_search?: number;
   scrape_by_board?: Record<string, number>;
   board_failures?: string[];
+  /** Intentional skips (schedule gate) — informational, never a failure. */
+  board_skips?: string[];
+  /** SerpApi meter: every request counted, failures included (they bill too). */
+  serpapi_searches?: number;
+  serpapi_searches_failed?: number;
+  serpapi_month_to_date?: number;
+  serpapi_monthly_plan?: number;
+  serpapi_budget_threshold?: number;
+  serpapi_run_cap?: number;
+  google_zones_used?: string[];
+  google_zone_queries_skipped?: number;
+  google_adaptive_skips?: string[];
+  google_per_query?: GooglePerQueryFunnel[];
   linkedin_per_search?: LinkedInPerSearchFunnel[];
   poster_pages_fetched?: number;
   poster_public_block_in_html?: number;
@@ -250,6 +286,49 @@ export function formatRunFunnelLine(f: PipelineFunnel): string {
   }
 
   return parts.join(" → ");
+}
+
+/** "google: 42 searches · 3,812 this month · plan 15,000" — the SerpApi meter. */
+export function formatSerpapiMeterLine(f: PipelineFunnel): string | null {
+  if (f.serpapi_searches == null && f.serpapi_month_to_date == null) return null;
+  // Worker funnels serialize zeros even when SerpApi never ran (no key /
+  // controller): an all-zero meter means "not metered", not "0 spent".
+  if (
+    !(f.serpapi_searches ?? 0) &&
+    !(f.serpapi_month_to_date ?? 0) &&
+    !(f.serpapi_monthly_plan ?? 0)
+  ) {
+    return null;
+  }
+  const searches = f.serpapi_searches ?? 0;
+  const failed = f.serpapi_searches_failed ?? 0;
+  const parts = [
+    `google: ${searches.toLocaleString()} searches${
+      failed > 0 ? ` (${failed} failed)` : ""
+    }`,
+  ];
+  if (f.serpapi_month_to_date != null) {
+    parts.push(`${f.serpapi_month_to_date.toLocaleString()} this month`);
+  }
+  if (f.serpapi_monthly_plan) {
+    parts.push(`plan ${f.serpapi_monthly_plan.toLocaleString()}`);
+  }
+  return parts.join(" · ");
+}
+
+/** "Market scan (cold): 4p [0.9, 0.6, 0.4, 0.1] → 31 new / 3 new cos" */
+export function formatGooglePerQueryLine(entry: GooglePerQueryFunnel): string {
+  const name = (entry.search ?? "?").split(" — ")[0];
+  const cold = entry.cold_start ? " (cold)" : "";
+  const ratios = (entry.pages ?? [])
+    .map((p) => (p.new_ratio == null ? "?" : p.new_ratio.toFixed(2)))
+    .join(", ");
+  const pages = entry.pages?.length ?? 0;
+  const stop = entry.stop_reason ? ` · stop: ${entry.stop_reason}` : "";
+  return (
+    `${name}${cold}: ${pages}p [${ratios}] → ` +
+    `${entry.new_listings ?? 0} new / ${entry.new_companies ?? 0} new cos${stop}`
+  );
 }
 
 /** Cumulative DB snapshot — not single-run yield. */

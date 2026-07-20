@@ -49,6 +49,56 @@ class CRMClient:
             logger.warning("CRM domain lookup failed: %s", exc)
             return set()
 
+    def check_known_listings(
+        self,
+        *,
+        urls: list[str],
+        companies: list[str],
+    ) -> dict[str, Any] | None:
+        """Which of these job URLs / company names already exist in the CRM.
+
+        Powers per-page marginal-yield pagination. Returns None on any
+        failure so callers fail SAFE (stop paginating) rather than spending
+        SerpApi credits on an unverifiable new-ratio.
+        """
+        if not self.is_configured:
+            return None
+        if not urls and not companies:
+            return {"known_urls": [], "known_companies": []}
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/jobs/known",
+                headers=self._headers(),
+                json={"urls": urls, "companies": companies},
+                timeout=20,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return {
+                "known_urls": data.get("known_urls") or [],
+                "known_companies": data.get("known_companies") or [],
+            }
+        except requests.RequestException as exc:
+            logger.warning("CRM known-listings lookup failed: %s", exc)
+            return None
+
+    def post_usage_events(self, events: list[dict[str, Any]]) -> bool:
+        """Batch provider usage events (audit trail; local meter stays authoritative)."""
+        if not self.is_configured or not events:
+            return False
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/pipeline/usage",
+                headers=self._headers(),
+                json={"events": events},
+                timeout=20,
+            )
+            resp.raise_for_status()
+            return True
+        except requests.RequestException as exc:
+            logger.warning("CRM usage-events post failed: %s", exc)
+            return False
+
     def get_enrichment_queue(self, *, limit: int = 25) -> list[dict[str, Any]]:
         if not self.is_configured:
             return []

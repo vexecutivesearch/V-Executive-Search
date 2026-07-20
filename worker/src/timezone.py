@@ -25,3 +25,9 @@ def business_list_date() -> date:
 def business_run_slot() -> str:
     """am before noon ET (5 AM scrape), pm otherwise (6 PM scrape)."""
     return "am" if _now().hour < 12 else "pm"
+
+
+def is_business_weekday(day: date | None = None) -> bool:
+    """Mon–Fri in the business timezone (schedule gates use business days)."""
+    target = day or business_today()
+    return target.weekday() < 5

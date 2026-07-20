@@ -14,6 +14,18 @@ function unique(values) {
   return [...new Set(values.map((value) => String(value).trim()).filter(Boolean))];
 }
 
+// Keep in sync with GOOGLE_ZONE_OVERRIDES in src/lib/state-geo-expanded-seed.ts.
+const GOOGLE_ZONE_OVERRIDES = {
+  "dallas-fort worth": ["Dallas", "Fort Worth"],
+};
+
+function googleZonesForMarket(market) {
+  if (market.googleZones?.length) return market.googleZones;
+  const override = GOOGLE_ZONE_OVERRIDES[norm(market.marketName)];
+  if (override) return override;
+  return market.scrapeHubs.slice(0, 1);
+}
+
 function toStateGeoConfig(seed) {
   const selected =
     seed.markets.find((market) => norm(market.marketName) === norm(seed.defaultMarket)) ??
@@ -31,6 +43,7 @@ function toStateGeoConfig(seed) {
         metroCities: market.scrapeHubs,
         metroAliases: market.aliases,
         focusCounties: market.focusCounties,
+        googleZones: googleZonesForMarket(market),
       },
     ]),
   );

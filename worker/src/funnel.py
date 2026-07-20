@@ -32,6 +32,21 @@ class ScrapeFunnel:
     scrape_linkedin_cap_per_search: int = 30
     scrape_by_board: dict[str, int] = field(default_factory=dict)
     board_failures: list[str] = field(default_factory=list)
+    # Intentional skips (e.g. "google: schedule_gate (pm run)") — informational,
+    # NEVER a board_failure: a planned skip must not read like an outage.
+    board_skips: list[str] = field(default_factory=list)
+    # SerpApi meter — every request counted, failures included (they bill too).
+    serpapi_searches: int = 0
+    serpapi_searches_failed: int = 0
+    serpapi_month_to_date: int = 0
+    serpapi_monthly_plan: int = 0
+    serpapi_budget_threshold: int = 0
+    serpapi_run_cap: int = 0
+    # Zone collapse + yield pagination + adaptive frequency visibility.
+    google_zones_used: list[str] = field(default_factory=list)
+    google_zone_queries_skipped: int = 0
+    google_adaptive_skips: list[str] = field(default_factory=list)
+    google_per_query: list[dict[str, Any]] = field(default_factory=list)
     poster_pages_fetched: int = 0
     poster_public_block_in_html: int = 0
     meet_team_in_html: int = 0

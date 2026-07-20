@@ -93,6 +93,41 @@ set `false` for faster scrape-only validation runs.
 
 Default job boards: **Indeed, LinkedIn, ZipRecruiter**. **Google Jobs** uses **SerpApi** when `SERPAPI_API_KEY` is set on the Mac worker (auto-enabled at scrape time). JobSpy’s Google scraper is not used. Glassdoor is available but off. Toggle in `/admin` → Job boards.
 
+### SerpApi credit optimization (Google board only)
+
+The pipeline still runs **both 6 AM and 6 PM, seven days a week** — Indeed and
+LinkedIn scrape in both runs. The Google/SerpApi board is metered, capped, and
+gated (all knobs config-driven — CRM `serpapi` config block overridable by
+worker env; see `worker/.env.example`):
+
+- **Meter first**: every SerpApi request (failures included — they bill) is
+  counted per run and month-to-date (resets on the plan renewal day, default
+  the 11th). Shown on the Runs page: `google: 42 searches · 3,812 this month ·
+  plan 15,000`. The worker's local counter (`~/.vsearch/serpapi_usage.json`)
+  reconciles as **max(local, CRM usage events)** — the guard can only ever
+  over-count, never blind-overspend.
+- **Hard per-run cap** (`SERPAPI_RUN_CAP`, default 200): loop bugs can't drain
+  the month. Trips → `board_failure: serpapi_run_cap`; the rest of the run is
+  normal.
+- **Monthly budget guard** (default 80% of plan): trips → alert email +
+  `board_failure: serpapi_budget`; Google skips, Indeed/LinkedIn carry the
+  run, the backlog is protected by the outage guard.
+- **Zone collapse**: Google queries 1–2 zones per market (metro center;
+  per-market override via `state_geo_configs.metro_presets[].googleZones`,
+  e.g. DFW adds Fort Worth). Free boards keep the full 8-hub list.
+- **Schedule gate**: Google runs 6 AM only, weekdays only — logged as
+  `board_skipped: schedule_gate` (informational, never a failure). A manual
+  afternoon "Run now" therefore skips Google; force with
+  `SERPAPI_SCHEDULE_GATE_BYPASS=1` or widen `GOOGLE_BOARD_RUNS`/`GOOGLE_BOARD_DAYS`.
+- **Marginal-yield pagination** (NOT a fixed page cap): pages continue while
+  the per-page net-new ratio ≥ `GOOGLE_PAGE_MIN_YIELD` (0.3); `GOOGLE_MAX_PAGES`
+  (5) is a circuit breaker and cold markets get `GOOGLE_MAX_PAGES_COLD` (10).
+  If the CRM known-listings lookup is down, pagination stops (never spend
+  blind). Per-page ratios are logged in the funnel.
+- **Adaptive title frequency**: titles with zero net-new companies in a market
+  for 3 consecutive runs drop to every-2-days there; any net-new promotes
+  back to daily. `GOOGLE_ADAPTIVE_ENABLED=false` reverts to daily everywhere.
+
 ### Legacy note
 
 Older installs used a single 6 AM / 6 PM job (`com.vexecsearch.daily`). Re-run `cd worker && ./scripts/install_launchd.sh` to migrate to the JIT schedule.
