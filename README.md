@@ -18,11 +18,13 @@ On a **home Mac worker** (launchd), twice daily at **5 AM and 6 PM ET**:
 2. **Dedupe** — collapse listings to companies; skip domains already in CRM
 3. **Sync** — chunked jobs-only ingest to Neon via Vercel `/api/ingest` (avoids Vercel body-size 413s on large markets)
 4. **Score / hygiene** — free backlog rescore, stale-listing archive, presence checks
-5. **Email** — daily HTML call-sheet report via Resend
+5. **Email** — **07:45 ET** call-sheet report via Resend (waits for morning ingest if Stage 1 is still running)
 
 **Paid enrichment (Apollo / ContactOut) is manual-only** — use **Find contacts** on a company card. Scheduled jobs must not spend provider credits.
 
-Admin **Run now** uses the same scrape-only / jobs-only path via a 5-minute poll.
+**Canonical CRM:** `https://v-executive-search-delta.vercel.app` (never the legacy `v-executive-search.vercel.app` host).
+
+Admin **Run now** uses the same scrape-only / jobs-only path via a 5-minute poll. Google Jobs uses **SerpApi** when keyed (AM weekdays by default — see [DEPLOY.md](DEPLOY.md)).
 
 ## The CRM app (`/crm` is the home page)
 
@@ -74,9 +76,10 @@ python scripts/run_daily.py --dry-run
 In the **canonical** env file (`~/.vsearch/worker.env` after bootstrap):
 
 ```env
-CRM_API_URL=https://your-app.vercel.app
+CRM_API_URL=https://v-executive-search-delta.vercel.app
 CRM_API_KEY=<same as WORKER_API_KEY on Vercel>
 CONTACTOUT_API_KEY=<ContactOut API token>
+# SERPAPI_API_KEY=...   # Google Jobs on the Mac worker
 ```
 
 ## Admin configuration (no redeploy needed)
@@ -95,10 +98,14 @@ Cross-state metros keep true hub states (e.g. Charlotte includes **Rock Hill, SC
 
 | Doc | When to read |
 |-----|----------------|
-| **[DEPLOY.md](DEPLOY.md)** | New Vercel env, Neon DB, Mac worker, **release promotion**, env vars |
+| **[DEPLOY.md](DEPLOY.md)** | New Vercel env, Neon DB, Mac worker, **bootstrap / promote**, SerpApi, Outreach IMAP |
+| [docs/OPS-CHANGELOG-JUL-2026.md](docs/OPS-CHANGELOG-JUL-2026.md) | Jul 2026 ops: SerpApi, PR #18 email wait, ICP annotate, **PR #14 pending** |
 | [worker/README.md](worker/README.md) | Worker scripts, launchd, JobSpy boards, LinkedIn posters, ContactOut API |
 | [docs/V-EXECUTIVE-SEARCH-SYSTEM.md](docs/V-EXECUTIVE-SEARCH-SYSTEM.md) | Product + pipeline operating model |
+| [docs/V-Executive-Search-Playbook.md](docs/V-Executive-Search-Playbook.md) | Operator playbook (keep in sync with system guide) |
 | [docs/state-geo-expanded-coverage.md](docs/state-geo-expanded-coverage.md) | Per-market Census/OMB counties and excluded hubs |
 | [Playwright/README.md](Playwright/README.md) | **Archived** dashboard automation (not in production) |
 
-**Important:** Scraping and launchd run on **one home Mac** with a residential IP. Vercel hosts the CRM only. Your MacBook browser is enough for `/admin` — it does not need the worker installed unless it *is* the worker Mac.
+**Important:** Scraping and launchd run on **one home Mac** with a residential IP. Vercel hosts the CRM only. After every `worker-production` tip move, **bootstrap** on the mini (`WORKER_BOOTSTRAP_PYTHON=/opt/homebrew/bin/python3.12`) — never mid-scrape. Your MacBook browser is enough for `/admin` unless it *is* the worker Mac.
+
+**PR #14 (Outreach Sequencer)** is pending weekend stress-test before merge — see OPS changelog.

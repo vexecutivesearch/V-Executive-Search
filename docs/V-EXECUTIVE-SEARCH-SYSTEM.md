@@ -9,7 +9,7 @@
 
 ## Executive summary
 
-V Executive Search is a **recruiting operating system** built for one recruiter working focused metro markets (DB-backed presets across **14 states / 61 markets** — e.g. Charlotte, NC–SC; Florida markets including West Palm Beach). It runs overnight on a home Mac, ranks the local hiring market for free, spends paid enrichment credits only when you manually Enrich a lead you will call, and delivers a **ranked call sheet** to your inbox by ~6 AM.
+V Executive Search is a **recruiting operating system** built for one recruiter working focused metro markets (DB-backed presets across **14 states / 61 markets** — e.g. Charlotte, NC–SC; Florida markets including West Palm Beach). It runs overnight on a home Mac, ranks the local hiring market for free, spends paid enrichment credits only when you manually Enrich a lead you will call, and delivers a **ranked call sheet** to your inbox by ~7:45 AM ET (after the 5 AM scrape ingest lands).
 
 Your job is not to hunt listings, build spreadsheets, or update a CRM after the fact. Your job is to **pick up the phone and have the conversation** — with a reason to call, a suggested opener, and the best contact channel already surfaced.
 
@@ -29,18 +29,18 @@ Think of it as three layers:
 ┌─────────────────────────────────────────────────────────────────┐
 │  YOU (Alejandro)                                                 │
 │  Phone · judgment · relationships · closing                      │
-│  Interfaces: 6 AM email · /crm Pipeline · /admin from phone       │
+│  Interfaces: ~7:45 AM email · /crm Pipeline · /admin from phone  │
 └────────────────────────────▲────────────────────────────────────┘
                              │
 ┌────────────────────────────┴────────────────────────────────────┐
-│  CRM (Vercel + Neon)                                             │
+│  CRM (Vercel + Neon) — delta host only                           │
 │  Pipeline (All Leads · Job Listings · Call List · Hot) · Runs    │
 │  Lead scoring · ICP fit scoring · selective enrich · openers     │
 └────────────────────────────▲────────────────────────────────────┘
                              │ HTTPS
 ┌────────────────────────────┴────────────────────────────────────┐
 │  Mac worker (always-on, residential IP)                          │
-│  Scrape · chunked jobs-only ingest · rescore · iMessage · email  │
+│  5 AM/6 PM scrape · SerpApi Google · ingest · rescore · email    │
 │  Paid Apollo/ContactOut only via manual Enrich                   │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -51,7 +51,7 @@ Think of it as three layers:
 | **CRM** | Stores every company, job, contact, score, and note. Ranks the backlog. Hosts the UI you work from. |
 | **You** | Works the call sheet. Logs outcomes. Moves deals forward. The system never replaces the live conversation. |
 
-**What it is not:** a mass-email blaster, a LinkedIn automation bot, or a VA replacement for judgment. Outbound sequences and cold SMS are explicitly out of scope — human-initiated outreach only.
+**What it is not:** a mass-email blaster, a LinkedIn automation bot, or a VA replacement for judgment. Cold SMS spam remains out of scope. **PR #14 (Outreach Sequencer)** — reply-aware email/iMessage sequences enrolled from Call List — is **pending weekend stress-test before merge**; treat as in-flight, not production-complete. See [OPS-CHANGELOG-JUL-2026.md](OPS-CHANGELOG-JUL-2026.md).
 
 ---
 
@@ -59,7 +59,7 @@ Think of it as three layers:
 
 ### Market intelligence (free, every night)
 
-- Scrapes **Indeed, Google Jobs, LinkedIn, and ZipRecruiter** for your active title searches in your geo focus.
+- Scrapes **Indeed, LinkedIn, and ZipRecruiter** (plus **Google Jobs via SerpApi** when keyed — AM/weekday-gated by default) for your active title searches in your geo focus.
 - Deduplicates by company and tracks **job resights** — when the same posting appears again, the system counts it instead of silently skipping it.
 - Resolves company domains via Apollo org search (no enrichment credits).
 - Filters to your **ICP**: company size band, staffing-agency blocklist, in-focus geography, HR-only deprioritization.
@@ -99,7 +99,7 @@ Enrich is a **two-stage split** (July 2026) so you pay reveal credits only for t
 
 ### Delivery & prep (free)
 
-- **6 AM call sheet email** — ranked company cards, not a table dump:
+- **~7:45 AM call sheet email** — ranked company cards, not a table dump (waits for 5 AM scrape ingest; Admin **Send today’s call sheet** if Mac email fails):
   - Funnel header: `Scraped → ICP match → Enriched · Credits`
   - Rank, score badge, contact, **why now**, channel chips, job title, CRM link
   - Top-3 "call first" summary line
@@ -120,7 +120,7 @@ Enrich is a **two-stage split** (July 2026) so you pay reveal credits only for t
 
 **Filters (server-side, before the pagination cap):** State, City, Sector, Status, search, Callable-only, Enriched-only, **Discovered-only**, plus **ICP** filters — Role type, Company size, Comp ≥ (with include-estimated), ICP ≥, and per-category **Hide toggles** (Fortune / gov / schools / hospitals / staffing / third-party, all default OFF — bad fits *sink*, they're never removed; "show deprioritized" restores them). Multi-location companies surface the **filter-matching listing** first (Virginia shows the VA job, not an out-of-state one). Filtered CSV export.
 
-**ICP fit scoring** (annotation-only, `company_icp` table). Every lead gets a dual score: `base_lead_score → icp_adjusted_score` (recruiter-fit multiplier + role/size/comp/private adjustments), plus exclusion flags with per-flag confidence, role type, comp estimate, size band. The default sort is **ICP fit** — Fortune 500 / big-box / hospital-system leads sink below mid-size private professional-role leads but stay reachable. Deterministic hard-excludes (exact Fortune/known-agency name, `.gov`) are the only hide-eligible flags; everything pattern-based only deprioritizes.
+**ICP fit scoring** (annotation-only, `company_icp` table). Every lead gets a dual score: `base_lead_score → icp_adjusted_score` (recruiter-fit multiplier + role/size/comp/private adjustments), plus exclusion flags with per-flag confidence, role type, comp estimate, size band. The default sort is **ICP fit** — Fortune 500 / big-box / hospital-system leads sink below mid-size private professional-role leads but stay reachable. Deterministic hard-excludes (exact Fortune/known-agency name, `.gov`) are the only hide-eligible flags; everything pattern-based only deprioritizes. **`/api/ingest` auto-annotates** touched companies after each chunk so Pipeline badges appear without a manual script (`npx tsx scripts/icp-annotate.ts` for full backfill).
 
 ### Call List (`/crm?tab=call-list`)
 
@@ -144,8 +144,9 @@ Full job history, contacts (with all channels + verification badges), **activity
 - Job board toggles (A/B which sources produce net-new companies)
 - Active title searches and optional focus keywords (legal/HR/finance/etc.)
 - **Enrichment quotas:** still configure thresholds for when you Enrich; scheduled paid egress stays off
-- **Worker status** — release SHA / drift vs `origin/worker-production`
+- **Worker status** — release SHA / drift vs `worker-production` (bootstrap after every tip move)
 - **Run now** — triggers scrape-only/jobs-only ingest from anywhere; worker polls every 5 minutes
+- **Send today’s call sheet** — Resend from Vercel if Mac 07:45 email failed
 
 ### Hygiene (automatic)
 
@@ -162,10 +163,10 @@ This is the workflow the system is designed around:
 
 | Time | You | The system |
 |------|-----|------------|
-| **Before 6 AM** | Sleep | Scrape → chunked jobs-only ingest → filter → score → presence checks → build email |
-| **6:00 AM** | Open call sheet email on phone | Ranked leads with reasons, channels, openers (enriched rows you already worked) |
-| **6:15 AM** | Skim top 3, open `/crm` (Pipeline) | Full detail, filter by market for context |
-| **7:00–11:00** | **Call block** — work the sheet top-down | — |
+| **Overnight** | Sleep | 05:00 scrape → chunked jobs-only ingest → posters; 06:30 rescore; 07:30 presence |
+| **~7:45 AM** | Open call sheet email on phone | Email waits for ingest; ranked leads (enriched rows you already worked) |
+| **8:00 AM** | Skim top 3, open `/crm` (Pipeline) | Full detail, filter by market for context |
+| **8:00–11:00** | **Call block** — work the sheet top-down | — |
 | **Per call** | Read opener chip → dial → converse | — |
 | **After each call** | Expand row → Log call → paste notes → Save & mark contacted | Haiku summarizes, updates timeline |
 | **11:30 AM** | Check backlog tab for anything that heated up overnight | Rescored automatically |
@@ -293,7 +294,7 @@ These are the highest-leverage next steps, ordered by impact on your daily outpu
 
 ### Medium-term (system extensions)
 
-5. **Trigger-based prospect email** (spec §8) — short sequences (day 0 / 3 / 7) personalized off `reasonToCall`, sent from your domain, human-approved. Extends reach without replacing calls.
+5. **Outreach Sequencer (PR #14)** — reply-aware email/iMessage from Call List; stress-test this weekend before merge. Spec §8.
 6. **Weekly hot-backlog digest** — email summary of top 10 backlog companies whose scores jumped (reposts, new openings). Lets you manually Enrich a strategic pick outside the daily batch.
 7. **Callback reminders** — when AI classifies a call as "callback," surface it on tomorrow's call sheet header.
 8. **Placement feedback loop** — tag which signals predicted placements; refine scoring weights over time.
@@ -445,21 +446,20 @@ Design rules:
 
 | Time | Job | Cost |
 |---|---|---|
-| 06:00 | Scrape all boards → chunked jobs-only ingest | free |
+| 05:00 | Scrape (Indeed/LinkedIn/ZR + SerpApi Google if gated) → chunked jobs-only ingest → LinkedIn posters | free |
 | 06:15 | Archive stale listings | free |
-| 06:30 | Filter ICP + re-score full backlog | free |
+| 06:30 | Re-score backlog (**never** creates empty ghost `daily_runs`) | free |
 | 07:30 | Presence check (iMessage + email MX) | free |
-| 07:45 | Build + send daily call sheet email | free |
-| 18:00 | Scrape all boards → chunked jobs-only ingest | free |
-| 18:30 | Filter ICP + re-score full backlog | free |
-| every 5 min | Admin "Run now" poll, scrape-only by default | free |
+| 07:45 | Build + send daily call sheet email (**waits** for ingest) | free |
+| 18:00 | Evening scrape → chunked jobs-only ingest → posters | free |
+| 18:30 | Re-score backlog | free |
+| every 5 min | Admin "Run now" poll; Outreach pump when PR #14 tip is live | free |
 
 Enrichment is manual only. Apollo and ContactOut paid egress must carry an
 explicit per-company manual enrich context; scheduled jobs must not call paid
 provider APIs.
 
-Worker code ships via `origin/worker-production` + `bootstrap_release.sh` (see DEPLOY.md).
-Large ingest payloads are chunked (~200 companies / ~3.5 MB) to avoid Vercel 413.
+Worker code ships via `worker-production` on **both remotes** (`origin` + `vexec`) + `bootstrap_release.sh` with `WORKER_BOOTSTRAP_PYTHON=/opt/homebrew/bin/python3.12` (see [DEPLOY.md](../DEPLOY.md)). Never bootstrap mid-scrape. Large ingest payloads are chunked (~200 companies / ~3.5 MB) to avoid Vercel 413.
 
 ---
 
@@ -478,9 +478,9 @@ The only knob is **N** (Stage 4). One recruiter → 25/day. Add a closer → 50.
 
 ---
 
-### 8. Later (not now): prospect outreach
+### 8. Prospect outreach (PR #14 — pending)
 
-The daily call sheet is *internal*. When you add outbound email to prospects, keep it **trigger-based** (personalized off the scoring signal), on a short sequence (day 0 / 3 / 7 then stop), sent from your domain, CAN-SPAM compliant (real identity + opt-out). Never a daily blast to the same person. This is a separate module from the digest above.
+The daily call sheet is *internal*. **PR #14 Outreach Sequencer** adds reply-aware email + iMessage automation enrolled from Call List (IMAP OAuth for M365). Do **not** treat as merged until weekend stress tests pass. Design intent remains: trigger-based, short sequences, sent from your domain, CAN-SPAM compliant — never a daily blast. Ops notes: [OPS-CHANGELOG-JUL-2026.md](OPS-CHANGELOG-JUL-2026.md) · [DEPLOY.md](../DEPLOY.md).
 
 ---
 
@@ -511,14 +511,18 @@ The daily call sheet is *internal*. When you add outbound email to prospects, ke
 | Credit alerts | ✅ Live |
 | DB-backed geo (14 states / 61 markets, Census/OMB) | ✅ Live |
 | Admin Market switch + cross-state hubs | ✅ Live |
+| SerpApi Google Jobs (meter, caps, schedule gate) | ✅ Live (PR #13) |
+| Morning email waits for ingest; no ghost rescore runs | ✅ Live (PR #18) |
+| Admin **Send today’s call sheet** | ✅ Live (PR #18) |
+| ICP annotate after every ingest | ✅ Live |
 | Worker release (`worker-production` + bootstrap) | ✅ Live |
 | Chunked CRM ingest (Vercel 413-safe) | ✅ Live |
 | LinkedIn hiring-team poster crawl (optional) | ✅ Live |
 | Charlotte first-market scrape validation | ✅ Done (Jul 2026) |
-| Trigger-based prospect email sequences | 🔜 Roadmap |
+| Outreach Sequencer + M365 IMAP OAuth | 🧪 **PR #14 pending** (weekend test before merge) |
 
 ---
 
-*Document version: 1.2 · July 2026 · V Executive Search / Proven Theory*
-*v1.2 adds: Pipeline CRM (home page) with market/state/city rail, ICP fit scoring, persistent Call List, discovery→reveal selective enrichment with ContactOut-first waterfall and sector-aware (legal) contact targeting, rebuilt Runs ledger, and the Legacy page. See Appendix B.*
+*Document version: 1.3 · July 2026 · V Executive Search / Proven Theory*
+*v1.3 adds: SerpApi credit optimization, 5 AM/7:45 schedule + email wait, ICP annotate-after-ingest, Mac bootstrap dual-remote promote, PR #14 Outreach pending. See [OPS-CHANGELOG-JUL-2026.md](OPS-CHANGELOG-JUL-2026.md) and [DEPLOY.md](../DEPLOY.md).*
 *Shareable twin: `docs/V-Executive-Search-Playbook.md` (keep in sync with this file).*

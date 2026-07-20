@@ -1117,7 +1117,7 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
       <section className="border rounded-xl p-5 space-y-3 dark:border-gray-800">
         <h2 className="font-semibold text-lg">Daily email — Hot Listings</h2>
         <p className="text-sm text-gray-500">
-          On by default for 6 AM and 6 PM sends. Uses the same Hot Listings filter
+          On by default for 5 AM and 6 PM sends. Uses the same Hot Listings filter
           as the Today tab (mid-size, role families, geo, exclusions).
         </p>
 

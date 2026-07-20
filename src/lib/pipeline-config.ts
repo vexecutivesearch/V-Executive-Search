@@ -520,7 +520,7 @@ export function buildBoardSchedules(): Record<
     .trim()
     .toLowerCase();
   return {
-    // Google (SerpApi, paid): 6 AM run only, weekdays only. In the 6 PM run
+    // Google (SerpApi, paid): 5 AM run only, weekdays only. In the 6 PM run
     // and on weekends the worker logs board_skipped: schedule_gate — the
     // launchd schedule and every other board are untouched.
     google: { runs: runs.length ? runs : ["am"], days: days || "weekdays" },

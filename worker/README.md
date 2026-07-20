@@ -38,10 +38,11 @@ LINKEDIN_FETCH_HIRING_TEAM=false python scripts/run_daily.py --scrape-only
 Do **not** `git pull origin main` into the live launchd tree. Promote a tested SHA, then bootstrap:
 
 ```bash
-# From any machine with push access:
+# From any machine with push access (both remotes if you use origin + vexec):
 git push origin <tested-sha>:refs/heads/worker-production
+git push vexec <tested-sha>:refs/heads/worker-production
 
-# On the mini, from the editable clone:
+# On the mini, from the editable clone — ONLY when no scrape is running:
 WORKER_BOOTSTRAP_PYTHON=/opt/homebrew/bin/python3.12 \
   bash worker/scripts/bootstrap_release.sh
 bash worker/scripts/verify_release_launchd.sh
@@ -50,7 +51,8 @@ bash worker/scripts/verify_release_launchd.sh
 - Release source: `origin/worker-production` (never raw `main`)
 - Default release path: `…/V-Executive-Search-release` (detached HEAD at promoted SHA)
 - Previous release retained for rollback
-- Admin drift compares mini heartbeat SHA to the expected release ref (detached HEAD is OK when SHA matches)
+- Admin drift compares mini heartbeat SHA to the expected release ref (detached HEAD is OK when SHA matches and **drift is false**)
+- Tip move **without** bootstrap leaves launchd on a stale SHA
 
 Optional: `WORKER_SELF_SYNC_ENABLED=true` in the canonical env pulls the release ref before a run.
 
@@ -74,10 +76,10 @@ WORKER_ENV_FILE="$HOME/.vsearch/worker.env" ./scripts/install_launchd.sh
 | `com.vexecsearch.hygiene` | 6:15 AM | Archive stale listings |
 | `com.vexecsearch.rescore` | 6:30 AM | Re-score backlog |
 | `com.vexecsearch.presence` | 7:30 AM | iMessage + email MX checks |
-| `com.vexecsearch.email` | 7:45 AM | Daily email |
+| `com.vexecsearch.email` | 7:45 AM | Call sheet email (**waits** for ingest; default 2h) |
 | `com.vexecsearch.scrape-pm` | 6:00 PM | Evening scrape → chunked jobs-only CRM ingest |
 | `com.vexecsearch.rescore-pm` | 6:30 PM | Evening re-score |
-| `com.vexecsearch.poll` | Every 5 minutes | Admin **Run now**, scrape-only by default |
+| `com.vexecsearch.poll` | Every 5 minutes | Admin **Run now**; Outreach pump when PR #14 tip is live |
 
 ```bash
 launchctl list | grep vexecsearch
@@ -126,10 +128,12 @@ Enabled in `/admin` → **Job boards**. Default: `indeed`, `linkedin`, `zip_recr
 | Board | Notes |
 |-------|-------|
 | **Indeed** | Reliable baseline / workhorse |
-| **Google Jobs** | **SerpApi** when `SERPAPI_API_KEY` is set on the worker (auto-enabled). JobSpy Google is unused. |
+| **Google Jobs** | **SerpApi** when `SERPAPI_API_KEY` is set (auto-enabled). Metered + AM/weekday schedule gate by default. JobSpy Google is unused. |
 | **LinkedIn Jobs** | Senior/corporate roles; higher block risk — watch logs |
 | **ZipRecruiter** | Often Cloudflare 403 — keep on for loud `board_failure`; overlaps Indeed |
 | **Glassdoor** | Off by default; overlaps Indeed |
+
+SerpApi knobs (`SERPAPI_RUN_CAP`, budget %, `GOOGLE_BOARD_RUNS`, etc.): `worker/.env.example` and [DEPLOY.md](../DEPLOY.md). Leave `SERPAPI_SCHEDULE_GATE_BYPASS` **unset** in production.
 
 JobSpy also supports Bayt, Naukri, BDJobs (international) — not exposed in admin UI.
 
@@ -164,10 +168,25 @@ python scripts/test_contactout_hybrid.py
 
 ### iMessage check (Mac worker only)
 
-Runs at end of each 6 AM / 6 PM run (Messages must be signed in):
+Presence job at **7:30 AM** (Messages must be signed in on the worker Mac):
 
 ```bash
 python scripts/check_imessage.py --limit 20
+```
+
+### Outreach IMAP (PR #14 — pending merge)
+
+When testing the Outreach tip on `worker-production`, prefer **Microsoft 365 OAuth** over mailbox passwords (GoDaddy often hides app passwords). See [DEPLOY.md](../DEPLOY.md) → Outreach IMAP and [docs/OPS-CHANGELOG-JUL-2026.md](../docs/OPS-CHANGELOG-JUL-2026.md).
+
+```bash
+WORKER_ENV_FILE=~/.vsearch/worker.env .venv/bin/python scripts/outreach_imap_login.py
+```
+
+### Catch-up email
+
+```bash
+cd ~/Projects/V-Executive-Search-release/worker
+WORKER_ENV_FILE=~/.vsearch/worker.env .venv/bin/python scripts/run_daily.py --email-only
 ```
 
 ## Required env vars
@@ -175,14 +194,17 @@ python scripts/check_imessage.py --limit 20
 | Variable | Where | Purpose |
 |----------|-------|---------|
 | `APOLLO_API_KEY` | canonical env + Vercel | Discovery + work email |
-| `CRM_API_URL` | canonical env | Vercel app URL |
+| `CRM_API_URL` | canonical env | **`https://v-executive-search-delta.vercel.app`** |
 | `CRM_API_KEY` | canonical env + Vercel | Worker ↔ CRM auth |
 | `ALERT_EMAIL` | canonical env | Failure alerts |
 | `RESEND_API_KEY` | canonical env | Daily HTML email |
 | `REPORT_FROM_EMAIL` | canonical env | Email sender |
 | `CONTACTOUT_API_KEY` | canonical env + Vercel | Personal email/mobile |
+| `SERPAPI_API_KEY` | canonical env | Google Jobs via SerpApi |
 | `WORKER_ENV_FILE` | launchd / shell | Path to canonical env (default `~/.vsearch/worker.env`) |
+| `WORKER_BOOTSTRAP_PYTHON` | bootstrap | e.g. `/opt/homebrew/bin/python3.12` |
 | `WORKER_SELF_SYNC_ENABLED` | optional | Sync to release ref before runs |
 | `WORKER_RELEASE_REF` | optional | Default `origin/worker-production` |
+| `OUTREACH_MS_CLIENT_ID` / `TENANT_ID` | PR #14 | IMAP OAuth (XOAUTH2) |
 
 Full guide: [DEPLOY.md](../DEPLOY.md).

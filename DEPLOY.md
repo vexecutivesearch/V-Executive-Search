@@ -2,27 +2,35 @@
 
 Use this guide when standing up a **new Vercel environment**, **new Neon database**, or **new Mac worker machine**. The system has three independent surfaces that must be wired together.
 
+**Ops changelog (Jul 2026 SerpApi, morning email wait, ICP annotate, Outreach/IMAP):**  
+[docs/OPS-CHANGELOG-JUL-2026.md](docs/OPS-CHANGELOG-JUL-2026.md)
+
+**Canonical CRM (locked):** `https://v-executive-search-delta.vercel.app`  
+Worker `CRM_API_URL` and email “Open CRM” links must **never** point at legacy `v-executive-search.vercel.app`.
+
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Vercel (Next.js CRM)          Neon Postgres                    │
-│  • /today, /companies, /admin  • companies, contacts, settings  │
-│  • /api/ingest, /api/pipeline  • pipeline_settings, job_boards  │
+│  Vercel (Next.js CRM) — delta host only        Neon Postgres    │
+│  • /crm Pipeline, /runs, /admin                • companies, …   │
+│  • /api/ingest (+ ICP annotate), /api/pipeline • daily_runs     │
 └────────────────────────────▲────────────────────────────────────┘
                              │ HTTPS + WORKER_API_KEY
 ┌────────────────────────────┴────────────────────────────────────┐
-│  Mac worker (ONE machine only — residential IP)                   │
-│  • launchd on a clean release checkout (origin/worker-production) │
-│  • JobSpy scrape (boards + geo from /admin) → jobs-only ingest    │
-│  • Free rescore / hygiene / email; paid enrich is manual-only     │
+│  Mac worker (ONE machine — residential IP)                        │
+│  • launchd on release checkout = origin/worker-production         │
+│  • Scrape → jobs-only ingest → LinkedIn posters (Stage 2b)        │
+│  • SerpApi Google (metered/gated); Indeed/LinkedIn always         │
+│  • 07:45 email WAITS for ingest; rescore never invents ghost runs │
 │  • Canonical env: ~/.vsearch/worker.env (never in git)            │
-│  • iMessage checks (Mac-only)                                     │
+│  • Paid enrich MANUAL ONLY; Outreach IMAP OAuth (PR #14 testing)  │
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
 │  Your MacBook / phone (optional — no worker install required)    │
 │  • Browser → /admin → state/market, boards, titles, Run now       │
+│  • Admin → Send today’s call sheet if Mac 07:45 email fails       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -31,7 +39,9 @@ Use this guide when standing up a **new Vercel environment**, **new Neon databas
 - Job scraping runs on **one home Mac** with a residential IP. Vercel hosts the CRM and admin UI only.
 - ContactOut uses the **API only** (`CONTACTOUT_API_KEY`) — no browser automation.
 - Job boards and geo are toggled in `/admin` (Postgres); the worker reads them on each run.
-- Promote worker code via `origin/worker-production`, not raw `main`. See [Worker release promotion](#worker-release-promotion).
+- Promote worker code via `worker-production` (**both** `origin` and `vexec` remotes if you use both), not raw `main`. See [Worker release promotion](#worker-release-promotion).
+- **Always bootstrap after promoting** — a tip move without `bootstrap_release.sh` leaves the mini on a stale SHA (Admin drift).
+- **Never bootstrap mid-scrape** — swapping the release worktree kills long Stage 1 / poster runs.
 
 ---
 
@@ -51,9 +61,19 @@ Use this guide when standing up a **new Vercel environment**, **new Neon databas
 ### Mac worker (dedicated machine — often Mac mini)
 
 - [ ] Clone repo on the **worker Mac** (editable checkout for promote/bootstrap only)
-- [ ] Create canonical env: `mkdir -p ~/.vsearch && cp worker/.env.example ~/.vsearch/worker.env` and fill keys
-- [ ] Promote a tested SHA to `worker-production`, then `bash worker/scripts/bootstrap_release.sh`
-- [ ] `bash worker/scripts/verify_release_launchd.sh` → all agents point at the release worktree
+- [ ] Install **Python ≥ 3.10** (Homebrew `python@3.12`); system `/usr/bin/python3` (3.9) is too old for the worker package
+- [ ] Create canonical env: `mkdir -p ~/.vsearch && cp worker/.env.example ~/.vsearch/worker.env` and fill keys  
+      Set `CRM_API_URL=https://v-executive-search-delta.vercel.app` (no trailing slash)
+- [ ] Promote a tested SHA to `worker-production` on **origin and vexec**, then:
+
+```bash
+WORKER_BOOTSTRAP_PYTHON=/opt/homebrew/bin/python3.12 \
+  bash worker/scripts/bootstrap_release.sh
+bash worker/scripts/verify_release_launchd.sh
+```
+
+- [ ] Admin → Worker status: SHA matches `worker-production`, **drift false**
+- [ ] Confirm `SERPAPI_SCHEDULE_GATE_BYPASS` is **unset** in `~/.vsearch/worker.env`
 - [ ] From the release checkout: `python scripts/health_check.py` → critical checks pass (no paid egress)
 - [ ] Admin → **Run now** → confirm poll picks it up within 5 minutes
 
@@ -69,33 +89,39 @@ The worker runs **staged free jobs twice daily** (5 AM and 6 PM scrape) instead 
 
 | Time (ET) | Job | Credits |
 |-----------|-----|---------|
-| 05:00 | Scrape → chunked `jobs_only` ingest (+ optional LinkedIn posters) | Free |
+| 05:00 | Scrape → chunked `jobs_only` ingest → LinkedIn posters (Stage 2b) | Free |
 | 06:15 | Archive stale listings | Free |
-| 06:30 | Rescore backlog | Free |
+| 06:30 | Rescore backlog (**never** creates empty ghost `daily_runs`) | Free |
 | 07:30 | iMessage + email MX presence checks | Free |
-| 07:45 | Build + send ranked call sheet email | Free |
-| 18:00 | Evening scrape → chunked `jobs_only` ingest (+ optional LinkedIn posters) | Free |
+| 07:45 | Call sheet email — **waits** until today’s `listings_scraped > 0` (default 2h) | Free |
+| 18:00 | Evening scrape → chunked `jobs_only` ingest → posters | Free |
 | 18:30 | Evening rescore backlog | Free |
+| Every 5 min | Poll: Admin **Run now**, optional Outreach pump (PR #14) | Free |
+
+**Ordering:** ingest lands in Neon **before** LinkedIn poster crawl. A slow Stage 1 (often finishing ~09:00 on large markets) must not leave Runs empty — if email fires first, it now polls CRM until ingest exists (or timeout).
 
 Admin **Run now** (5-min poll) runs scrape-only/jobs-only ingest by default.
-Apollo and ContactOut paid egress are manual-only and require a per-company
-manual enrich context.
+Apollo and ContactOut paid egress are manual-only.
 
 Large scrapes POST companies in chunks (~200 companies / ~3.5 MB) so Vercel
 does not return **413 Request Entity Too Large**. Later chunks zero
 `listings_scraped` so additive `daily_runs` counters stay correct.
 
+After each ingest chunk, CRM **ICP-annotates** touched companies (`company_icp`) so Pipeline badges (ICP N / role / est. salary) appear without a manual script.
+
 Configure **N** and score thresholds in `/admin` → Enrichment quotas.
 LinkedIn hiring-team poster crawl defaults on (`LINKEDIN_FETCH_HIRING_TEAM=true`);
 set `false` for faster scrape-only validation runs.
 
-**Today's Call Sheet** in the CRM uses a **5 AM – 5 AM Eastern** business day. Enriched leads appear on the call sheet tab; the backlog tab shows ranked companies awaiting enrichment.
+**Business day** for Runs / call sheet: **5 AM – 5 AM Eastern**.
 
 Default job boards: **Indeed, LinkedIn, ZipRecruiter**. **Google Jobs** uses **SerpApi** when `SERPAPI_API_KEY` is set on the Mac worker (auto-enabled at scrape time). JobSpy’s Google scraper is not used. Glassdoor is available but off. Toggle in `/admin` → Job boards.
 
+If Mac **07:45 email fails**, use Admin → **Send today’s call sheet** (Vercel Resend) once ingest is present.
+
 ### SerpApi credit optimization (Google board only)
 
-The pipeline still runs **both 6 AM and 6 PM, seven days a week** — Indeed and
+The pipeline still runs **both 5 AM and 6 PM, seven days a week** — Indeed and
 LinkedIn scrape in both runs. The Google/SerpApi board is metered, capped, and
 gated (all knobs config-driven — CRM `serpapi` config block overridable by
 worker env; see `worker/.env.example`):
@@ -115,10 +141,11 @@ worker env; see `worker/.env.example`):
 - **Zone collapse**: Google queries 1–2 zones per market (metro center;
   per-market override via `state_geo_configs.metro_presets[].googleZones`,
   e.g. DFW adds Fort Worth). Free boards keep the full 8-hub list.
-- **Schedule gate**: Google runs 6 AM only, weekdays only — logged as
+- **Schedule gate**: Google runs the **AM** slot only, weekdays only — logged as
   `board_skipped: schedule_gate` (informational, never a failure). A manual
   afternoon "Run now" therefore skips Google; force with
   `SERPAPI_SCHEDULE_GATE_BYPASS=1` or widen `GOOGLE_BOARD_RUNS`/`GOOGLE_BOARD_DAYS`.
+  **Production:** leave the bypass **unset**.
 - **Marginal-yield pagination** (NOT a fixed page cap): pages continue while
   the per-page net-new ratio ≥ `GOOGLE_PAGE_MIN_YIELD` (0.3); `GOOGLE_MAX_PAGES`
   (5) is a circuit breaker and cold markets get `GOOGLE_MAX_PAGES_COLD` (10).
@@ -127,10 +154,40 @@ worker env; see `worker/.env.example`):
 - **Adaptive title frequency**: titles with zero net-new companies in a market
   for 3 consecutive runs drop to every-2-days there; any net-new promotes
   back to daily. `GOOGLE_ADAPTIVE_ENABLED=false` reverts to daily everywhere.
+- Controller init errors are isolated — Indeed/LinkedIn still complete.
+
+### Outreach IMAP (PR #14 — testing; do not treat as merged until weekend sign-off)
+
+GoDaddy Microsoft 365 often **hides app passwords**. Prefer **OAuth device-code**:
+
+1. Entra → App registration (single-tenant) → Allow public client flows = Yes  
+2. API permissions → Microsoft Graph → Delegated → `IMAP.AccessAsUser.All` → Grant admin consent  
+3. In `~/.vsearch/worker.env`:
+
+```env
+OUTREACH_IMAP_HOST=outlook.office365.com
+OUTREACH_IMAP_USER=odv@vexecutivesearch.com
+OUTREACH_MS_CLIENT_ID=<app client id>
+OUTREACH_MS_TENANT_ID=<directory id>
+OUTREACH_IMAP_AUTH=auto
+```
+
+4. One-time on the mini (release or editable venv with `msal`):
+
+```bash
+WORKER_ENV_FILE=~/.vsearch/worker.env \
+  .venv/bin/python scripts/outreach_imap_login.py
+```
+
+Token cache: `~/.vsearch/outreach_msal_token.json` (chmod 600). Poll agent refreshes silently.
+
+Legacy `OUTREACH_IMAP_PASSWORD` remains a fallback only for tenants that still allow basic IMAP.
+
+Full product notes: [docs/OPS-CHANGELOG-JUL-2026.md](docs/OPS-CHANGELOG-JUL-2026.md).
 
 ### Legacy note
 
-Older installs used a single 6 AM / 6 PM job (`com.vexecsearch.daily`). Re-run `cd worker && ./scripts/install_launchd.sh` to migrate to the JIT schedule.
+Older installs used a single 6 AM / 6 PM job (`com.vexecsearch.daily`). Re-run bootstrap (or `install_launchd.sh`) to migrate to the JIT **5 AM / 6 PM** schedule.
 
 ---
 
@@ -172,19 +229,25 @@ npm run dev
 | Variable | Required | Purpose |
 |----------|----------|---------|
 | `APOLLO_API_KEY` | Yes | Contact discovery |
-| `CRM_API_URL` | Yes | `https://your-project.vercel.app` (no trailing path) |
+| `CRM_API_URL` | Yes | **`https://v-executive-search-delta.vercel.app`** (no path; never legacy host) |
 | `CRM_API_KEY` | Yes | **Must equal** Vercel `WORKER_API_KEY` |
 | `ALERT_EMAIL` | Yes | Pipeline failure alerts |
 | `RESEND_API_KEY` | Yes | Daily HTML report from worker |
 | `REPORT_FROM_EMAIL` | Yes | Resend-verified sender |
 | `CONTACTOUT_API_KEY` | Recommended | Personal email/mobile via LinkedIn URL |
 | `SERPAPI_API_KEY` | Optional | Google Jobs via SerpApi on the Mac worker (auto-enables Google board) |
+| `EMAIL_WAIT_FOR_SCRAPE_SECONDS` | Optional | Default `7200` — 07:45 waits for ingest |
+| `EMAIL_WAIT_POLL_SECONDS` | Optional | Default `60` |
+| `OUTREACH_MS_CLIENT_ID` | PR #14 | Entra app client ID for IMAP OAuth |
+| `OUTREACH_MS_TENANT_ID` | PR #14 | Entra directory ID (or `organizations`) |
+| `OUTREACH_IMAP_HOST` / `USER` | PR #14 | Usually `outlook.office365.com` + mailbox UPN |
 | `WORKER_SELF_SYNC_ENABLED` | Optional | Opt-in: sync to `WORKER_RELEASE_REF` before a run |
 | `WORKER_RELEASE_REF` | Optional | Default `origin/worker-production` (never raw `main`) |
 | `WORKER_ENV_FILE` | Recommended | Canonical secrets path, usually `~/.vsearch/worker.env` |
+| `WORKER_BOOTSTRAP_PYTHON` | Recommended | e.g. `/opt/homebrew/bin/python3.12` |
 | `LINKEDIN_FETCH_HIRING_TEAM` | Optional | Default `true`; set `false` to skip poster crawl (much faster) |
 
-See `worker/.env.example` for the full list.
+See `worker/.env.example` for the full list (SerpApi knobs, LinkedIn draws, Outreach).
 
 ---
 
@@ -192,34 +255,49 @@ See `worker/.env.example` for the full list.
 
 Worker runtime code is promoted on a **dedicated ref**, not by pulling `main` into the live launchd checkout.
 
-1. Land changes on a feature branch; merge/push as usual.
-2. After tests, `db:push` (if schema), and Vercel deploy: move `worker-production` to the tested SHA:
+1. Land changes on a feature branch; merge/push as usual (CRM → Vercel on `main`).
+2. After tests, `db:push` (if schema), and Vercel deploy: move `worker-production` to the tested SHA on **both remotes**:
 
 ```bash
-git fetch origin
+git fetch origin vexec
 git push origin <tested-sha>:refs/heads/worker-production
-# or: git branch -f worker-production <tested-sha> && git push origin worker-production
+git push vexec <tested-sha>:refs/heads/worker-production
 ```
 
-3. On the Mac mini, from the **editable** clone:
+If the tip is not a fast-forward (e.g. Outreach branch diverged from `main`), **merge `worker-production` into the feature branch first**, then push the merge commit — or use an explicit force only when intentional.
+
+3. On the Mac mini, from the **editable** clone (when **no scrape is running**):
 
 ```bash
 WORKER_BOOTSTRAP_PYTHON=/opt/homebrew/bin/python3.12 \
   bash worker/scripts/bootstrap_release.sh
 bash worker/scripts/verify_release_launchd.sh
+launchctl list | grep vexecsearch
 ```
 
 Bootstrap:
 
 - Fetches `origin/worker-production`
 - Builds a clean **detached** worktree (default `…/V-Executive-Search-release`)
-- Creates a fresh `.venv`, symlinks `~/.vsearch/worker.env` → `worker/.env`
+- Creates a fresh `.venv` (needs Python ≥ 3.10), symlinks `~/.vsearch/worker.env` → `worker/.env`
 - Reinstalls all eight launchd agents against that release
 - Keeps the previous release worktree for rollback
 
-Admin **Worker status** compares the mini’s reported SHA to the expected release ref. Detached `HEAD` is healthy when the SHA matches the promoted release.
+Admin **Worker status** compares the mini’s reported SHA to the expected release ref. Detached `HEAD` is healthy when the SHA matches and **drift is false**.
 
 Optional auto-sync before runs: set `WORKER_SELF_SYNC_ENABLED=true` in the canonical env (still only advances to `WORKER_RELEASE_REF`).
+
+### Catch-up / forensics commands
+
+```bash
+# Email only (uses wait-for-ingest when listings already present → immediate send)
+cd ~/Projects/V-Executive-Search-release/worker
+WORKER_ENV_FILE=~/.vsearch/worker.env .venv/bin/python scripts/run_daily.py --email-only
+
+# Logs (path after bootstrap)
+tail -200 logs/email_stderr.log
+tail -200 logs/scrape_am_stdout.log
+```
 
 ---
 
@@ -320,16 +398,23 @@ python scripts/test_contactout_hybrid.py
 | **404 on Vercel** | Root Directory empty; redeploy |
 | **Database not connected** | `DATABASE_URL` on Vercel + `db:push` |
 | **Worker ingest 401** | `CRM_API_KEY` ≠ `WORKER_API_KEY` |
-| **Worker ingest 413** | Need chunked ingest (`crm_client.ingest_batch`); promote worker ≥ `c4879bb` |
+| **Worker ingest 413** | Need chunked ingest (`crm_client.ingest_batch`); promote + bootstrap current tip |
 | **Run now does nothing** | Poll only on worker Mac; agents must target release checkout |
-| **Admin SHA drift** | Promote + bootstrap so heartbeat matches `origin/worker-production` |
+| **Admin SHA drift** | Promote + **bootstrap** so heartbeat matches `worker-production` |
+| **Runs shows × no run / 0 listings** | Check DB: real ingest may have landed later; ghost rescore rows are blocked by PR #18. Hard-refresh `/runs`. Old ghosts: delete zero-listing rows if still present |
+| **No morning email** | Check `logs/daily_*_email.log` / `email_stderr.log`. Network/Resend failures exit 1. After PR #18, email waits for ingest; use Admin **Send today’s call sheet** as backup |
+| **Email has 0 enriched leads** | Expected for scrape-only — report still includes top job posts / hot listings when configured |
+| **Bootstrap fails `requires Python >=3.10`** | Set `WORKER_BOOTSTRAP_PYTHON=/opt/homebrew/bin/python3.12` |
+| **Google skipped afternoon** | Schedule gate — normal; unset `SERPAPI_SCHEDULE_GATE_BYPASS` in prod |
 | **No LinkedIn jobs** | LinkedIn blocks scrapers sometimes; check daily log; toggle board off/on |
 | **ZipRecruiter 0 / 403** | Cloudflare blocks common; non-blocking `board_failure` — Indeed/LinkedIn still count |
+| **IMAP LOGIN failed (M365)** | Use OAuth device login (PR #14), not mailbox password with MFA |
 | **ContactOut no phones** | API plan may lack phone credits |
 | **ContactOut HTTP 429** | Wait for cooldown; clear rate-limit marker after cooldown |
 | **iMessage not tagging** | Messages signed in on worker Mac only |
 | **Old boards after deploy** | Open `/admin` → Job boards → Save (or wait for auto-backfill) |
 | **Wrong market hubs** | Confirm Admin Market; re-seed with `node scripts/seed-state-geo-configs.mjs` |
+| **Scraping legacy CRM host** | Set `CRM_API_URL` to delta only; worker forbids legacy hostname |
 
 ---
 
@@ -337,5 +422,7 @@ python scripts/test_contactout_hybrid.py
 
 - [README.md](README.md) — repo overview
 - [worker/README.md](worker/README.md) — worker scripts and env reference
+- [docs/OPS-CHANGELOG-JUL-2026.md](docs/OPS-CHANGELOG-JUL-2026.md) — SerpApi, morning forensics, IMAP, PR #14
 - [docs/state-geo-expanded-coverage.md](docs/state-geo-expanded-coverage.md) — market counties / excluded hubs
 - [docs/V-EXECUTIVE-SEARCH-SYSTEM.md](docs/V-EXECUTIVE-SEARCH-SYSTEM.md) — product + pipeline model
+- [docs/V-Executive-Search-Playbook.md](docs/V-Executive-Search-Playbook.md) — operator playbook
