@@ -395,6 +395,31 @@ export function AdminDashboard({
     setMessage(data.message || (res.ok ? "Run requested." : "Failed."));
   }
 
+  async function sendDailyReportNow() {
+    setMessage("Sending today's call sheet…");
+    const res = await fetch("/api/admin/send-daily-report", { method: "POST" });
+    const data = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      hint?: string;
+      ok?: boolean;
+      listings_scraped?: number;
+      leads?: number;
+      to?: string;
+      run_date?: string;
+    };
+    if (!res.ok) {
+      setMessage(
+        [data.error || "Failed to send call sheet.", data.hint]
+          .filter(Boolean)
+          .join(" "),
+      );
+      return;
+    }
+    setMessage(
+      `Call sheet emailed to ${data.to} — ${data.listings_scraped} listings, ${data.leads} leads (${data.run_date}).`,
+    );
+  }
+
   async function toggleProfile(id: string, isActive: boolean) {
     await fetch("/api/admin/search-profiles", {
       method: "PUT",
@@ -741,11 +766,16 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
         <label className="block text-sm">
           Daily report email
           <input
-            type="email"
+            type="text"
             value={form.notification_email}
             onChange={(e) => setForm({ ...form, notification_email: e.target.value })}
+            placeholder="you@company.com, other@company.com"
             className="mt-1 w-full border rounded-lg px-3 py-2 dark:bg-gray-900 dark:border-gray-700"
           />
+          <span className="mt-1 block text-xs text-gray-500">
+            Comma-separated OK. Morning send is 07:45 ET from the Mac; use Send
+            today&apos;s call sheet below if that job fails.
+          </span>
         </label>
 
         <button
@@ -1271,12 +1301,25 @@ LINKEDIN_LI_AT=<li_at cookie from browser DevTools>`}
           home Mac worker polls every 5 minutes and runs when requested. Paid
           Apollo/ContactOut enrichment stays manual per company.
         </p>
-        <button
-          onClick={triggerRun}
-          className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800"
-        >
-          Run now
-        </button>
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={triggerRun}
+            className="bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800"
+          >
+            Run now
+          </button>
+          <button
+            onClick={sendDailyReportNow}
+            className="bg-gray-900 text-white dark:bg-white dark:text-gray-900 px-4 py-2 rounded-lg text-sm font-medium"
+          >
+            Send today&apos;s call sheet
+          </button>
+        </div>
+        <p className="text-xs text-gray-500">
+          Send today&apos;s call sheet uses Vercel Resend (not the Mac 07:45 job).
+          Recipients: Admin notification email. Requires today&apos;s scrape to
+          have ingested (listings &gt; 0).
+        </p>
         {settings.lastRunAt && (
           <p className="text-xs text-gray-400">
             Last run: {new Date(settings.lastRunAt).toLocaleString()}
