@@ -268,8 +268,15 @@ export function formatPerSearchFunnelLine(entry: LinkedInPerSearchFunnel): strin
 
 /** This run only — scrape yield + posters. Per title: draws → union → in-focus. */
 export function formatRunFunnelLine(f: PipelineFunnel): string {
+  const byBoard = f.scrape_by_board
+    ? Object.entries(f.scrape_by_board)
+        .sort((a, b) => b[1] - a[1])
+        .map(([board, n]) => `${board} ${n}`)
+        .join(" · ")
+    : null;
   const parts = [
     f.scrape_total != null && `scraped ${f.scrape_total}`,
+    byBoard && `boards: ${byBoard}`,
     f.scrape_linkedin_deduped != null && `LI union ${f.scrape_linkedin_deduped}`,
     f.poster_parsed != null && `posters ${f.poster_parsed}`,
   ].filter(Boolean);
