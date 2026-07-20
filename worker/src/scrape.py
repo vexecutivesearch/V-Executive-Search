@@ -505,19 +505,28 @@ def scrape_all(
     funnel = ScrapeFunnel()
 
     # Google/SerpApi is metered and gated; all decisions live in the controller.
+    # Init must never abort LinkedIn/Indeed — wrap so a bad SerpApi/CRM setup
+    # degrades to google board_failure only.
     google_controller = None
     if "google" in boards and serpapi_google_enabled():
-        from src.crm_client import CRMClient
-        from src.google_board import GoogleBoardController
-        from src.timezone import business_run_slot
+        try:
+            from src.crm_client import CRMClient
+            from src.google_board import GoogleBoardController
+            from src.timezone import business_run_slot
 
-        crm = CRMClient()
-        google_controller = GoogleBoardController(
-            config,
-            run_slot=run_slot or business_run_slot(),
-            funnel=funnel,
-            crm=crm if crm.is_configured else None,
-        )
+            crm = CRMClient()
+            google_controller = GoogleBoardController(
+                config,
+                run_slot=run_slot or business_run_slot(),
+                funnel=funnel,
+                crm=crm if crm.is_configured else None,
+            )
+        except Exception as exc:
+            msg = f"google: controller_init_failed ({exc})"
+            funnel.board_failures.append(msg)
+            logger.exception(
+                "GoogleBoardController init failed — continuing with other boards"
+            )
     logger.info(
         "Job boards enabled: %s (LinkedIn draws/search=%d Indeed draws/search=%d)",
         ", ".join(boards),

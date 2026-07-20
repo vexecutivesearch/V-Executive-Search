@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import logging
 import os
+import time
 from typing import Any
 
 import requests
@@ -12,6 +13,78 @@ from src.config_loader import parse_email_recipients
 from src.crm_config import crm_base_url
 
 logger = logging.getLogger(__name__)
+
+# Morning scrape often finishes after 07:45 (slow markets / LinkedIn draws).
+# Wait so the call sheet reflects today's ingest instead of a thin/empty report.
+_DEFAULT_WAIT_FOR_SCRAPE_SECONDS = 2 * 60 * 60  # until ~09:45 if email starts 07:45
+_DEFAULT_POLL_SECONDS = 60
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return default
+
+
+def wait_for_scrape_ingest(
+    *,
+    timeout_seconds: int | None = None,
+    poll_seconds: int | None = None,
+    sleep_fn=time.sleep,
+    fetch_fn=None,
+) -> dict[str, Any] | None:
+    """Poll CRM daily report until today's scrape has listings, or timeout.
+
+    Returns the last CRM payload (may still have listings_scraped=0 on timeout).
+    """
+    timeout = (
+        _DEFAULT_WAIT_FOR_SCRAPE_SECONDS
+        if timeout_seconds is None
+        else max(0, timeout_seconds)
+    )
+    poll = _DEFAULT_POLL_SECONDS if poll_seconds is None else max(1, poll_seconds)
+    if timeout_seconds is None:
+        timeout = _env_int("EMAIL_WAIT_FOR_SCRAPE_SECONDS", timeout)
+    if poll_seconds is None:
+        poll = _env_int("EMAIL_WAIT_POLL_SECONDS", poll)
+
+    fetch = fetch_fn or fetch_daily_report_from_crm
+    deadline = time.monotonic() + timeout
+    last: dict[str, Any] | None = None
+    attempt = 0
+
+    while True:
+        attempt += 1
+        last = fetch()
+        scraped = int((last or {}).get("listings_scraped") or 0)
+        if scraped > 0:
+            logger.info(
+                "Morning scrape ingest ready — listings_scraped=%d (wait attempt %d)",
+                scraped,
+                attempt,
+            )
+            return last
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.warning(
+                "Timed out waiting for morning scrape ingest after %ds "
+                "(listings_scraped=%d) — sending report with available data",
+                timeout,
+                scraped,
+            )
+            return last
+        logger.info(
+            "Waiting for morning scrape ingest (listings_scraped=%d); "
+            "retry in %ds (%.0fs left)",
+            scraped,
+            poll,
+            remaining,
+        )
+        sleep_fn(min(poll, max(1, int(remaining))))
 
 
 def _crm_base_url() -> str:
@@ -367,9 +440,17 @@ def send_daily_report_for_pipeline(
     pipeline_rows: list[dict[str, Any]],
     result_summary: dict[str, Any],
     geo_label: str,
+    wait_for_scrape: bool = True,
 ) -> bool:
-    """Prefer CRM call sheet (ranked leads); fallback to pipeline rows."""
-    crm_data = fetch_daily_report_from_crm()
+    """Prefer CRM call sheet (ranked leads); fallback to pipeline rows.
+
+    When wait_for_scrape is True (email-only launchd job), poll until today's
+    AM/PM scrape has ingested listings so 07:45 does not race a slow 05:00 run.
+    """
+    if wait_for_scrape:
+        crm_data = wait_for_scrape_ingest()
+    else:
+        crm_data = fetch_daily_report_from_crm()
     return send_daily_report(
         to_email,
         pipeline_rows,
