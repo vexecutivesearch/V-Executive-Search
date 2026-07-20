@@ -108,6 +108,8 @@ interface IngestPayload {
     companies_deferred?: number;
     errors?: string[];
     funnel?: Record<string, unknown>;
+    /** Market label from the worker scrape config (preferred over a live Admin re-read). */
+    market_label?: string;
   };
   companies: IngestCompany[];
 }
@@ -195,10 +197,14 @@ export async function POST(request: NextRequest) {
   const enrichOnly = payload.import_mode === "enrich_only";
   const runSlot = normalizeRunSlot(payload.run_slot);
 
-  // Market active in Admin when this batch was scraped — provenance for the
-  // consolidated CRM (runs ledger + companies.source_market).
+  // Provenance for runs ledger + companies.source_market. Prefer the market
+  // the worker actually scraped (metadata.market_label) so a mid-run Admin
+  // flip to another state cannot stamp Florida listings as "Nashville, TN".
   const ingestGeoSettings = await getGeoFocusSettings();
-  const sourceMarket = activeMarketLabel(ingestGeoSettings);
+  const workerMarket =
+    typeof meta.market_label === "string" ? meta.market_label.trim() : "";
+  const sourceMarket =
+    workerMarket || activeMarketLabel(ingestGeoSettings);
 
   const [existingRun] = await db
     .select()
