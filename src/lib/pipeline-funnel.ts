@@ -291,6 +291,15 @@ export function formatRunFunnelLine(f: PipelineFunnel): string {
 /** "google: 42 searches · 3,812 this month · plan 15,000" — the SerpApi meter. */
 export function formatSerpapiMeterLine(f: PipelineFunnel): string | null {
   if (f.serpapi_searches == null && f.serpapi_month_to_date == null) return null;
+  // Worker funnels serialize zeros even when SerpApi never ran (no key /
+  // controller): an all-zero meter means "not metered", not "0 spent".
+  if (
+    !(f.serpapi_searches ?? 0) &&
+    !(f.serpapi_month_to_date ?? 0) &&
+    !(f.serpapi_monthly_plan ?? 0)
+  ) {
+    return null;
+  }
   const searches = f.serpapi_searches ?? 0;
   const failed = f.serpapi_searches_failed ?? 0;
   const parts = [

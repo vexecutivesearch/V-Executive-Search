@@ -100,6 +100,48 @@ def test_saturday_am_run_zero_serpapi_calls(gated_env, monkeypatch):
     assert funnel.board_failures == []
 
 
+def test_run_cap_stops_google_but_run_completes_normally(gated_env, monkeypatch):
+    """Acceptance: cap=5 stops Google at 5 searches, logs serpapi_run_cap,
+    and the rest of the run (free boards, other titles) completes normally."""
+    monkeypatch.setenv("SERPAPI_RUN_CAP", "5")
+    monkeypatch.setattr(scrape_mod, "scrape_jobs", lambda **kw: _df(kw["site_name"][0]))
+
+    serp_calls = {"n": 0}
+
+    def endless_pages(**kwargs):
+        serp_calls["n"] += 1
+        return {
+            "jobs_results": [
+                {
+                    "title": "Manager",
+                    "company_name": f"Co {serp_calls['n']}",
+                    "location": "Charlotte, NC",
+                    "share_link": f"https://google.example/job/{serp_calls['n']}",
+                }
+            ],
+            "serpapi_pagination": {"next_page_token": f"t{serp_calls['n']}"},
+        }
+
+    monkeypatch.setattr(sg, "_fetch_serpapi_page", endless_pages)
+    monkeypatch.setattr(sg, "time", __import__("types").SimpleNamespace(sleep=lambda s: None))
+
+    config = {
+        **CONFIG,
+        "searches": [
+            {**CONFIG["searches"][0], "name": f"{title} — Charlotte, NC"}
+            for title in ("Market scan", "Manager", "Director")
+        ],
+    }
+    listings, funnel = scrape_mod.scrape_all(config, run_slot="am")
+
+    assert serp_calls["n"] == 5  # hard stop at the cap
+    assert funnel.serpapi_searches == 5
+    assert any("serpapi_run_cap" in f for f in funnel.board_failures)
+    # Free boards still scraped every search — the run completed normally.
+    assert funnel.scrape_by_board.get("linkedin") == 3
+    assert funnel.scrape_by_board.get("indeed") == 3
+
+
 def test_weekday_am_run_meters_google(gated_env, monkeypatch):
     monkeypatch.setattr(scrape_mod, "scrape_jobs", lambda **kw: _df(kw["site_name"][0]))
     monkeypatch.setattr(

@@ -354,6 +354,12 @@ class GoogleBoardController:
 
         cold = self.is_cold_start
         ceiling = self.settings.max_pages_cold if cold else self.settings.max_pages
+        if self.checker is None:
+            # No CRM → no yield data → never paginate deep blind; hold the
+            # legacy fixed ceiling instead.
+            from src.serpapi_google import DEFAULT_MAX_PAGES
+
+            ceiling = min(ceiling, DEFAULT_MAX_PAGES)
         listings, stats = scrape_google_serpapi_paged(
             search,
             meter=self.meter,

@@ -195,6 +195,27 @@ describe("SerpApi meter display", () => {
     expect(formatSerpapiMeterLine({})).toBeNull();
   });
 
+  it("returns null when SerpApi never ran (all-zero worker funnel)", () => {
+    expect(
+      formatSerpapiMeterLine({
+        serpapi_searches: 0,
+        serpapi_searches_failed: 0,
+        serpapi_month_to_date: 0,
+        serpapi_monthly_plan: 0,
+      }),
+    ).toBeNull();
+  });
+
+  it("still shows the month-to-date on schedule-gated runs (0 searches)", () => {
+    expect(
+      formatSerpapiMeterLine({
+        serpapi_searches: 0,
+        serpapi_month_to_date: 3812,
+        serpapi_monthly_plan: 15000,
+      }),
+    ).toBe("google: 0 searches · 3,812 this month · plan 15,000");
+  });
+
   it("formats per-query pagination with per-page new ratios", () => {
     const line = formatGooglePerQueryLine({
       search: "Market scan — Charlotte, NC",
