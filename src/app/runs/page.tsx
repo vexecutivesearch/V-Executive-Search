@@ -24,6 +24,11 @@ function runHealth(run: DailyRun): RunHealth {
   const { other } = categorizeRunErrors(errors);
 
   if ((run.listingsScraped ?? 0) === 0 && (run.companiesFound ?? 0) === 0) {
+    // Rescore used to INSERT empty daily_runs shells — those look like a
+    // failed scrape. Prefer a clearer label when only scored/ICP landed.
+    if ((run.companiesScored ?? 0) > 0 || (run.icpMatchCount ?? 0) > 0) {
+      return { state: "none", label: "scrape missing" };
+    }
     return { state: "none", label: "no run" };
   }
   // board_skips (schedule gate) are intentional and never affect health.
