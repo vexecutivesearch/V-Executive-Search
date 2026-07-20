@@ -2,7 +2,6 @@ import { and, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   companies,
-  companyActivities,
   contacts,
   outreachMessages,
   pipelineSettings,
@@ -86,19 +85,18 @@ async function logSendActivity(
   enrollment: SequenceEnrollment,
   message: OutreachMessage,
 ): Promise<void> {
-  try {
-    await db.insert(companyActivities).values({
-      companyId: enrollment.companyId,
-      contactId: enrollment.contactId,
-      type: "email",
-      summary: `Outreach ${message.stepKind} sent (${message.channel})${
-        message.subject ? `: ${message.subject}` : ""
-      }`,
-      source: "outreach",
-    });
-  } catch (error) {
-    console.error("[outreach] activity log failed", error);
-  }
+  const { recordCallListOutreachEvent } = await import(
+    "@/lib/outreach/call-list-sync"
+  );
+  await recordCallListOutreachEvent({
+    companyId: enrollment.companyId,
+    contactId: enrollment.contactId,
+    activityType: "email",
+    bumpAttempt: true,
+    summary: `Outreach ${message.stepKind} email sent${
+      message.subject ? `: ${message.subject}` : ""
+    }`,
+  });
 }
 
 export async function runOutreachDispatch(now = new Date()): Promise<DispatchSummary> {

@@ -133,14 +133,16 @@ export async function POST(request: NextRequest) {
         .where(eq(sequenceEnrollments.id, message.enrollmentId))
         .limit(1);
       if (enr) {
-        const { companyActivities, companies } = await import("@/lib/db/schema");
-        await db.insert(companyActivities).values({
+        const { recordCallListOutreachEvent } = await import(
+          "@/lib/outreach/call-list-sync"
+        );
+        await recordCallListOutreachEvent({
           companyId: enr.companyId,
           contactId: enr.contactId,
-          type: "note",
-          summary: `Outreach ${message.stepKind} text sent`,
-          source: "outreach",
+          bumpAttempt: true,
+          summary: `Outreach ${message.stepKind} iMessage sent`,
         });
+        const { companies } = await import("@/lib/db/schema");
         const [company] = await db
           .select({ status: companies.status })
           .from(companies)

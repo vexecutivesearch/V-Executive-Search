@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { companyActivities, outreachNotifications } from "@/lib/db/schema";
+import { outreachNotifications } from "@/lib/db/schema";
 import { sendAlertEmail } from "@/lib/alert-email";
 import { getOrCreateOutreachSettings } from "@/lib/outreach/settings";
 
@@ -28,14 +28,15 @@ export async function notifyReply(options: {
 
   if (options.createFollowUpTask && options.companyId) {
     try {
-      await db.insert(companyActivities).values({
+      const { recordCallListOutreachEvent } = await import(
+        "@/lib/outreach/call-list-sync"
+      );
+      await recordCallListOutreachEvent({
         companyId: options.companyId,
         contactId: options.contactId ?? null,
-        type: "note",
         summary: `Outreach reply (${options.intent})${
           options.contactName ? ` from ${options.contactName}` : ""
         }: ${options.snippet.slice(0, 300)}`,
-        source: "outreach",
       });
     } catch (error) {
       console.error("[outreach] follow-up task insert failed", error);

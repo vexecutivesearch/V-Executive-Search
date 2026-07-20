@@ -375,13 +375,14 @@ export async function applyReplyRules(
         reason: "wrong person",
         contactId: enrollment.contactId,
       });
-      // Flag company for re-enrichment via a visible activity.
-      await db.insert((await import("@/lib/db/schema")).companyActivities).values({
+      // Flag company for re-enrichment via Call List notes + activity.
+      const { recordCallListOutreachEvent } = await import(
+        "@/lib/outreach/call-list-sync"
+      );
+      await recordCallListOutreachEvent({
         companyId: enrollment.companyId,
         contactId: enrollment.contactId,
-        type: "note",
-        summary: `Outreach: wrong person — re-enrich this company for the right contact. Reply: ${snippet.slice(0, 200)}`,
-        source: "outreach",
+        summary: `Outreach: wrong person — re-enrich for the right contact. Reply: ${snippet.slice(0, 200)}`,
       });
       await notifyReply({ ...base, intent, createFollowUpTask: false });
       return { intent, actionTaken: "stopped + suppressed; company flagged for re-enrichment" };

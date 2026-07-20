@@ -207,6 +207,20 @@ export async function enrollContact(
         detail: reason,
       },
     });
+    if (options?.actor === "call_list") {
+      try {
+        const { recordCallListOutreachEvent } = await import(
+          "@/lib/outreach/call-list-sync"
+        );
+        await recordCallListOutreachEvent({
+          companyId: company.id,
+          contactId: contact.id,
+          summary: `Outreach enroll failed: ${reason}`,
+        });
+      } catch {
+        /* non-fatal */
+      }
+    }
     return { enrolled: false, reason };
   }
 
@@ -273,6 +287,23 @@ export async function enrollContact(
       actor: options.actor ?? "system",
       payload: { steps: drafted.length, source: options.actor ?? "system" },
     });
+  }
+
+  try {
+    const { recordCallListOutreachEvent } = await import(
+      "@/lib/outreach/call-list-sync"
+    );
+    const plan = textEligible ? "email + SMS" : "email-only";
+    await recordCallListOutreachEvent({
+      companyId: company.id,
+      contactId: contact.id,
+      bumpAttempt: false,
+      summary: `Outreach sequence enrolled (${plan}, ${drafted.length} steps)${
+        options?.actor === "call_list" ? " via Call List" : ""
+      }. Next: ${drafted[0]?.stepKind ?? "intro"}.`,
+    });
+  } catch (error) {
+    console.error("[outreach] call-list enroll note failed", error);
   }
 
   if (options?.advanceNow) {
