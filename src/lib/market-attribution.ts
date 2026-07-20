@@ -162,6 +162,38 @@ function listEqualsNormalized(a: string[], b: string[]): boolean {
 }
 
 /**
+ * Infer the market the worker actually scraped from LinkedIn/Indeed/Google
+ * search_name strings like "Manager — West Palm Beach, FL".
+ *
+ * Used when Admin was flipped mid-run (or before ingest) so provenance is not
+ * stamped from the wrong live Admin market.
+ */
+export function inferMarketFromSearchNames(
+  searchNames: Array<string | null | undefined>,
+  index: MarketIndex,
+): string | null {
+  const counts = new Map<string, number>();
+  for (const raw of searchNames) {
+    const search = raw?.trim();
+    if (!search) continue;
+    const loc = search.split(/\s+[—–-]\s+/).slice(-1)[0]?.trim();
+    if (!loc) continue;
+    const label = marketForJobLocation(loc, index);
+    if (!label) continue;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  let best: string | null = null;
+  let bestCount = 0;
+  for (const [label, count] of counts) {
+    if (count > bestCount) {
+      best = label;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+/**
  * Label of the market currently active in Admin — used to stamp
  * companies.source_market at ingest time.
  */

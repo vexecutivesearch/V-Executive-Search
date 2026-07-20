@@ -148,13 +148,28 @@ export function resolveMarketLabel(
   );
 }
 
-function companyMatchesState(row: CrmLeadRow, stateAbbr: string): boolean {
+/**
+ * Location-led state match: a company is "in" a state only when it has a
+ * job listing whose parsed location is in that state.
+ *
+ * Do NOT fall back to source_market / marketLabel — that stamp is Admin
+ * scrape provenance (e.g. "Nashville, TN") and must not pull Florida
+ * listings into a Tennessee Pipeline filter.
+ */
+export function companyHasListingInState(
+  listings: Array<{ location?: string | null }>,
+  stateAbbr: string,
+): boolean {
   const target = stateAbbr.toUpperCase();
-  for (const listing of row.jobListings) {
+  for (const listing of listings) {
     const parsed = listing.location ? parseJobLocation(listing.location) : null;
     if (parsed?.stateAbbr === target) return true;
   }
-  return Boolean(row.marketLabel?.toUpperCase().endsWith(`, ${target}`));
+  return false;
+}
+
+function companyMatchesState(row: CrmLeadRow, stateAbbr: string): boolean {
+  return companyHasListingInState(row.jobListings, stateAbbr);
 }
 
 function companyMatchesCity(row: CrmLeadRow, city: string): boolean {
@@ -243,12 +258,10 @@ function statePrefilterSql(stateAbbr: string, stateName: string | null): SQL {
   const inner = namePattern
     ? sql`jl.location ILIKE ${abbrPattern} OR jl.location ILIKE ${namePattern}`
     : sql`jl.location ILIKE ${abbrPattern}`;
-  return sql`(
-    ${companies.sourceMarket} ILIKE ${`%, ${stateAbbr}`}
-    OR EXISTS (
-      SELECT 1 FROM job_listings AS jl
-      WHERE jl.company_id = ${companies.id} AND (${inner})
-    )
+  // Listing geography only — never companies.source_market (provenance).
+  return sql`EXISTS (
+    SELECT 1 FROM job_listings AS jl
+    WHERE jl.company_id = ${companies.id} AND (${inner})
   )`;
 }
 
@@ -951,11 +964,10 @@ export type LocationRailState = {
 /**
  * State → city hierarchy for the Pipeline rail.
  *
- * Counts are based on actual job-listing locations, not source_market. A
- * company is counted once per state/city in which it has a listing, matching
- * the server-side State/City filter semantics. This means a valid location
- * such as Weston, FL is never mislabeled as "No market match" merely because
- * Weston was not a configured metro scrape hub.
+ * Counts are based on actual job-listing locations, not source_market.
+ * A company is counted once per state/city in which it has a listing —
+ * the same rule as the server-side State/City Pipeline filters (provenance
+ * stamps like "Nashville, TN" never move a Miami listing into Tennessee).
  */
 export async function getLocationRailCounts(): Promise<{
   total: number;

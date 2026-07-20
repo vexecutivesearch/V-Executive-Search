@@ -3,6 +3,7 @@ import {
   activeMarketLabel,
   buildMarketIndex,
   deriveMarketFromListings,
+  inferMarketFromSearchNames,
   marketForJobLocation,
 } from "@/lib/market-attribution";
 import { DEFAULT_STATE_GEO_CONFIGS } from "@/lib/state-geo-config";
@@ -91,5 +92,23 @@ describe("market attribution", () => {
 
     const label = activeMarketLabel(settings);
     expect(label).toMatch(/^Fort Wayne, /);
+  });
+
+  it("infers West Palm Beach from scrape search names (not Admin stamp)", () => {
+    expect(
+      inferMarketFromSearchNames(
+        [
+          "Market scan — West Palm Beach, FL",
+          "Manager — Boca Raton, FL",
+          "Accounting — Jupiter, FL",
+          "Finance — Delray Beach, FL",
+        ],
+        index,
+      ),
+    ).toBe("West Palm Beach, FL");
+  });
+
+  it("does not invent a market from empty search names", () => {
+    expect(inferMarketFromSearchNames([], index)).toBeNull();
   });
 });

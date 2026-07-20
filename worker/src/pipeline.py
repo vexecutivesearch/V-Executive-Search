@@ -215,6 +215,8 @@ def _seed_contacts_payload(company: CompanyRecord) -> list[dict[str, Any]]:
 def _build_jobs_only_payload(
     companies: list[CompanyRecord],
     result: PipelineResult,
+    *,
+    config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     companies_payload = []
     for company in companies:
@@ -231,6 +233,13 @@ def _build_jobs_only_payload(
             payload["id"] = company.crm_id
         companies_payload.append(payload)
 
+    settings = (config or {}).get("settings") or {}
+    market_label = (
+        settings.get("market_label")
+        or settings.get("geo_label")
+        or None
+    )
+
     return {
         "run_date": result.run_date.isoformat(),
         "run_slot": result.run_slot,
@@ -242,6 +251,7 @@ def _build_jobs_only_payload(
             "icp_match_count": result.icp_match_count,
             "companies_scored": result.companies_scored,
             "errors": result.errors,
+            "market_label": market_label,
             "funnel": (
                 result.scrape_funnel.to_metadata()
                 if result.scrape_funnel is not None
@@ -426,7 +436,7 @@ def _run_pipeline_impl(
 
     ingest_ok = False
     if crm.is_configured and not skip_crm:
-        payload = _build_jobs_only_payload(companies, result)
+        payload = _build_jobs_only_payload(companies, result, config=config)
         ingest_ok = crm.ingest_batch(payload)
         if not ingest_ok:
             result.errors.append("CRM jobs-only ingest failed")
@@ -462,7 +472,9 @@ def _run_pipeline_impl(
             )
             if limit is not None:
                 companies_with_posters = companies_with_posters[:limit]
-            poster_payload = _build_jobs_only_payload(companies_with_posters, result)
+            poster_payload = _build_jobs_only_payload(
+                companies_with_posters, result, config=config
+            )
             # Avoid double-counting listings on additive daily_runs counters.
             meta = poster_payload.setdefault("metadata", {})
             meta["listings_scraped"] = 0
