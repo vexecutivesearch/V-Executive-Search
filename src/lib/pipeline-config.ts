@@ -1,6 +1,8 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, gt, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { pipelineSettings, searchProfiles } from "@/lib/db/schema";
+import { dailyRuns, pipelineSettings, searchProfiles } from "@/lib/db/schema";
+import { activeMarketLabel } from "@/lib/market-attribution";
+import { serpapiMonthToDate, serpapiPeriodStart, serpapiPlanConfig } from "@/lib/serpapi-usage";
 import { TARGET_TITLES } from "@/lib/enrichment-config";
 import { DEFAULT_JOB_BOARDS, resolveJobBoards } from "@/lib/job-boards";
 import { backfillLinkedinDistanceDefaults } from "@/lib/search-profile-defaults";
@@ -386,6 +388,65 @@ export function buildGeoZones(
   return zones;
 }
 
+function normalizedSetEquals(a: string[], b: string[]): boolean {
+  const setA = new Set(a.map((v) => v.trim().toLowerCase()).filter(Boolean));
+  const setB = new Set(b.map((v) => v.trim().toLowerCase()).filter(Boolean));
+  if (setA.size !== setB.size) return false;
+  for (const value of setA) if (!setB.has(value)) return false;
+  return true;
+}
+
+/** Metro preset currently active in Admin (matched on metro city set). */
+function activeMetroPreset(
+  settings: PipelineSettingsWithGeoConfig,
+  config: StateGeoConfig,
+) {
+  const metro = normalizeList(settings.metroCities);
+  if (!metro.length) return null;
+  for (const preset of Object.values(config.metroPresets ?? {})) {
+    if (normalizedSetEquals(metro, preset.metroCities ?? [])) return preset;
+  }
+  return null;
+}
+
+/**
+ * Zone collapse for Google/SerpApi: Google Jobs is a paid, wide-radius
+ * aggregator — querying all 8 hub cities pays 8× for overlapping results.
+ * Google gets 1–2 zones per market (metro center; optional far-edge hub for
+ * sprawling metros, configured per market via metroPresets.googleZones).
+ * Free boards (Indeed/LinkedIn) keep the FULL hub list — their geo needs it
+ * and they cost nothing. Dedup/resight/ingest are unchanged.
+ */
+export function buildGoogleZones(
+  settings: PipelineSettingsWithGeoConfig,
+  stateGeoConfig: StateGeoConfig = getStateGeoConfig(settings.focusState),
+  zones: GeoZone[] = buildGeoZones(settings, stateGeoConfig),
+): GeoZone[] {
+  if (!zones.length) return [];
+  // Only the 8-hub city scope multiplies queries; other scopes are 1–few zones.
+  if (settings.geographicScope !== "city") return zones;
+
+  const config = settings.stateGeoConfig ?? stateGeoConfig;
+  const preset = activeMetroPreset(settings, config);
+  const configured = normalizeList(preset?.googleZones);
+  if (!configured.length) {
+    // Default collapse: metro center only (the first zone).
+    return zones.slice(0, 1);
+  }
+
+  const wanted = new Set(
+    configured.map((city) =>
+      formatBoardLocation(city, settings.focusState || "Florida", config)
+        .trim()
+        .toLowerCase(),
+    ),
+  );
+  const matched = zones.filter((zone) =>
+    wanted.has(zone.location.trim().toLowerCase()),
+  );
+  return matched.length ? matched : zones.slice(0, 1);
+}
+
 /** USPS-style place for JobSpy / Google NL ("West Palm Beach, FL"). */
 export function formatBoardLocation(
   cityOrPlace: string,
@@ -446,11 +507,80 @@ export function googleSearchTerm(
   return `${head} near ${place} ${window}`;
 }
 
+/** Per-board schedule gates — the pipeline itself still runs twice daily. */
+export function buildBoardSchedules(): Record<
+  string,
+  { runs: string[]; days: string }
+> {
+  const runs = (process.env.GOOGLE_BOARD_RUNS ?? "am")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const days = (process.env.GOOGLE_BOARD_DAYS ?? "weekdays")
+    .trim()
+    .toLowerCase();
+  return {
+    // Google (SerpApi, paid): 6 AM run only, weekdays only. In the 6 PM run
+    // and on weekends the worker logs board_skipped: schedule_gate — the
+    // launchd schedule and every other board are untouched.
+    google: { runs: runs.length ? runs : ["am"], days: days || "weekdays" },
+  };
+}
+
+async function serpapiConfigBlock(marketLabel: string | null) {
+  const plan = serpapiPlanConfig();
+  let monthToDate = 0;
+  let marketLastRunDate: string | null = null;
+  try {
+    monthToDate = await serpapiMonthToDate(plan.renewalDay);
+  } catch (error) {
+    console.warn("serpapi month-to-date lookup failed", error);
+  }
+  try {
+    // Cold-start detection: when did this market last scrape anything?
+    const marketFilter = marketLabel
+      ? and(eq(dailyRuns.market, marketLabel), gt(dailyRuns.listingsScraped, 0))
+      : gt(dailyRuns.listingsScraped, 0);
+    const [row] = await db
+      .select({ last: sql<string | null>`max(${dailyRuns.runDate})` })
+      .from(dailyRuns)
+      .where(marketFilter);
+    marketLastRunDate = row?.last ?? null;
+  } catch (error) {
+    console.warn("serpapi market-last-run lookup failed", error);
+  }
+
+  return {
+    monthly_plan: plan.monthlyPlan,
+    budget_pct: plan.budgetPct,
+    renewal_day: plan.renewalDay,
+    run_cap: plan.runCap,
+    page_min_yield: plan.pageMinYield,
+    max_pages: plan.maxPages,
+    max_pages_cold: plan.maxPagesCold,
+    cold_market_days: plan.coldMarketDays,
+    adaptive_enabled: plan.adaptiveEnabled,
+    adaptive_empty_runs: plan.adaptiveEmptyRuns,
+    adaptive_interval_days: plan.adaptiveIntervalDays,
+    /** CRM-side count for the worker's max(local, CRM) reconciliation. */
+    month_to_date: monthToDate,
+    period_start: serpapiPeriodStart(plan.renewalDay)
+      .toISOString()
+      .slice(0, 10),
+    market_last_run_date: marketLastRunDate,
+  };
+}
+
 export async function buildPipelineConfig() {
   const settings = await getOrCreateSettings();
   const stateGeoConfig = await getStateGeoConfigForState(settings.focusState);
   const profiles = await getActiveSearchProfiles();
   const zones = buildGeoZones(settings, stateGeoConfig);
+  const googleZones = buildGoogleZones(
+    { ...settings, stateGeoConfig },
+    stateGeoConfig,
+    zones,
+  );
 
   const targetTitles = normalizeContactTitles(settings.contactTitles);
   const targetSeniorities = ["c_suite", "vp", "head", "director"];
@@ -463,6 +593,7 @@ export async function buildPipelineConfig() {
         name: `${p.name} — ${zone.label}`,
         search_term: searchTerm,
         location: zone.location,
+        zone_label: zone.label,
         google_search_term: googleSearchTerm(
           p.searchTerm,
           zone.location,
@@ -478,6 +609,8 @@ export async function buildPipelineConfig() {
     }),
   );
 
+  const marketLabel = activeMarketLabel({ ...settings, stateGeoConfig });
+
   return {
     settings: {
       geographic_scope: settings.geographicScope,
@@ -491,10 +624,17 @@ export async function buildPipelineConfig() {
       state_geo_config: stateGeoConfig,
       notification_email: settings.notificationEmail,
       geo_label: zones.map((z) => z.label).join("; "),
+      market_label: marketLabel,
       job_boards: resolveJobBoards(settings.jobBoards),
     },
     searches,
     boards: resolveJobBoards(settings.jobBoards),
+    /** Zone collapse: Google/SerpApi queries only these zones per market. */
+    board_zones: {
+      google: googleZones.map((z) => z.label),
+    },
+    board_schedules: buildBoardSchedules(),
+    serpapi: await serpapiConfigBlock(marketLabel),
     target_titles: targetTitles,
     target_seniorities: targetSeniorities,
     enrichment: {

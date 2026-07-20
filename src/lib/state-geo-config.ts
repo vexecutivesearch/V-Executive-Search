@@ -8,6 +8,14 @@ export type StateGeoMetroPreset = {
   metroCities: string[];
   metroAliases: string[];
   focusCounties: string[];
+  /**
+   * Zone collapse for Google/SerpApi (paid, wide-radius aggregator): the 1–2
+   * hub cities Google queries in this market — metro center, plus optionally
+   * one far-edge hub for sprawling metros (e.g. DFW adds Fort Worth).
+   * Empty/absent = metro center only (first metro city). Free boards
+   * (Indeed/LinkedIn) always keep the full hub list — their geo needs it.
+   */
+  googleZones?: string[];
 };
 
 export type StateGeoConfig = {

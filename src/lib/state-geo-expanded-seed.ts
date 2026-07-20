@@ -8,6 +8,8 @@ export type ReviewableMarketGeo = {
   cityCountyMap: Record<string, string[]>;
   independentCities?: string[];
   sourceNames: string[];
+  /** Google/SerpApi zone collapse override — see StateGeoMetroPreset.googleZones. */
+  googleZones?: string[];
 };
 
 export type ReviewableStateGeoSeed = {
@@ -3614,6 +3616,23 @@ export const REVIEWABLE_STATE_GEO_EXPANSION: ReviewableStateGeoSeed[] = [
   }
 ];
 
+/**
+ * Sprawling metros where a single center zone under-covers Google's radius —
+ * these query two SerpApi zones (center + far edge). Everything else defaults
+ * to metro center only. Keyed by normalized market name.
+ */
+export const GOOGLE_ZONE_OVERRIDES: Record<string, string[]> = {
+  "dallas-fort worth": ["Dallas", "Fort Worth"],
+};
+
+function googleZonesForMarket(m: ReviewableMarketGeo): string[] {
+  if (m.googleZones?.length) return m.googleZones;
+  const override = GOOGLE_ZONE_OVERRIDES[norm(m.marketName)];
+  if (override) return override;
+  // Default zone collapse: metro center only (first scrape hub).
+  return m.scrapeHubs.slice(0, 1);
+}
+
 export function toStateGeoConfig(
   seed: ReviewableStateGeoSeed,
   marketName = seed.defaultMarket,
@@ -3634,6 +3653,7 @@ export function toStateGeoConfig(
         metroCities: m.scrapeHubs,
         metroAliases: m.aliases,
         focusCounties: m.focusCounties,
+        googleZones: googleZonesForMarket(m),
       },
     ]),
   );

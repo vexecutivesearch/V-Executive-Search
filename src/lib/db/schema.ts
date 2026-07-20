@@ -149,6 +149,8 @@ export const stateGeoConfigs = pgTable(
             metroCities?: string[];
             metroAliases?: string[];
             focusCounties?: string[];
+            /** Google/SerpApi zone collapse: 1–2 hub cities Google queries. */
+            googleZones?: string[];
           }
         >
       >()

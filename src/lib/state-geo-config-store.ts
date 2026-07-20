@@ -53,6 +53,7 @@ function rowToConfig(row: StateGeoConfigRow): StateGeoConfig {
           metroCities: preset.metroCities ?? [],
           metroAliases: preset.metroAliases ?? [],
           focusCounties: preset.focusCounties ?? [],
+          googleZones: preset.googleZones ?? [],
         },
       ]),
     ),
