@@ -527,9 +527,17 @@ export function AdminDashboard({
     <div className="max-w-3xl mx-auto px-4 py-8 space-y-8">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Admin</h1>
-        <button onClick={logout} className="text-sm text-gray-500 hover:underline">
-          Log out
-        </button>
+        <div className="flex items-center gap-4">
+          <a
+            href="/admin/outreach"
+            className="text-sm font-medium text-sky-700 dark:text-sky-400 hover:underline"
+          >
+            Outreach Sequencer →
+          </a>
+          <button onClick={logout} className="text-sm text-gray-500 hover:underline">
+            Log out
+          </button>
+        </div>
       </div>
 
       {message && (
