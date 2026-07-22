@@ -185,6 +185,50 @@ Legacy `OUTREACH_IMAP_PASSWORD` remains a fallback only for tenants that still a
 
 Full product notes: [docs/OPS-CHANGELOG-JUL-2026.md](docs/OPS-CHANGELOG-JUL-2026.md).
 
+### Outreach Sequencer (email + iMessage automation)
+
+Reply-aware sequencing lives at **/admin/outreach** (+ `/admin/outreach/flows`
+visual builder). It ships **OFF + dry-run + approval-gated** — nothing sends
+until the switches are flipped deliberately.
+
+Setup checklist:
+
+1. `npm run db:push` — creates the outreach tables (templates, enrollments,
+   messages, inbound, suppressions, enrollment_events audit log, notifications,
+   flows + immutable versions, sending_profiles, outreach_settings).
+2. Vercel env: `ANTHROPIC_API_KEY` (drafting + reply classification),
+   `OUTREACH_FROM_EMAIL` (fallback sender until domain profiles exist),
+   optional `OUTREACH_SENDER_NAME/TITLE/FIRM/PHONE`, `OUTREACH_SCHEDULING_LINK`,
+   `RESEND_WEBHOOK_SECRET`, Google Calendar free/busy
+   (`GOOGLE_CALENDAR_CLIENT_ID/SECRET/REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID`).
+3. Resend dashboard: add a webhook → `https://<crm>/api/webhooks/resend?token=<RESEND_WEBHOOK_SECRET>`
+   for `email.delivered`, `email.bounced`, `email.complained`. The handler
+   matches `resend_id` against outreach messages and ignores transactional app
+   emails (a bounced daily report never dings a profile or suppresses anyone).
+4. Worker env (`~/.vsearch/worker.env`): `OUTREACH_IMAP_HOST/USER/PASSWORD`
+   for the Reply-To mailbox. The existing 5-min poll agent pumps iMessage
+   sends, chat.db inbound scans, and IMAP replies (`worker/scripts/outreach_pump.py`).
+5. Domain rotation: Admin → Outreach → Domains → add a sending subdomain →
+   create the shown SPF/DKIM/DMARC records → Verify DNS. Unverified profiles
+   cannot send; verified ones warm up 5/day → +5 per clean week → ~50/day with
+   automatic rollback on bounce >2% / complaint >0.1%.
+6. Crons are already in `vercel.json` (`/api/cron/outreach-dispatch` every
+   15 min in the send window).
+
+Enrollment: automatic at the end of enrich ingest (verified-deliverable email,
+company status `new`, ICP pass, never previously enrolled, per-channel
+suppression check, 2–3 contacts/company with staggered intros; contacts
+without a verified iMessage number get email-only sequences). All steps are
+LLM-drafted at enrollment from the winning-template bank and must pass the
+anti-spam sanitizer or no enrollment is created.
+
+Replies (email via IMAP, texts via chat.db, bounces via webhook) converge in
+one pipeline: heuristics (STOP/OOO/bounce) → LLM intent classifier → rule
+engine (positive → threaded auto-reply with live calendar windows + cancel
+sibling sequences; opt-out → per-channel suppression; OOO → +3 business days;
+data deletion → purge + suppress). Every decision lands in the
+`enrollment_events` audit log.
+
 ### Legacy note
 
 Older installs used a single 6 AM / 6 PM job (`com.vexecsearch.daily`). Re-run bootstrap (or `install_launchd.sh`) to migrate to the JIT **5 AM / 6 PM** schedule.
