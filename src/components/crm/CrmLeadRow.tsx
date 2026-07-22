@@ -31,6 +31,18 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
   const [openerBusy, setOpenerBusy] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  // Client-side nav between location filters reuses row instances for
+  // companies present in both views (same key). Without this sync, the row
+  // keeps the previous filter's listing order — e.g. "All Florida" showing a
+  // Nashville, TN job for a multi-state company. Server data wins on nav
+  // (render-time reset per React docs — no effect, no stale frame).
+  const [prevRow, setPrevRow] = useState(row);
+  if (prevRow !== row) {
+    setPrevRow(row);
+    setCompany(row);
+    setOnList(row.onCallList);
+  }
+
   const primaryJob = company.jobListings[0];
   const salaryJob = pickDisplayListing(company.jobListings);
   const salary = salaryJob ? formatListingSalary(salaryJob) : null;
