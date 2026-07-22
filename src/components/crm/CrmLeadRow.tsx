@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import type { CompanyCardData } from "@/components/CompanyCard";
 import type { CrmLeadRow as CrmLeadRowData } from "@/lib/crm-queries";
@@ -34,11 +34,14 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
   // Client-side nav between location filters reuses row instances for
   // companies present in both views (same key). Without this sync, the row
   // keeps the previous filter's listing order — e.g. "All Florida" showing a
-  // Nashville, TN job for a multi-state company. Server data wins on nav.
-  useEffect(() => {
+  // Nashville, TN job for a multi-state company. Server data wins on nav
+  // (render-time reset per React docs — no effect, no stale frame).
+  const [prevRow, setPrevRow] = useState(row);
+  if (prevRow !== row) {
+    setPrevRow(row);
     setCompany(row);
     setOnList(row.onCallList);
-  }, [row]);
+  }
 
   const primaryJob = company.jobListings[0];
   const salaryJob = pickDisplayListing(company.jobListings);
