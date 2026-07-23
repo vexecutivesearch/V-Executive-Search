@@ -8,6 +8,8 @@ from typing import Any
 
 import requests
 
+from src.timezone import BUSINESS_TIMEZONE
+
 
 class PaidEgressBlocked(RuntimeError):
     pass
@@ -47,15 +49,20 @@ def _provider_enabled(provider: Provider) -> bool:
     return _env_flag(f"{_provider_prefix(provider)}_PAID_EGRESS_ENABLED", True)
 
 
+# Internal safety cap on estimated credits per business day — a guardrail so a
+# bug can't drain the provider balance, NOT the provider's real balance.
+# ContactOut default = daily enrich quota (25) x contacts (3) x credits (2).
 def _daily_cap(provider: Provider) -> int:
     raw = os.environ.get(f"{_provider_prefix(provider)}_DAILY_CREDIT_CAP")
     if raw and raw.strip().isdigit():
         return int(raw)
-    return 200 if provider == "apollo" else 50
+    return 200 if provider == "apollo" else 150
 
 
 def _today() -> str:
-    return datetime.now(timezone.utc).date().isoformat()
+    # Business-day window (midnight ET) — matches the CRM's cap window; a UTC
+    # day would roll at 8 PM ET and charge evening usage to the next day.
+    return datetime.now(BUSINESS_TIMEZONE).date().isoformat()
 
 
 def record_provider_usage(
@@ -158,14 +165,25 @@ def assert_paid_egress_allowed(
         raise PaidEgressBlocked(f"{provider} paid egress blocked for {ctx} ({endpoint})")
 
     cap = _daily_cap(provider)
-    if _daily_usage(provider) + estimated_cost > cap:
+    used = _daily_usage(provider)
+    if used + estimated_cost > cap:
         record_provider_usage(
             provider,
             endpoint,
             ctx,
             blocked=True,
-            metadata={**(metadata or {}), "reason": "daily_cap_reached", "cap": cap},
+            metadata={
+                **(metadata or {}),
+                "reason": "daily_cap_reached",
+                "cap": cap,
+                "used_today": used,
+            },
         )
-        raise PaidEgressBlocked(f"{provider} daily cap reached for {endpoint}")
+        raise PaidEgressBlocked(
+            f"{provider} daily safety cap reached — {used}/{cap} estimated credits "
+            f"used since midnight ET. This is the worker's own guardrail, not the "
+            f"{provider} balance; set {_provider_prefix(provider)}_DAILY_CREDIT_CAP "
+            f"to raise it. Resets at midnight ET."
+        )
 
     return ctx

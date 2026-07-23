@@ -8,6 +8,49 @@ export function businessToday(): string {
   });
 }
 
+function tzOffsetMs(instant: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(instant);
+  const get = (type: string) =>
+    Number(parts.find((p) => p.type === type)?.value ?? "0");
+  const wallClockAsUtc = Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    get("hour"),
+    get("minute"),
+    get("second"),
+  );
+  return wallClockAsUtc - instant.getTime();
+}
+
+/**
+ * UTC instant of midnight (Eastern) on the current business day.
+ * Daily budget windows must roll with the recruiter's day — a UTC window
+ * rolls at 8 PM ET and silently charges evening usage to the next day.
+ */
+export function businessDayStartUtc(now = new Date()): Date {
+  const dateStr = now.toLocaleDateString("en-CA", {
+    timeZone: BUSINESS_TIMEZONE,
+  });
+  const guess = new Date(`${dateStr}T00:00:00Z`);
+  const offset = tzOffsetMs(guess, BUSINESS_TIMEZONE);
+  const corrected = new Date(guess.getTime() - offset);
+  // Offset can differ across a DST boundary — recheck at the corrected instant.
+  const offsetAtCorrected = tzOffsetMs(corrected, BUSINESS_TIMEZONE);
+  return offsetAtCorrected === offset
+    ? corrected
+    : new Date(guess.getTime() - offsetAtCorrected);
+}
+
 /** Hour (0–23) in Eastern time. */
 export function businessHour(): number {
   const parts = new Intl.DateTimeFormat("en-US", {

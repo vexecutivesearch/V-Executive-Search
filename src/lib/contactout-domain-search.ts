@@ -116,10 +116,11 @@ async function searchContactOutPeople(
       return ka[0] - kb[0] || ka[1] - kb[1] || ka[2] - kb[2];
     })
     .slice(0, limit);
+  // Cost = profiles actually revealed; an empty search must not eat budget.
   await recordProviderUsageEvent("contactout", "people/search", context ?? "automated_scrape", {
     companyId,
     recordsReturned: results.length,
-    estimatedCost: Math.max(results.length, 1),
+    estimatedCost: results.length,
     metadata: { body: { ...body, page_size: limit } },
   });
   return results;

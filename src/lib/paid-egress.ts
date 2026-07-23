@@ -1,6 +1,7 @@
 import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { providerUsageEvents } from "@/lib/db/schema";
+import { businessDayStartUtc } from "@/lib/timezone";
 
 export type PaidProvider = "apollo" | "contactout";
 
@@ -56,17 +57,18 @@ function paidEgressEnabled(provider: PaidProvider): boolean {
   return envFlag(process.env[`${prefix}_PAID_EGRESS_ENABLED`], true);
 }
 
+/**
+ * Internal safety cap on estimated credits per business day — a guardrail so
+ * a bug can't drain the provider balance. NOT the provider's real balance.
+ * ContactOut default follows the credit-governance formula in the playbook:
+ * daily enrich quota (25) × contacts per company (3) × credits per contact (2).
+ */
 function providerDailyCap(provider: PaidProvider): number {
   const prefix = providerEnvPrefix(provider);
   const raw = process.env[`${prefix}_DAILY_CREDIT_CAP`];
   const parsed = raw ? Number.parseInt(raw, 10) : NaN;
   if (Number.isFinite(parsed) && parsed >= 0) return parsed;
-  return provider === "apollo" ? 200 : 50;
-}
-
-function todayStart(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  return provider === "apollo" ? 200 : 150;
 }
 
 async function dailyUsage(provider: PaidProvider): Promise<number> {
@@ -79,7 +81,9 @@ async function dailyUsage(provider: PaidProvider): Promise<number> {
       and(
         eq(providerUsageEvents.provider, provider),
         eq(providerUsageEvents.blocked, false),
-        gte(providerUsageEvents.createdAt, todayStart()),
+        // Business-day window (midnight ET) — a UTC window rolls at 8 PM ET
+        // and charges evening usage against the next day's budget.
+        gte(providerUsageEvents.createdAt, businessDayStartUtc()),
       ),
     );
   return Number(row?.total ?? 0);
@@ -149,19 +153,25 @@ export async function assertPaidEgressAllowed(
   }
 
   const cap = providerDailyCap(provider);
-  if (cap >= 0 && (await dailyUsage(provider)) + estimatedCost > cap) {
-    await recordProviderUsageEvent(provider, endpoint, normalizedContext, {
-      ...details,
-      estimatedCost: 0,
-      blocked: true,
-      metadata: {
-        ...(details.metadata ?? {}),
-        reason: "daily_cap_reached",
-        cap,
-      },
-    });
-    throw new PaidEgressBlockedError(
-      `${provider} daily cap reached for ${endpoint}`,
-    );
+  if (cap >= 0) {
+    const used = await dailyUsage(provider);
+    if (used + estimatedCost > cap) {
+      await recordProviderUsageEvent(provider, endpoint, normalizedContext, {
+        ...details,
+        estimatedCost: 0,
+        blocked: true,
+        metadata: {
+          ...(details.metadata ?? {}),
+          reason: "daily_cap_reached",
+          cap,
+          usedToday: used,
+        },
+      });
+      throw new PaidEgressBlockedError(
+        `${provider} daily safety cap reached — ${used}/${cap} estimated credits used since midnight ET. ` +
+          `This is the app's own guardrail, not your ${provider} balance; ` +
+          `set ${providerEnvPrefix(provider)}_DAILY_CREDIT_CAP on Vercel to raise it. Resets at midnight ET.`,
+      );
+    }
   }
 }
