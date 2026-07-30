@@ -8,6 +8,26 @@ import { seedOutreachTemplates } from "@/lib/outreach/seed-templates";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/** House style: no ASCII/Unicode dashes or hyphens in exemplar copy. */
+const DASH_OR_HYPHEN = /[\u002D\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/;
+
+function rejectDashes(
+  ...parts: Array<string | null | undefined>
+): NextResponse | null {
+  for (const part of parts) {
+    if (part && DASH_OR_HYPHEN.test(part)) {
+      return NextResponse.json(
+        {
+          error:
+            "House style: exemplars must not contain dashes or hyphens. Write words like hands on, follow up, day to day.",
+        },
+        { status: 400 },
+      );
+    }
+  }
+  return null;
+}
+
 export async function GET() {
   if (!(await isAdminAuthenticated())) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -42,14 +62,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "name, kind, exampleBody required" }, { status: 400 });
   }
 
+  const name = body.name.trim();
+  const exampleBody = body.exampleBody.trim();
+  const exampleSubject = body.exampleSubject?.trim() || null;
+  const dashErr = rejectDashes(name, exampleSubject, exampleBody);
+  if (dashErr) return dashErr;
+
   const [created] = await db
     .insert(outreachTemplates)
     .values({
-      name: body.name.trim(),
+      name,
       kind: body.kind as (typeof outreachTemplateKindEnum.enumValues)[number],
       channel: body.channel === "imessage" ? "imessage" : "email",
-      exampleSubject: body.exampleSubject?.trim() || null,
-      exampleBody: body.exampleBody.trim(),
+      exampleSubject,
+      exampleBody,
     })
     .returning();
   return NextResponse.json({ template: created });
@@ -85,6 +111,13 @@ export async function PATCH(request: NextRequest) {
     patch.flaggedAt = null;
     patch.flagReason = null;
   }
+
+  const dashErr = rejectDashes(
+    typeof patch.name === "string" ? patch.name : undefined,
+    typeof patch.exampleSubject === "string" ? patch.exampleSubject : undefined,
+    typeof patch.exampleBody === "string" ? patch.exampleBody : undefined,
+  );
+  if (dashErr) return dashErr;
 
   const [updated] = await db
     .update(outreachTemplates)

@@ -129,8 +129,15 @@ In the meantime, if it's easier to cover live, I'm glad to jump on a quick call 
   },
 ];
 
+function legacyNamesFor(t: (typeof SEED_TEMPLATES)[number]): string[] {
+  return [...(t.legacyNames ?? [])].filter(
+    (n, i, arr) => n && n !== t.name && arr.indexOf(n) === i,
+  );
+}
+
 /**
  * Insert missing seed exemplars and refresh wording for known seed names.
+ * Renames legacy hyphenated titles; drops orphan duplicates once the new name exists.
  */
 export async function seedOutreachTemplates(): Promise<number> {
   let changed = 0;
@@ -141,12 +148,9 @@ export async function seedOutreachTemplates(): Promise<number> {
       .where(eq(outreachTemplates.name, t.name))
       .limit(1);
 
-    if (!existing) {
-      const legacyNames = [
-        ...(t.legacyNames ?? []),
-        t.name.replace(", ", " — "),
-      ].filter((n, i, arr) => n && n !== t.name && arr.indexOf(n) === i);
+    const legacyNames = legacyNamesFor(t);
 
+    if (!existing) {
       let legacy: { id: string } | undefined;
       for (const legacyName of legacyNames) {
         const [row] = await db
@@ -197,6 +201,19 @@ export async function seedOutreachTemplates(): Promise<number> {
         })
         .where(eq(outreachTemplates.id, existing.id));
       changed += 1;
+    }
+
+    // Canonical row exists: remove leftover legacy-named duplicates.
+    for (const legacyName of legacyNames) {
+      const [orphan] = await db
+        .select()
+        .from(outreachTemplates)
+        .where(eq(outreachTemplates.name, legacyName))
+        .limit(1);
+      if (orphan && orphan.id !== existing.id) {
+        await db.delete(outreachTemplates).where(eq(outreachTemplates.id, orphan.id));
+        changed += 1;
+      }
     }
   }
   return changed;
