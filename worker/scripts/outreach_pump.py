@@ -15,6 +15,8 @@ State (last chat.db rowid, last IMAP UID) lives in ~/.vsearch/outreach_state.jso
 so release swaps never re-ingest history (the CRM also dedupes on external_id).
 
 Env:
+  OUTREACH_TRANSPORT_RESET — comma-separated numbers (or "all") to forget the
+    chat.db-learned transport for, so the next send retries iMessage first
   OUTREACH_IMAP_HOST / OUTREACH_IMAP_USER
   OUTREACH_IMAP_FOLDER (default INBOX) / OUTREACH_IMAP_PORT (default 993)
   Auth (prefer OAuth for M365 / GoDaddy — app passwords are often unavailable):
@@ -287,6 +289,22 @@ def _await_delivery(
         time.sleep(poll)
 
 
+def _transport_reset_numbers() -> set[str]:
+    """Numbers whose learned transport is ignored, from OUTREACH_TRANSPORT_RESET.
+
+    Comma-separated numbers, or "all"/"*" for every number. The learned
+    transport lives nowhere but chat.db, so without this the only way to make a
+    number behave as if it had never been texted is to delete its Messages
+    conversation — which throws away the delivery history the send path reads.
+    """
+    raw = (os.environ.get("OUTREACH_TRANSPORT_RESET") or "").strip()
+    if not raw:
+        return set()
+    if raw.lower() in {"all", "*"}:
+        return {"*"}
+    return {key for key in (_normalize_phone(part) for part in raw.split(",")) if key}
+
+
 def _preferred_service(phone: str) -> str | None:
     """Transport that last worked for this number, learned from chat.db.
 
@@ -294,6 +312,10 @@ def _preferred_service(phone: str) -> str | None:
     ~45s verification wait) on every later step of the sequence.
     """
     phone_key = _normalize_phone(phone)
+    reset = _transport_reset_numbers()
+    if reset and ("*" in reset or phone_key in reset):
+        logger.info("transport reset for %s — starting from iMessage", phone)
+        return None
     conn = _chat_db_connect()
     if not phone_key or conn is None:
         return None

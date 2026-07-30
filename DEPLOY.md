@@ -231,6 +231,21 @@ Set `OUTREACH_SMS_FALLBACK=0` in `~/.vsearch/worker.env` to disable the retry
 (iMessage-only sends); `OUTREACH_SEND_VERIFY_SECONDS` (default 45) bounds how
 long a send waits for its delivery verdict.
 
+The retry fires on a **non-zero `error`** column. Messages does not always write
+one: tapping "Send as Text Message" (or macOS's own Send-as-SMS setting)
+rewrites the original row in place — `service` flips to `SMS` and
+`was_downgraded` is set, with `error` still 0 — so the OS gets there first and
+the worker's own retry never runs. A send that stays quiet past the verify
+window is reported unconfirmed rather than failed, on purpose: re-sending a
+slow-but-fine iMessage would double-text the contact.
+
+The learned transport is derived from `chat.db` at send time and cached
+nowhere, so a number "forgets" only when its Messages conversation is deleted.
+To re-run the full transport ladder without destroying that history, set
+`OUTREACH_TRANSPORT_RESET` in `~/.vsearch/worker.env` to a comma-separated list
+of numbers (or `all`). It takes effect on the next poll tick — the pump reloads
+the env each run, so no launchd reload is needed.
+
 #### Automation (Apple Events) permission
 
 Driving Messages.app also needs TCC **Automation**, granted per

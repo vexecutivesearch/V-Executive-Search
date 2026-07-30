@@ -423,6 +423,50 @@ def test_send_prefers_sms_for_a_known_sms_only_number(tmp_path, monkeypatch):
     assert [c[2] for c in calls] == ["sms"]
 
 
+def test_transport_reset_replays_the_imessage_attempt(tmp_path, monkeypatch):
+    """Re-test the full ladder on a known-SMS number without wiping chat.db."""
+    pump = _load_pump()
+    db_path = tmp_path / "chat.db"
+    _make_send_db(db_path, [("+17864083193", "SMS", 1, 0, 0)])
+    monkeypatch.setattr(pump, "CHAT_DB", db_path)
+    calls = _stub_sends(pump, monkeypatch)
+    monkeypatch.setenv("OUTREACH_TRANSPORT_RESET", "(786) 408-3193")
+
+    ok, _error, _service = pump.send_text("+17864083193", "hi")
+    assert ok is True
+    assert [c[2] for c in calls] == ["imessage"]
+
+    # Scoped: another number keeps its learned transport.
+    _append_send_row(db_path, "+15615550100", "SMS", 1, 0, 0)
+    calls.clear()
+    pump.send_text("+15615550100", "hi")
+    assert [c[2] for c in calls] == ["sms"]
+
+
+def test_transport_reset_accepts_all(tmp_path, monkeypatch):
+    pump = _load_pump()
+    db_path = tmp_path / "chat.db"
+    _make_send_db(db_path, [("+17864083193", "SMS", 1, 0, 0)])
+    monkeypatch.setattr(pump, "CHAT_DB", db_path)
+    calls = _stub_sends(pump, monkeypatch)
+    monkeypatch.setenv("OUTREACH_TRANSPORT_RESET", "all")
+
+    pump.send_text("+17864083193", "hi")
+    assert [c[2] for c in calls] == ["imessage"]
+
+
+def test_transport_reset_unset_keeps_learned_transport(tmp_path, monkeypatch):
+    pump = _load_pump()
+    db_path = tmp_path / "chat.db"
+    _make_send_db(db_path, [("+17864083193", "SMS", 1, 0, 0)])
+    monkeypatch.setattr(pump, "CHAT_DB", db_path)
+    calls = _stub_sends(pump, monkeypatch)
+    monkeypatch.delenv("OUTREACH_TRANSPORT_RESET", raising=False)
+
+    pump.send_text("+17864083193", "hi")
+    assert [c[2] for c in calls] == ["sms"]
+
+
 def test_send_treats_unverifiable_delivery_as_sent(tmp_path, monkeypatch):
     """No chat.db (TCC denied) must not turn every send into a double-text."""
     pump = _load_pump()
