@@ -8,10 +8,8 @@ import {
   type SequenceEnrollment,
 } from "@/lib/db/schema";
 import { draftStep, type DraftContext, type DraftedStep } from "@/lib/outreach-draft";
+import { buildDraftContext } from "@/lib/outreach/draft-context";
 import type { ConditionNodeConfig, SendNodeConfig } from "@/lib/outreach/flow-types";
-
-const SENDER_NAME = process.env.OUTREACH_SENDER_NAME ?? "Alejandro O Delgado";
-const SENDER_FIRM = process.env.OUTREACH_SENDER_FIRM ?? "Villatoro Executive Search";
 
 /** Build the same context pack used at enrollment, for node-entry drafting. */
 export async function contextForEnrollment(
@@ -36,32 +34,25 @@ export async function contextForEnrollment(
     .orderBy(desc(jobListings.lastSeenAt))
     .limit(8);
 
-  const jobTitles = [...new Set(listings.map((l) => l.title).filter(Boolean))];
-  const jobDetails = listings.map((l) => {
-    const parts = [l.title];
-    if (l.location) parts.push(`location: ${l.location}`);
-    if (l.salaryText) parts.push(`comp: ${l.salaryText}`);
-    if (l.board && l.board !== "manual_seed") parts.push(`board: ${l.board}`);
-    return parts.join(", ");
-  });
+  let focusListing =
+    enrollment.jobListingId
+      ? listings.find((l) => l.id === enrollment.jobListingId) ?? null
+      : null;
+  if (enrollment.jobListingId && !focusListing) {
+    const [pinned] = await db
+      .select()
+      .from(jobListings)
+      .where(eq(jobListings.id, enrollment.jobListingId))
+      .limit(1);
+    focusListing = pinned ?? null;
+  }
 
-  return {
-    contactName: contact.name || null,
-    contactTitle: contact.title,
-    companyName: company.name,
-    industry: company.industry,
-    estimatedEmployees: company.estimatedEmployees,
-    jobTitles,
-    jobDetails,
-    jobLocation: listings[0]?.location ?? null,
-    hiringSignals: Object.entries(company.hiringSignals ?? {})
-      .filter(([, v]) => v)
-      .map(([k]) => k.replace(/_/g, " ")),
-    reasonToCall: company.reasonToCall,
-    market: company.sourceMarket,
-    senderName: SENDER_NAME,
-    senderFirm: SENDER_FIRM,
-  };
+  return buildDraftContext({
+    contact,
+    company,
+    listings,
+    focusListing,
+  });
 }
 
 /** Node-entry drafting for flow-built send nodes (no pre-drafted message). */
@@ -120,8 +111,6 @@ export async function evaluateContactProperty(
       return Number(actual) >= Number(expected);
     case "lte":
       return Number(actual) <= Number(expected);
-    case "contains":
-      return String(actual).toLowerCase().includes(String(expected).toLowerCase());
     default:
       return false;
   }

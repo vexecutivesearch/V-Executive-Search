@@ -384,6 +384,7 @@ export function TodayListRow({
               ) : (
                 <AddToCallListButton
                   companyId={company.id}
+                  jobListingId={primaryJob?.id}
                   compact
                   onAdded={() => setCallListState("on")}
                 />
@@ -512,6 +513,7 @@ export function TodayListRow({
               ) : (
                 <AddToCallListButton
                   companyId={company.id}
+                  jobListingId={primaryJob?.id}
                   compact
                   onAdded={() => setCallListState("on")}
                 />

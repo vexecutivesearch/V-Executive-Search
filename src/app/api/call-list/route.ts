@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
   let body: {
     company_id?: string;
     contact_id?: string;
+    job_listing_id?: string;
     call_status?: string;
     assigned_to?: string;
   };
@@ -54,6 +55,8 @@ export async function POST(request: NextRequest) {
   if (!companyId) {
     return NextResponse.json({ error: "company_id is required" }, { status: 400 });
   }
+
+  const jobListingId = body.job_listing_id?.trim() || null;
 
   const [company] = await db
     .select()
@@ -96,6 +99,7 @@ export async function POST(request: NextRequest) {
     .values({
       companyId,
       primaryContactId,
+      jobListingId,
       callStatus,
       assignedTo: body.assigned_to?.trim() || null,
     })
@@ -115,13 +119,15 @@ export async function POST(request: NextRequest) {
     companyId,
     contactId: primaryContactId,
     type: "note",
-    summary: "Added to call list",
+    summary: jobListingId
+      ? "Added to call list (outreach pinned to selected job listing)"
+      : "Added to call list",
     source: "call_list",
   });
 
   // Outreach: adding to the call list is the intentional trigger — draft a
-  // personalized email+SMS sequence off the job listings, auto-approve, and
-  // advance so the intro is queued. Actual send still respects kill switch /
+  // personalized email+SMS sequence off the selected job listing, auto-approve,
+  // and advance so the intro is queued. Actual send still respects kill switch /
   // dry-run on the Outreach Overview tab.
   let outreach: {
     enrolled: boolean;
@@ -142,6 +148,7 @@ export async function POST(request: NextRequest) {
           actor: "call_list",
           autoApprove: true,
           advanceNow: true,
+          jobListingId,
         });
         outreach = { ...result };
         if (result.enrolled && settings.enabled && !settings.dryRun) {

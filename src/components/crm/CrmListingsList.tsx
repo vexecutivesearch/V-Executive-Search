@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { CrmListingsResult, CrmListingRow } from "@/lib/crm-queries";
 import { CRM_LISTINGS_PAGE_SIZE } from "@/lib/crm-queries";
+import { AddToCallListButton } from "@/components/AddToCallListButton";
 import { ContactPickerButton } from "@/components/enrich/ContactPickerButton";
 import { CrmListingsFilterBar } from "./CrmListingsFilterBar";
 
@@ -86,6 +87,7 @@ export function CrmListingsList({
                 <th className="px-3 py-2">Location</th>
                 <th className="px-3 py-2">Board</th>
                 <th className="px-3 py-2">Link</th>
+                <th className="px-3 py-2 text-right">Outreach</th>
                 <th className="px-3 py-2 text-right">Contacts</th>
               </tr>
             </thead>
@@ -141,6 +143,13 @@ export function CrmListingsList({
                     ) : (
                       <span className="text-gray-400 text-xs">—</span>
                     )}
+                  </td>
+                  <td className="px-3 py-2.5 text-right">
+                    <AddToCallListButton
+                      companyId={row.companyId}
+                      jobListingId={row.id}
+                      compact
+                    />
                   </td>
                   <td className="px-3 py-2.5 text-right">
                     <ContactPickerButton companyId={row.companyId} compact />

@@ -13,9 +13,9 @@ import {
   DEFAULT_STEP_SPECS,
   draftSequence,
   getLastDraftFailureReason,
-  type DraftContext,
   type StepSpec,
 } from "@/lib/outreach-draft";
+import { buildDraftContext } from "@/lib/outreach/draft-context";
 import { ensureDefaultFlow } from "@/lib/outreach/default-flow";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
 import { seedOutreachTemplates } from "@/lib/outreach/seed-templates";
@@ -26,9 +26,6 @@ import { resolveContactTimezone } from "@/lib/outreach/timezone-infer";
 export type EnrollmentResult =
   | { enrolled: true; enrollmentId: string; channelPlan: "email_and_text" | "email_only" }
   | { enrolled: false; reason: string };
-
-const SENDER_NAME = process.env.OUTREACH_SENDER_NAME ?? "Alejandro O Delgado";
-const SENDER_FIRM = process.env.OUTREACH_SENDER_FIRM ?? "Villatoro Executive Search";
 
 function pickEmail(
   contact: Contact,
@@ -86,9 +83,8 @@ async function ineligibilityReason(
 
 /**
  * Enroll a single contact: drafts ALL steps transactionally (any step failing
- * the sanitizer after retries → no enrollment, failure logged and retried on
- * the next enrich pass), pins the enrollment to the default flow, and holds
- * everything behind the approval gate.
+ * the sanitizer after retries → no enrollment). Claude personalizes off the
+ * pinned job listing when `jobListingId` is provided.
  */
 export async function enrollContact(
   contactId: string,
@@ -99,6 +95,8 @@ export async function enrollContact(
     autoApprove?: boolean;
     /** Advance the flow immediately so the intro is queued for dispatch. */
     advanceNow?: boolean;
+    /** Job listing the user selected — Claude personalizes off this role. */
+    jobListingId?: string | null;
   },
 ): Promise<EnrollmentResult> {
   const settings = await getOrCreateOutreachSettings();
@@ -127,7 +125,6 @@ export async function enrollContact(
   );
   if (reason) return { enrolled: false, reason };
 
-  // Company-level cap: 2–3 contacts per company.
   const companyEnrollments = await db
     .select({ id: sequenceEnrollments.id })
     .from(sequenceEnrollments)
@@ -136,7 +133,6 @@ export async function enrollContact(
     return { enrolled: false, reason: "company contact cap reached" };
   }
 
-  // iMessage: verified capability required; unknown → email-only sequence.
   const phone = pickPhone(contact);
   let textEligible = contact.imessageCapable === true && Boolean(phone);
   if (textEligible && phone) {
@@ -151,10 +147,29 @@ export async function enrollContact(
     .orderBy(desc(jobListings.lastSeenAt))
     .limit(8);
 
+  let focusListing =
+    options?.jobListingId
+      ? listings.find((l) => l.id === options.jobListingId) ?? null
+      : null;
+  if (options?.jobListingId && !focusListing) {
+    const [pinned] = await db
+      .select()
+      .from(jobListings)
+      .where(
+        and(
+          eq(jobListings.id, options.jobListingId),
+          eq(jobListings.companyId, company.id),
+        ),
+      )
+      .limit(1);
+    focusListing = pinned ?? null;
+  }
+
   const timezone = resolveContactTimezone({
     timezoneOverride: contact.timezoneOverride,
     contactLocation: contact.contactLocation,
-    jobLocation: contact.jobLocation ?? listings[0]?.location,
+    jobLocation:
+      contact.jobLocation ?? focusListing?.location ?? listings[0]?.location,
     companyLocation: company.sourceMarket,
   });
 
@@ -162,37 +177,17 @@ export async function enrollContact(
     (spec) => spec.channel === "email" || textEligible,
   );
 
-  const jobTitles = [...new Set(listings.map((l) => l.title).filter(Boolean))];
-  const jobDetails = listings.map((l) => {
-    const parts = [l.title];
-    if (l.location) parts.push(`location: ${l.location}`);
-    if (l.salaryText) parts.push(`comp: ${l.salaryText}`);
-    if (l.board && l.board !== "manual_seed") parts.push(`board: ${l.board}`);
-    return parts.join(", ");
+  const context = buildDraftContext({
+    contact,
+    company,
+    listings,
+    focusListing,
   });
-
-  const context: DraftContext = {
-    contactName: contact.name || null,
-    contactTitle: contact.title,
-    companyName: company.name,
-    industry: company.industry,
-    estimatedEmployees: company.estimatedEmployees,
-    jobTitles,
-    jobDetails,
-    jobLocation: listings[0]?.location ?? null,
-    hiringSignals: Object.entries(company.hiringSignals ?? {})
-      .filter(([, v]) => v)
-      .map(([k]) => k.replace(/_/g, " ")),
-    reasonToCall: company.reasonToCall,
-    market: company.sourceMarket,
-    senderName: SENDER_NAME,
-    senderFirm: SENDER_FIRM,
-  };
 
   const drafted = await draftSequence({ specs, context });
   if (!drafted) {
     const draftFailure = getLastDraftFailureReason() ?? "unknown";
-    const reason =
+    const failReason =
       draftFailure === "missing_anthropic_api_key"
         ? "drafting failed: ANTHROPIC_API_KEY missing on this deploy"
         : `drafting failed: ${draftFailure}`;
@@ -203,8 +198,9 @@ export async function enrollContact(
         stage: "transactional_drafting",
         contact_id: contact.id,
         company_id: company.id,
+        job_listing_id: focusListing?.id ?? null,
         draft_failure: draftFailure,
-        detail: reason,
+        detail: failReason,
       },
     });
     if (options?.actor === "call_list") {
@@ -215,13 +211,13 @@ export async function enrollContact(
         await recordCallListOutreachEvent({
           companyId: company.id,
           contactId: contact.id,
-          summary: `Outreach enroll failed: ${reason}`,
+          summary: `Outreach enroll failed: ${failReason}`,
         });
       } catch {
         /* non-fatal */
       }
     }
-    return { enrolled: false, reason };
+    return { enrolled: false, reason: failReason };
   }
 
   const { versionId } = await ensureDefaultFlow();
@@ -231,6 +227,7 @@ export async function enrollContact(
     .values({
       contactId: contact.id,
       companyId: company.id,
+      jobListingId: focusListing?.id ?? null,
       status: "active",
       timezone,
       emailAddress,
@@ -238,7 +235,11 @@ export async function enrollContact(
       flowVersionId: versionId,
       currentNodeId: null,
       nodeState: options?.staggerDays
-        ? { wait_until: new Date(Date.now() + options.staggerDays * 86_400_000).toISOString() }
+        ? {
+            wait_until: new Date(
+              Date.now() + options.staggerDays * 86_400_000,
+            ).toISOString(),
+          }
         : {},
       nextStepAt: options?.staggerDays
         ? new Date(Date.now() + options.staggerDays * 86_400_000)
@@ -267,18 +268,25 @@ export async function enrollContact(
     payload: {
       contact_id: contact.id,
       company_id: company.id,
+      job_listing_id: focusListing?.id ?? null,
+      primary_job_title: context.primaryJobTitle,
       timezone,
       channel_plan: textEligible ? "email_and_text" : "email_only",
       steps: drafted.map((s) => s.stepKind),
       stagger_days: options?.staggerDays ?? 0,
-      job_titles: jobTitles,
+      job_titles: context.jobTitles,
       auto_approve: Boolean(options?.autoApprove),
     },
   });
   await logEnrollmentEvent({
     enrollmentId: enrollment.id,
     eventType: "drafted",
-    payload: { steps: drafted.length, transactional: true },
+    payload: {
+      steps: drafted.length,
+      transactional: true,
+      job_listing_id: focusListing?.id ?? null,
+      primary_job_title: context.primaryJobTitle,
+    },
   });
   if (options?.autoApprove) {
     await logEnrollmentEvent({
@@ -294,11 +302,14 @@ export async function enrollContact(
       "@/lib/outreach/call-list-sync"
     );
     const plan = textEligible ? "email + SMS" : "email-only";
+    const roleBit = context.primaryJobTitle
+      ? ` about "${context.primaryJobTitle}"`
+      : "";
     await recordCallListOutreachEvent({
       companyId: company.id,
       contactId: contact.id,
       bumpAttempt: false,
-      summary: `Outreach sequence enrolled (${plan}, ${drafted.length} steps)${
+      summary: `Outreach sequence enrolled (${plan}, ${drafted.length} steps)${roleBit}${
         options?.actor === "call_list" ? " via Call List" : ""
       }. Next: ${drafted[0]?.stepKind ?? "intro"}.`,
     });
@@ -357,7 +368,6 @@ export async function autoEnrollForCompanies(
     }
 
     for (const [, companyContacts] of byCompany) {
-      // Prefer primary + revealed contacts first.
       const ordered = [...companyContacts].sort((a, b) => {
         const score = (c: Contact) =>
           (c.isPrimary ? 2 : 0) + (c.emailDeliverable === true ? 1 : 0);

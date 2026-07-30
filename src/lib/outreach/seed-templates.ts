@@ -3,11 +3,10 @@ import { db } from "@/lib/db";
 import { outreachTemplates } from "@/lib/db/schema";
 
 /**
- * Winning-email exemplars, style DNA for the LLM drafter, treated strictly
- * as data. The first two are the real sent emails that got replies
- * (boutique legal recruitment intro; role-specific technical intro). The
- * rest are hand-written in the same voice so every step kind has at least
- * one active exemplar. All editable in Admin → Outreach → Templates.
+ * Winning-email / SMS exemplars — style DNA for the Claude drafter.
+ * The first two intros are real sent emails that got replies. SMS intros
+ * follow Alejandro's brief "I've emailed you — when can we chat?" pattern.
+ * Editable in Admin → Outreach → Templates; seed refresh updates matching names.
  */
 const SEED_TEMPLATES: Array<{
   name: string;
@@ -61,11 +60,11 @@ Would you be open to a quick conversation this week to discuss how Villatoro Exe
     exampleSubject: "Following up on your open roles",
     exampleBody: `Hi Stacy,
 
-Following up on my note from earlier this week about your open roles. I know hiring for specialized positions while running the day-to-day is a lot to juggle.
+Following up on my note about your open roles. I know hiring for specialized positions while running the day-to-day is a lot to juggle.
 
-If it would help, I can share a couple of recent placements we made for similar roles so you can see the caliber of candidates we deliver and how quickly we move.
+If it would help, I can share how we'd approach the search and what a realistic timeline looks like, without adding work to your plate.
 
-Worth a quick call this week or next?`,
+Worth a quick call this week?`,
   },
   {
     name: "Follow-up 2, final email",
@@ -74,27 +73,27 @@ Worth a quick call this week or next?`,
     exampleSubject: "Last note on your hiring",
     exampleBody: `Hi Stacy,
 
-I'll keep this short since I know your inbox is busy. If filling your open roles is still a priority this quarter, I'd welcome ten minutes to walk through how we'd approach the search and what a realistic timeline looks like.
+I'll keep this short. If filling that role is still a priority, I'd welcome ten minutes to walk through how we'd run the search.
 
-If the timing isn't right, no problem at all, happy to reconnect whenever hiring picks back up. Either way, I wish you a strong quarter.`,
+If the timing isn't right, no problem at all. Happy to reconnect whenever hiring picks back up.`,
   },
   {
-    name: "Text 1, soft intro",
+    name: "Text 1, post-email intro",
     kind: "text_1",
     channel: "imessage",
-    exampleBody: `Hi Stacy, this is Alejandro Delgado with Villatoro Executive Search. I emailed you earlier this week about the open roles at Plus Power. Happy to share how we could help fill them quickly. Is there a good time for a brief call?`,
+    exampleBody: `Hey, my name is Alejandro with V Executive Search. I've sent you an email about your Senior SCADA Controls Systems Engineer opening in West Palm Beach. When is a good time to chat?`,
   },
   {
     name: "Text 2, value nudge",
     kind: "text_2",
     channel: "imessage",
-    exampleBody: `Hi Stacy, Alejandro again from Villatoro Executive Search. We recently filled two similar roles in under three weeks and I think we could do the same for your openings. Would a 10-minute call this week work?`,
+    exampleBody: `Hey Stacy, Alejandro again with V Executive Search. We move quickly on specialized searches like yours — happy to jump on a quick call if useful. When works this week?`,
   },
   {
     name: "Text 3, final",
     kind: "text_3",
     channel: "imessage",
-    exampleBody: `Hi Stacy, last note from me. If hiring support would help this quarter, I'd be glad to talk whenever works for you. Otherwise I'll leave you be, and best of luck with the searches.`,
+    exampleBody: `Hey Stacy, last note from me. If hiring support would help, I'm around — otherwise I'll leave you be. Best of luck with the search.`,
   },
   {
     name: "Positive reply, availability",
@@ -124,7 +123,7 @@ In the meantime, if it's easier to cover live, I'm glad to jump on a quick call 
 
 /**
  * Insert missing seed templates and refresh wording for known seed names
- * (so dash/comma edits ship without wiping user-customized templates that
+ * (so copy improvements ship without wiping user-customized templates that
  * use different names).
  */
 export async function seedOutreachTemplates(): Promise<number> {
@@ -136,15 +135,26 @@ export async function seedOutreachTemplates(): Promise<number> {
       .where(eq(outreachTemplates.name, t.name))
       .limit(1);
     if (!existing) {
-      // Also refresh older seed names that used em-dash titles.
-      const legacyName = t.name.replace(", ", " — ");
-      const [legacy] = legacyName !== t.name
-        ? await db
-            .select()
-            .from(outreachTemplates)
-            .where(eq(outreachTemplates.name, legacyName))
-            .limit(1)
-        : [undefined];
+      // Also refresh older seed names that used em-dash titles or prior SMS name.
+      const legacyNames = [
+        t.name.replace(", ", " — "),
+        t.name === "Text 1, post-email intro" ? "Text 1, post intro" : null,
+      ].filter((n): n is string => Boolean(n) && n !== t.name);
+
+      let legacy:
+        | { id: string }
+        | undefined;
+      for (const legacyName of legacyNames) {
+        const [row] = await db
+          .select()
+          .from(outreachTemplates)
+          .where(eq(outreachTemplates.name, legacyName))
+          .limit(1);
+        if (row) {
+          legacy = row;
+          break;
+        }
+      }
       if (legacy) {
         await db
           .update(outreachTemplates)

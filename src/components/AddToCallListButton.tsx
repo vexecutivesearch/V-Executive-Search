@@ -25,11 +25,14 @@ export function OnCallListBadge() {
  */
 export function AddToCallListButton({
   companyId,
+  jobListingId,
   initialOnList,
   compact = false,
   onAdded,
 }: {
   companyId: string;
+  /** When set, Claude drafts outreach about this specific job listing. */
+  jobListingId?: string | null;
   /** Pass when membership is known server-side; omit to resolve on click. */
   initialOnList?: boolean;
   compact?: boolean;
@@ -65,7 +68,10 @@ export function AddToCallListButton({
       const res = await fetch("/api/call-list", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ company_id: companyId }),
+        body: JSON.stringify({
+          company_id: companyId,
+          ...(jobListingId ? { job_listing_id: jobListingId } : {}),
+        }),
       });
       const data = (await res.json()) as {
         entry?: CallListEntry;
@@ -112,7 +118,7 @@ export function AddToCallListButton({
         type="button"
         onClick={handleAdd}
         disabled={loading}
-        title="Add to call list and draft a personalized outreach sequence from the job listing"
+        title="Add to call list and draft a personalized outreach sequence from this job listing"
         className={`rounded-md font-medium transition-colors disabled:opacity-50 whitespace-nowrap border border-emerald-700 text-emerald-800 dark:text-emerald-300 dark:border-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 ${
           compact ? "px-2 py-1 text-xs" : "px-3 py-1.5 text-sm"
         }`}
@@ -129,9 +135,11 @@ export function AddToCallListButton({
 /** Post-enrich inline prompt: "Add to Call List: Yes / No". */
 export function AddToCallListPrompt({
   companyId,
+  jobListingId,
   onAnswer,
 }: {
   companyId: string;
+  jobListingId?: string | null;
   /** Called after Yes (added=true) or No (added=false). */
   onAnswer: (added: boolean) => void;
 }) {
@@ -145,7 +153,10 @@ export function AddToCallListPrompt({
       const res = await fetch("/api/call-list", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ company_id: companyId }),
+        body: JSON.stringify({
+          company_id: companyId,
+          ...(jobListingId ? { job_listing_id: jobListingId } : {}),
+        }),
       });
       const data = (await res.json()) as { error?: string };
       if (!res.ok) {

@@ -358,6 +358,10 @@ export const callListEntries = pgTable(
     primaryContactId: uuid("primary_contact_id").references(() => contacts.id, {
       onDelete: "set null",
     }),
+    /** Job listing that triggered outreach (Job Listings tab / lead primary). */
+    jobListingId: uuid("job_listing_id").references(() => jobListings.id, {
+      onDelete: "set null",
+    }),
     callStatus: callStatusEnum("call_status").default("ready_to_call").notNull(),
     callStatusUpdatedAt: timestamp("call_status_updated_at"),
     /** Editable override; falls back to companies.reason_to_call when null. */
@@ -552,6 +556,10 @@ export const sequenceEnrollments = pgTable("sequence_enrollments", {
   companyId: uuid("company_id")
     .references(() => companies.id, { onDelete: "cascade" })
     .notNull(),
+  /** Listing the sequence was drafted about (Claude personalization pin). */
+  jobListingId: uuid("job_listing_id").references(() => jobListings.id, {
+    onDelete: "set null",
+  }),
   status: enrollmentStatusEnum("status").default("active").notNull(),
   enrolledAt: timestamp("enrolled_at").defaultNow().notNull(),
   nextStepAt: timestamp("next_step_at"),

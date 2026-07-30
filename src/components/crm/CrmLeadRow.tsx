@@ -273,6 +273,7 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
           ) : hasCallable ? (
             <AddToCallListButton
               companyId={company.id}
+              jobListingId={primaryJob?.id}
               compact
               onAdded={() => setOnList(true)}
             />
@@ -315,6 +316,7 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
         <div className="mx-4 mb-2">
           <AddToCallListPrompt
             companyId={company.id}
+            jobListingId={primaryJob?.id}
             onAnswer={handlePromptAnswer}
           />
         </div>
@@ -341,6 +343,7 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
               hasCallable && (
                 <AddToCallListButton
                   companyId={company.id}
+                  jobListingId={primaryJob?.id}
                   compact
                   onAdded={() => setOnList(true)}
                 />
