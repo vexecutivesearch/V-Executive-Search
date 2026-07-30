@@ -52,14 +52,14 @@ describe("scheduleSendAt (weekday sends, contact-local hours, jitter)", () => {
       offsetDays: 2,
       timeZone: "America/New_York",
       windowStartHour: 9,
-      windowEndHour: 19,
+      windowEndHour: 20,
       random: () => 0.5,
     });
     const wc = wallClock(scheduled, "America/New_York");
     expect(wc.weekday).toBeGreaterThanOrEqual(1);
     expect(wc.weekday).toBeLessThanOrEqual(5);
     expect(wc.hour).toBeGreaterThanOrEqual(9);
-    expect(wc.hour).toBeLessThan(19);
+    expect(wc.hour).toBeLessThan(20);
   });
 
   it("rolls weekend targets forward to Monday", () => {
@@ -96,14 +96,14 @@ describe("scheduleSendAt (weekday sends, contact-local hours, jitter)", () => {
       offsetDays: 0,
       timeZone: "America/Chicago",
       windowStartHour: 9,
-      windowEndHour: 19,
+      windowEndHour: 20,
       random: () => 0.5,
     });
     expect(scheduled.getTime()).toBeGreaterThan(base.getTime());
     const wc = wallClock(scheduled, "America/Chicago");
     expect(wc.weekday).toBe(3); // still Wednesday
     expect(wc.hour).toBeGreaterThanOrEqual(9);
-    expect(wc.hour).toBeLessThan(19);
+    expect(wc.hour).toBeLessThan(20);
   });
 
   it("day-0 mid-window is already due so the enroll dispatch pass sends it", () => {
@@ -113,7 +113,7 @@ describe("scheduleSendAt (weekday sends, contact-local hours, jitter)", () => {
       offsetDays: 0,
       timeZone: "America/Chicago",
       windowStartHour: 9,
-      windowEndHour: 19,
+      windowEndHour: 20,
       random: () => 0.5,
     });
     // enrollFlow queues the step, then runs runOutreachDispatch(new Date())
@@ -134,42 +134,42 @@ describe("scheduleSendAt (weekday sends, contact-local hours, jitter)", () => {
         offsetDays: 0,
         timeZone: "America/New_York",
         windowStartHour: 9,
-        windowEndHour: 19,
+        windowEndHour: 20,
         random: () => draw,
       });
       expect(scheduled.getTime()).toBeLessThanOrEqual(enrolledAt.getTime());
     }
   });
 
-  it("day-0 late in the extended window (6 PM ET) still sends same day", () => {
-    // Boundary check for the 17→19 window change: 6 PM ET is in window.
-    const sixPmEt = new Date("2026-07-30T22:00:00Z"); // 6 PM ET Thursday
-    const scheduled = scheduleSendAt({
-      base: sixPmEt,
-      offsetDays: 0,
-      timeZone: "America/New_York",
-      windowStartHour: 9,
-      windowEndHour: 19,
-      random: () => 0.5,
-    });
-    expect(scheduled.getTime()).toBeLessThanOrEqual(sixPmEt.getTime());
-  });
-
-  it("day-0 past the window end (7 PM ET) defers to the next weekday", () => {
+  it("day-0 late in the extended window (7 PM ET) still sends same day", () => {
+    // Boundary check for the 19→20 window change: 7 PM ET is in window.
     const sevenPmEt = new Date("2026-07-30T23:00:00Z"); // 7 PM ET Thursday
     const scheduled = scheduleSendAt({
       base: sevenPmEt,
       offsetDays: 0,
       timeZone: "America/New_York",
       windowStartHour: 9,
-      windowEndHour: 19,
+      windowEndHour: 20,
       random: () => 0.5,
     });
-    expect(scheduled.getTime()).toBeGreaterThan(sevenPmEt.getTime());
+    expect(scheduled.getTime()).toBeLessThanOrEqual(sevenPmEt.getTime());
+  });
+
+  it("day-0 past the window end (8 PM ET) defers to the next weekday", () => {
+    const eightPmEt = new Date("2026-07-31T00:00:00Z"); // 8 PM ET Thursday
+    const scheduled = scheduleSendAt({
+      base: eightPmEt,
+      offsetDays: 0,
+      timeZone: "America/New_York",
+      windowStartHour: 9,
+      windowEndHour: 20,
+      random: () => 0.5,
+    });
+    expect(scheduled.getTime()).toBeGreaterThan(eightPmEt.getTime());
     const wc = wallClock(scheduled, "America/New_York");
     expect(wc.weekday).toBe(5); // Friday
     expect(wc.hour).toBeGreaterThanOrEqual(9);
-    expect(wc.hour).toBeLessThan(19);
+    expect(wc.hour).toBeLessThan(20);
   });
 });
 

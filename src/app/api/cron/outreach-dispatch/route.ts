@@ -8,7 +8,7 @@ export const maxDuration = 120;
 
 /**
  * Vercel Cron — outreach dispatch, every 15 minutes across the UTC span that
- * covers contact-local 9–19 (9 AM–7 PM) for US timezones (see vercel.json).
+ * covers contact-local 9–20 (9 AM–8 PM) for US timezones (see vercel.json).
  * Advances flow enrollments and sends due, approved, unsuppressed emails.
  * (iMessage sends are polled by the Mac worker, not sent here.)
  */
