@@ -14,6 +14,7 @@ dist/
 build/
 next-env.d.ts
 data/census/
+*.tsbuildinfo
 
 # Python worker
 worker/.venv/
