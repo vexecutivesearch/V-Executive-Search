@@ -7,6 +7,14 @@ import {
   sequenceEnrollments,
   type OutreachChannel,
 } from "@/lib/db/schema";
+import {
+  applyCalendlyBooking,
+  type ParsedCalendlyBooking,
+} from "@/lib/outreach/calendly-booking";
+import {
+  isCalendlyNotificationAddress,
+  parseCalendlyNotificationEmail,
+} from "@/lib/outreach/calendly-email";
 import { classifyInbound } from "@/lib/outreach/classify";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
 import { applyReplyRules } from "@/lib/outreach/rules";
@@ -105,6 +113,158 @@ async function matchEnrollment(options: {
 }
 
 /**
+ * Free-tier Calendly: IMAP notifications are From Calendly, not the invitee.
+ * Parse name+time from subject, match via name/positive cascade, apply Call Booked.
+ * Skips LLM so these never show as ooo/unknown / "Not assigned" from From-match.
+ */
+async function ingestCalendlyNotification(options: {
+  fromAddress?: string | null;
+  subject?: string | null;
+  body: string;
+  externalId?: string | null;
+  receivedAt?: Date;
+}): Promise<InboundIngestResult | null> {
+  if (!isCalendlyNotificationAddress(options.fromAddress)) return null;
+
+  const parsed = parseCalendlyNotificationEmail({
+    subject: options.subject,
+    body: options.body,
+  });
+  if (!parsed) return null;
+
+  // Marketing / non-event Calendly mail — log and skip LLM (no fake assignment).
+  if (parsed.kind === "marketing") {
+    const [row] = await db
+      .insert(inboundMessages)
+      .values({
+        enrollmentId: null,
+        contactId: null,
+        channel: "email",
+        fromAddress: options.fromAddress ?? null,
+        subject: options.subject ?? null,
+        rawBody: options.body,
+        externalId: options.externalId ?? null,
+        receivedAt: options.receivedAt ?? new Date(),
+        classifiedIntent: "courtesy",
+        confidence: 1,
+        actionTaken: "Calendly marketing — ignored",
+      })
+      .onConflictDoNothing({ target: inboundMessages.externalId })
+      .returning();
+    if (!row) return { id: null, duplicate: true, matched: false };
+    return {
+      id: row.id,
+      duplicate: false,
+      matched: false,
+      intent: "courtesy",
+      actionTaken: "Calendly marketing — ignored",
+    };
+  }
+
+  const booking: ParsedCalendlyBooking = {
+    event:
+      parsed.kind === "created" ? "invitee.created" : "invitee.canceled",
+    // Never use Calendly's From address as invitee email.
+    email: null,
+    name: parsed.inviteeName,
+    phone: null,
+    timezone: "America/New_York",
+    startTime: parsed.startTime,
+    endTime: parsed.endTime,
+    scheduledEventUri: null,
+    inviteeUri: null,
+    cancelUrl: null,
+    rawPayload: {
+      source: "imap_email",
+      subject: parsed.rawSubject,
+      invitee_name: parsed.inviteeName,
+      event_title: parsed.eventTitle,
+    },
+    source: "email",
+  };
+
+  const result = await applyCalendlyBooking(booking);
+
+  const timeNote = parsed.startTime
+    ? parsed.startTime.toLocaleString("en-US", {
+        timeZone: "America/New_York",
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    : "time TBD";
+
+  let actionTaken: string;
+  if (result.matched && result.contactName) {
+    actionTaken = `Calendly booking matched to ${result.contactName}${
+      result.matchVia ? ` (${result.matchVia})` : ""
+    }`;
+  } else {
+    actionTaken = `Calendly booking unmatched — ${parsed.inviteeName ?? "unknown"} @ ${timeNote}${
+      result.reason ? ` (${result.reason})` : ""
+    }; manual review`;
+  }
+
+  const [row] = await db
+    .insert(inboundMessages)
+    .values({
+      enrollmentId: result.enrollmentId ?? null,
+      contactId: result.contactId ?? null,
+      channel: "email",
+      fromAddress: options.fromAddress ?? null,
+      subject: options.subject ?? null,
+      rawBody: options.body,
+      externalId: options.externalId ?? null,
+      receivedAt: options.receivedAt ?? new Date(),
+      classifiedIntent: "positive",
+      confidence: 1,
+      actionTaken,
+    })
+    .onConflictDoNothing({ target: inboundMessages.externalId })
+    .returning();
+  if (!row) return { id: null, duplicate: true, matched: false };
+
+  if (result.enrollmentId) {
+    await logEnrollmentEvent({
+      enrollmentId: result.enrollmentId,
+      eventType: "reply_received",
+      actor: "calendly_email",
+      payload: {
+        inbound_id: row.id,
+        channel: "email",
+        from: options.fromAddress,
+        calendly: true,
+        invitee_name: parsed.inviteeName,
+        match_via: result.matchVia ?? null,
+      },
+    });
+    await logEnrollmentEvent({
+      enrollmentId: result.enrollmentId,
+      eventType: "classified",
+      actor: "calendly_email",
+      payload: {
+        inbound_id: row.id,
+        intent: "positive",
+        confidence: 1,
+        via: "calendly_email",
+        action: result.action,
+      },
+    });
+  }
+
+  return {
+    id: row.id,
+    duplicate: false,
+    matched: result.matched,
+    intent: "positive",
+    actionTaken,
+  };
+}
+
+/**
  * Ingest one inbound message: dedupe → store → classify → rule engine.
  * Bounce webhooks pass a pre-classified intent (no LLM needed).
  */
@@ -125,6 +285,12 @@ export async function ingestInboundMessage(options: {
       .where(eq(inboundMessages.externalId, options.externalId))
       .limit(1);
     if (existing) return { id: existing.id, duplicate: true, matched: false };
+  }
+
+  // Calendly notification emails (free-tier IMAP) — before From-based match/LLM.
+  if (options.channel === "email") {
+    const calendly = await ingestCalendlyNotification(options);
+    if (calendly) return calendly;
   }
 
   const { enrollmentId, contactId } = await matchEnrollment(options);

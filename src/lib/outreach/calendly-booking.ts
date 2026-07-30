@@ -5,6 +5,7 @@ import {
   callListEntries,
   companies,
   contacts,
+  inboundMessages,
   outreachMessages,
   sequenceEnrollments,
   type Contact,
@@ -34,6 +35,8 @@ export type ParsedCalendlyBooking = {
   inviteeUri: string | null;
   cancelUrl: string | null;
   rawPayload: Record<string, unknown>;
+  /** webhook = Calendly API; email = IMAP free-tier notification parse. */
+  source?: "webhook" | "email";
 };
 
 export type ApplyCalendlyBookingResult = {
@@ -44,6 +47,13 @@ export type ApplyCalendlyBookingResult = {
   enrollmentId?: string | null;
   action?: string;
   reason?: string;
+  matchVia?:
+    | "name_exact"
+    | "name_strong"
+    | "name_partial_positive"
+    | "sole_recent_positive"
+    | null;
+  contactName?: string | null;
 };
 
 type UnknownRecord = Record<string, unknown>;
@@ -307,13 +317,452 @@ function contactPhoneMatches(contact: Contact, phone: string): boolean {
   return candidates.some((c) => normalizePhone(c) === phone);
 }
 
+/** Normalize person names for fuzzy first+last matching. */
+export function normalizePersonName(name: string): string {
+  return name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Drop middle initials (single-letter tokens) for comparison. */
+export function significantNameTokens(name: string): string[] {
+  return normalizePersonName(name)
+    .split(" ")
+    .filter((t) => t.length > 1);
+}
+
+export type NameMatchStrength = "exact" | "strong" | "partial" | "none";
+
+/**
+ * Invitee vs contact.name:
+ * - exact: same significant tokens (order-insensitive)
+ * - strong: first+last both present (middle initials / reorder OK)
+ * - partial: first-only or last-only overlap
+ */
+export function nameMatchStrength(
+  inviteeName: string,
+  contactName: string,
+): NameMatchStrength {
+  const at = significantNameTokens(inviteeName);
+  const bt = significantNameTokens(contactName);
+  if (!at.length || !bt.length) return "none";
+
+  const sameMultiset =
+    at.length === bt.length && at.every((t) => bt.includes(t));
+  if (sameMultiset || at.join(" ") === bt.join(" ")) return "exact";
+
+  if (at.length >= 2) {
+    const first = at[0]!;
+    const last = at[at.length - 1]!;
+    if (bt.includes(first) && bt.includes(last)) return "strong";
+    if (at.every((t) => bt.includes(t))) return "strong";
+  }
+
+  if (at.length === 1) {
+    return bt.includes(at[0]!) ? "partial" : "none";
+  }
+  if (bt.includes(at[0]!) || bt.includes(at[at.length - 1]!)) return "partial";
+  return "none";
+}
+
+/** True for exact/strong name overlap (not partial-only). */
+export function namesMatchInvitee(
+  inviteeName: string,
+  contactName: string,
+): boolean {
+  const s = nameMatchStrength(inviteeName, contactName);
+  return s === "exact" || s === "strong";
+}
+
+const LIVE_ENROLLMENT_STATUSES = [
+  "active",
+  "paused",
+  "waiting_on_reply",
+  "waiting_on_manual",
+  "replied_positive",
+] as const;
+
+/** Lookback for positive / Calendly-link signals when name match is weak. */
+export const CALENDLY_POSITIVE_LOOKBACK_DAYS = 21;
+
+export type CalendlyNameMatchVia =
+  | "name_exact"
+  | "name_strong"
+  | "name_partial_positive"
+  | "sole_recent_positive";
+
+export type CalendlyNameMatchResult = {
+  contact: Contact | null;
+  enrollment: SequenceEnrollment | null;
+  matchVia?: CalendlyNameMatchVia | null;
+  reason?: string;
+};
+
+type ScoredCandidate = {
+  contact: Contact;
+  enrollment: SequenceEnrollment | null;
+  strength: NameMatchStrength;
+  score: number;
+  enrolledAt: number;
+};
+
+function scoreNameCandidate(options: {
+  contact: Contact;
+  enrollment: SequenceEnrollment | null;
+  strength: NameMatchStrength;
+  onCallList: boolean;
+  callStatus?: string | null;
+  companyStatus?: string | null;
+  recentPositive: boolean;
+  calendlyLinkSent: boolean;
+}): ScoredCandidate {
+  const { contact, enrollment, strength } = options;
+  let score = 0;
+  if (strength === "exact") score += 200;
+  else if (strength === "strong") score += 150;
+  else if (strength === "partial") score += 40;
+  if (
+    enrollment &&
+    LIVE_ENROLLMENT_STATUSES.includes(
+      enrollment.status as (typeof LIVE_ENROLLMENT_STATUSES)[number],
+    )
+  ) {
+    score += 80;
+  }
+  if (enrollment?.status === "replied_positive") score += 60;
+  if (options.onCallList) score += 40;
+  if (options.callStatus === "meeting_scheduled") score += 50;
+  if (options.companyStatus === "meeting") score += 30;
+  if (options.recentPositive) score += 70;
+  if (options.calendlyLinkSent) score += 50;
+  return {
+    contact,
+    enrollment,
+    strength,
+    score,
+    enrolledAt: enrollment?.enrolledAt?.getTime() ?? 0,
+  };
+}
+
+/**
+ * Matching cascade for Calendly IMAP "New Event: {Name} - …" emails
+ * (From is Calendly — never match by that address):
+ *
+ * 1. Strong/exact name among Call List + live enrollments → take unique best
+ * 2. If zero/ambiguous → cross-ref recent positive signals (≤21d):
+ *    replied_positive, meeting_scheduled, company meeting, Calendly link sent,
+ *    positive inbound — prefer partial name hit within that set
+ * 3. If name still weak AND exactly one recent "waiting for booking" positive
+ *    enrollment with name overlap → use it. Never pick at random among many.
+ * 4. Else unmatched — caller logs for manual review.
+ */
+export async function matchByInviteeName(
+  name: string,
+): Promise<CalendlyNameMatchResult> {
+  const tokens = significantNameTokens(name);
+  if (tokens.length === 0) {
+    return { contact: null, enrollment: null, reason: "empty invitee name" };
+  }
+
+  const since = new Date(
+    Date.now() - CALENDLY_POSITIVE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+  );
+
+  const liveEnrollments = await db
+    .select()
+    .from(sequenceEnrollments)
+    .where(inArray(sequenceEnrollments.status, [...LIVE_ENROLLMENT_STATUSES]))
+    .orderBy(desc(sequenceEnrollments.updatedAt))
+    .limit(400);
+
+  const callListRows = await db.select().from(callListEntries).limit(500);
+  const callListByCompany = new Map(
+    callListRows.map((e) => [e.companyId, e] as const),
+  );
+
+  const contactIdSet = new Set<string>([
+    ...liveEnrollments.map((e) => e.contactId),
+  ]);
+
+  if (callListRows.length) {
+    const onList = await db
+      .select()
+      .from(contacts)
+      .where(
+        inArray(
+          contacts.companyId,
+          callListRows.map((e) => e.companyId),
+        ),
+      )
+      .limit(800);
+    for (const c of onList) contactIdSet.add(c.id);
+  }
+
+  if (contactIdSet.size === 0) {
+    return {
+      contact: null,
+      enrollment: null,
+      reason: "no call-list or live-enrollment contacts",
+    };
+  }
+
+  const poolContacts = await db
+    .select()
+    .from(contacts)
+    .where(inArray(contacts.id, [...contactIdSet]))
+    .limit(800);
+
+  const enrollmentByContact = new Map<string, SequenceEnrollment>();
+  for (const e of liveEnrollments) {
+    if (!enrollmentByContact.has(e.contactId)) {
+      enrollmentByContact.set(e.contactId, e);
+    }
+  }
+  const extraEnrollments = await db
+    .select()
+    .from(sequenceEnrollments)
+    .where(inArray(sequenceEnrollments.contactId, [...contactIdSet]))
+    .orderBy(desc(sequenceEnrollments.enrolledAt))
+    .limit(800);
+  for (const e of extraEnrollments) {
+    if (!enrollmentByContact.has(e.contactId)) {
+      enrollmentByContact.set(e.contactId, e);
+    }
+  }
+
+  const companyIds = [...new Set(poolContacts.map((c) => c.companyId))];
+  const companyRows =
+    companyIds.length > 0
+      ? await db
+          .select({ id: companies.id, status: companies.status })
+          .from(companies)
+          .where(inArray(companies.id, companyIds))
+      : [];
+  const companyStatusById = new Map(companyRows.map((c) => [c.id, c.status]));
+
+  const positiveInbound = await db
+    .select({
+      contactId: inboundMessages.contactId,
+      enrollmentId: inboundMessages.enrollmentId,
+    })
+    .from(inboundMessages)
+    .where(
+      and(
+        inArray(inboundMessages.classifiedIntent, [
+          "positive",
+          "positive_link_request",
+        ]),
+        sql`${inboundMessages.receivedAt} >= ${since}`,
+      ),
+    )
+    .limit(200);
+
+  const calendlySends = await db
+    .select({
+      enrollmentId: outreachMessages.enrollmentId,
+    })
+    .from(outreachMessages)
+    .where(
+      and(
+        eq(outreachMessages.status, "sent"),
+        inArray(outreachMessages.stepKind, [
+          "reply_positive",
+          "reply_info_request",
+        ]),
+        sql`${outreachMessages.body} ilike ${"%calendly.com%"}`,
+        sql`coalesce(${outreachMessages.sentAt}, ${outreachMessages.updatedAt}) >= ${since}`,
+      ),
+    )
+    .limit(200);
+
+  const positiveContactIds = new Set<string>();
+  const calendlyEnrollmentIds = new Set(
+    calendlySends.map((r) => r.enrollmentId),
+  );
+  for (const row of positiveInbound) {
+    if (row.contactId) positiveContactIds.add(row.contactId);
+  }
+  for (const e of liveEnrollments) {
+    if (e.status === "replied_positive" && e.updatedAt >= since) {
+      positiveContactIds.add(e.contactId);
+    }
+    if (calendlyEnrollmentIds.has(e.id)) positiveContactIds.add(e.contactId);
+  }
+  if (calendlyEnrollmentIds.size) {
+    for (const e of extraEnrollments) {
+      if (calendlyEnrollmentIds.has(e.id)) positiveContactIds.add(e.contactId);
+    }
+  }
+  for (const entry of callListRows) {
+    if (
+      entry.callStatus === "meeting_scheduled" &&
+      (entry.callStatusUpdatedAt ?? entry.updatedAt) >= since
+    ) {
+      for (const c of poolContacts) {
+        if (c.companyId === entry.companyId) positiveContactIds.add(c.id);
+      }
+    }
+  }
+
+  const scored: ScoredCandidate[] = [];
+  for (const contact of poolContacts) {
+    const strength = nameMatchStrength(name, contact.name);
+    if (strength === "none") continue;
+    const enrollment = enrollmentByContact.get(contact.id) ?? null;
+    const callEntry = callListByCompany.get(contact.companyId);
+    scored.push(
+      scoreNameCandidate({
+        contact,
+        enrollment,
+        strength,
+        onCallList: Boolean(callEntry),
+        callStatus: callEntry?.callStatus,
+        companyStatus: companyStatusById.get(contact.companyId),
+        recentPositive: positiveContactIds.has(contact.id),
+        calendlyLinkSent: enrollment
+          ? calendlyEnrollmentIds.has(enrollment.id)
+          : false,
+      }),
+    );
+  }
+
+  scored.sort((a, b) => b.score - a.score || b.enrolledAt - a.enrolledAt);
+
+  const strongHits = scored.filter(
+    (s) => s.strength === "exact" || s.strength === "strong",
+  );
+
+  if (strongHits.length === 1) {
+    const best = strongHits[0]!;
+    return {
+      contact: best.contact,
+      enrollment: best.enrollment,
+      matchVia: best.strength === "exact" ? "name_exact" : "name_strong",
+    };
+  }
+  if (strongHits.length > 1) {
+    const positiveStrong = strongHits.filter((s) =>
+      positiveContactIds.has(s.contact.id),
+    );
+    if (positiveStrong.length === 1) {
+      const best = positiveStrong[0]!;
+      return {
+        contact: best.contact,
+        enrollment: best.enrollment,
+        matchVia: best.strength === "exact" ? "name_exact" : "name_strong",
+        reason: "disambiguated via recent positive signal",
+      };
+    }
+    if (positiveStrong.length > 1) {
+      const [a, b] = positiveStrong;
+      if (a && b && a.score >= b.score + 40) {
+        return {
+          contact: a.contact,
+          enrollment: a.enrollment,
+          matchVia: a.strength === "exact" ? "name_exact" : "name_strong",
+          reason: "top-scored among ambiguous name matches",
+        };
+      }
+      return {
+        contact: null,
+        enrollment: null,
+        reason: `ambiguous name match (${positiveStrong.length} positives)`,
+      };
+    }
+    return {
+      contact: null,
+      enrollment: null,
+      reason: `ambiguous name match (${strongHits.length} contacts)`,
+    };
+  }
+
+  const partialPositive = scored.filter(
+    (s) => s.strength === "partial" && positiveContactIds.has(s.contact.id),
+  );
+  if (partialPositive.length === 1) {
+    const best = partialPositive[0]!;
+    return {
+      contact: best.contact,
+      enrollment: best.enrollment,
+      matchVia: "name_partial_positive",
+      reason: "partial name among recent positives",
+    };
+  }
+  if (partialPositive.length > 1) {
+    const [a, b] = partialPositive;
+    if (a && b && a.score >= b.score + 40) {
+      return {
+        contact: a.contact,
+        enrollment: a.enrollment,
+        matchVia: "name_partial_positive",
+        reason: "top-scored partial among positives",
+      };
+    }
+  }
+
+  const waitingForBooking = liveEnrollments.filter((e) => {
+    if (e.updatedAt < since) return false;
+    if (e.status === "replied_positive") return true;
+    if (calendlyEnrollmentIds.has(e.id)) return true;
+    return false;
+  });
+  const waitingContacts = new Map<string, SequenceEnrollment>();
+  for (const e of waitingForBooking) {
+    if (!waitingContacts.has(e.contactId)) waitingContacts.set(e.contactId, e);
+  }
+
+  if (waitingContacts.size === 1) {
+    const [contactId, enrollment] = [...waitingContacts.entries()][0]!;
+    const [contact] = await db
+      .select()
+      .from(contacts)
+      .where(eq(contacts.id, contactId))
+      .limit(1);
+    if (contact) {
+      const strength = nameMatchStrength(name, contact.name);
+      if (strength === "partial" || strength === "exact" || strength === "strong") {
+        return {
+          contact,
+          enrollment,
+          matchVia:
+            strength === "partial"
+              ? "name_partial_positive"
+              : strength === "exact"
+                ? "name_exact"
+                : "name_strong",
+          reason: "sole recent positive with name overlap",
+        };
+      }
+      return {
+        contact: null,
+        enrollment: null,
+        reason: `sole recent positive is "${contact.name}" but invitee "${name}" does not overlap`,
+      };
+    }
+  }
+
+  return {
+    contact: null,
+    enrollment: null,
+    reason:
+      partialPositive.length > 1
+        ? `ambiguous partial positives (${partialPositive.length})`
+        : scored.length === 0
+          ? "no name overlap on call list / live enrollments"
+          : "no confident match after positive cross-reference",
+  };
+}
+
 export async function matchContactForCalendlyBooking(options: {
   email: string | null;
   phone: string | null;
-}): Promise<{
-  contact: Contact | null;
-  enrollment: SequenceEnrollment | null;
-}> {
+  /** Invitee display name — used when email/phone unavailable (IMAP path). */
+  name?: string | null;
+}): Promise<CalendlyNameMatchResult> {
   const email = options.email;
   const phone = options.phone;
 
@@ -398,6 +847,11 @@ export async function matchContactForCalendlyBooking(options: {
     }
   }
 
+  // IMAP Calendly notifications: From is Calendly — match invitee name instead.
+  if (options.name?.trim()) {
+    return matchByInviteeName(options.name.trim());
+  }
+
   return { contact: null, enrollment: null };
 }
 
@@ -431,16 +885,21 @@ async function cancelPendingMessages(enrollmentId: string): Promise<void> {
 export async function applyCalendlyBooking(
   booking: ParsedCalendlyBooking,
 ): Promise<ApplyCalendlyBookingResult> {
-  const { contact, enrollment } = await matchContactForCalendlyBooking({
+  const actor =
+    booking.source === "email" ? "calendly_email" : "calendly_webhook";
+  const matched = await matchContactForCalendlyBooking({
     email: booking.email,
     phone: booking.phone,
+    name: booking.name,
   });
+  const { contact, enrollment } = matched;
 
   if (!contact) {
     return {
       ok: true,
       matched: false,
-      reason: "no matching contact",
+      reason: matched.reason ?? "no matching contact",
+      matchVia: matched.matchVia ?? null,
     };
   }
 
@@ -498,8 +957,11 @@ export async function applyCalendlyBooking(
           .update(sequenceEnrollments)
           .set({
             status: "replied_positive",
-            stopReason: "calendly invitee.created",
-            stoppedBy: "calendly_webhook",
+            stopReason:
+              booking.source === "email"
+                ? "calendly email notification"
+                : "calendly invitee.created",
+            stoppedBy: actor,
             nextStepAt: null,
             updatedAt: new Date(),
           })
@@ -513,14 +975,17 @@ export async function applyCalendlyBooking(
       await logEnrollmentEvent({
         enrollmentId: enrollment.id,
         eventType: "calendly_booking",
-        actor: "calendly_webhook",
+        actor,
         payload: {
           action: "created",
           email: booking.email,
+          name: booking.name,
           start_time: booking.startTime?.toISOString() ?? null,
           end_time: booking.endTime?.toISOString() ?? null,
           note,
           invitee_uri: booking.inviteeUri,
+          source: booking.source ?? "webhook",
+          match_via: matched.matchVia ?? null,
         },
       });
     }
@@ -532,6 +997,9 @@ export async function applyCalendlyBooking(
       contactId: contact.id,
       enrollmentId: enrollment?.id ?? null,
       action: "created",
+      matchVia: matched.matchVia ?? null,
+      contactName: contact.name,
+      reason: matched.reason,
     };
   }
 
@@ -564,14 +1032,17 @@ export async function applyCalendlyBooking(
       await logEnrollmentEvent({
         enrollmentId: enrollment.id,
         eventType: "calendly_booking",
-        actor: "calendly_webhook",
+        actor,
         payload: {
           action: "canceled",
           email: booking.email,
+          name: booking.name,
           start_time: booking.startTime?.toISOString() ?? null,
           end_time: booking.endTime?.toISOString() ?? null,
           note,
           invitee_uri: booking.inviteeUri,
+          source: booking.source ?? "webhook",
+          match_via: matched.matchVia ?? null,
         },
       });
     }
@@ -583,6 +1054,9 @@ export async function applyCalendlyBooking(
       contactId: contact.id,
       enrollmentId: enrollment?.id ?? null,
       action: "canceled",
+      matchVia: matched.matchVia ?? null,
+      contactName: contact.name,
+      reason: matched.reason,
     };
   }
 
@@ -592,5 +1066,7 @@ export async function applyCalendlyBooking(
     companyId,
     contactId: contact.id,
     reason: `unhandled event ${booking.event}`,
+    matchVia: matched.matchVia ?? null,
+    contactName: contact.name,
   };
 }
