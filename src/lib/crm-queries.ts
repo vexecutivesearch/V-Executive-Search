@@ -1131,7 +1131,13 @@ export async function getCallListItems(): Promise<CallListItem[]> {
   const entries = await db
     .select()
     .from(callListEntries)
-    .orderBy(desc(callListEntries.addedAt));
+    .orderBy(
+      sql`GREATEST(
+        COALESCE(${callListEntries.lastContactAt}, 'epoch'::timestamp),
+        COALESCE(${callListEntries.callStatusUpdatedAt}, 'epoch'::timestamp),
+        ${callListEntries.updatedAt}
+      ) DESC`,
+    );
   if (!entries.length) return [];
 
   const companyIds = entries.map((e) => e.companyId);

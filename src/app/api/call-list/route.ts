@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import {
@@ -32,7 +32,13 @@ export async function GET(request: NextRequest) {
   const entries = await db
     .select()
     .from(callListEntries)
-    .orderBy(desc(callListEntries.addedAt));
+    .orderBy(
+      sql`GREATEST(
+        COALESCE(${callListEntries.lastContactAt}, 'epoch'::timestamp),
+        COALESCE(${callListEntries.callStatusUpdatedAt}, 'epoch'::timestamp),
+        ${callListEntries.updatedAt}
+      ) DESC`,
+    );
   return NextResponse.json({ entries });
 }
 

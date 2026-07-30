@@ -16,23 +16,19 @@ function businessToday(): string {
   });
 }
 
-/** Active call queue: overdue follow-ups → due today → ranked by score. */
-function compareActive(a: CallListItem, b: CallListItem, today: string): number {
-  const bucket = (item: CallListItem): number => {
-    const due = item.entry.nextFollowUpDate;
-    if (due && due < today) return 0;
-    if (due && due === today) return 1;
-    return 2;
-  };
-  const ba = bucket(a);
-  const bb = bucket(b);
-  if (ba !== bb) return ba - bb;
-  if (ba === 0) {
-    return (a.entry.nextFollowUpDate ?? "").localeCompare(
-      b.entry.nextFollowUpDate ?? "",
-    );
-  }
+/** Most recent touch: outreach notes bump updatedAt; attempts bump lastContactAt. */
+function latestActivityMs(entry: CallListEntry): number {
+  const times = [entry.lastContactAt, entry.callStatusUpdatedAt, entry.updatedAt]
+    .filter((d): d is Date | string => d != null)
+    .map((d) => new Date(d).getTime())
+    .filter((n) => !Number.isNaN(n));
+  return times.length ? Math.max(...times) : 0;
+}
+
+/** Active call queue: latest activity first, then score. */
+function compareActive(a: CallListItem, b: CallListItem): number {
   return (
+    latestActivityMs(b.entry) - latestActivityMs(a.entry) ||
     (b.company.leadScore ?? 0) - (a.company.leadScore ?? 0) ||
     a.company.name.localeCompare(b.company.name)
   );
@@ -122,8 +118,8 @@ export function CallListView({ items: initialItems }: { items: CallListItem[] })
     () =>
       filtered
         .filter((item) => !isTerminalStatus(item.entry.callStatus))
-        .sort((a, b) => compareActive(a, b, today)),
-    [filtered, today],
+        .sort(compareActive),
+    [filtered],
   );
   const closed = useMemo(
     () =>
@@ -234,7 +230,7 @@ export function CallListView({ items: initialItems }: { items: CallListItem[] })
             </span>
           )}
           {dueTodayCount > 0 && <> · {dueTodayCount} due today</>}
-          {" · sorted: overdue → due today → score"}
+          {" · sorted: latest activity → score"}
         </p>
       </div>
 
