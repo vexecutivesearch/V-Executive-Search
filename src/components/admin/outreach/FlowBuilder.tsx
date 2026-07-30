@@ -524,13 +524,13 @@ export function FlowBuilder() {
                         </div>
                         <div className="rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 p-3">
                           <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 mb-2">
-                            Template preview ({selectedStepKind})
+                            Style exemplar preview ({selectedStepKind}) · not sent as is
                           </p>
                           {templatePreviews.length === 0 ? (
                             <p className="text-xs text-gray-400">
-                              No active templates for this step kind. Add some under
-                              Admin → Outreach → Templates — Claude uses them as
-                              few-shot style exemplars when drafting.
+                              No active exemplars for this step kind. Add winning emails under
+                              Admin → Outreach → Templates. Claude uses them as few shot voice
+                              DNA when drafting a fresh message about the selected job listing.
                             </p>
                           ) : (
                             <div className="space-y-3 max-h-72 overflow-y-auto">

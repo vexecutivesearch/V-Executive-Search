@@ -1,11 +1,10 @@
 /**
- * Anti-spam copy hygiene — every drafted message passes this lint before it
- * can be stored. Hard failures (links, placeholders, banned phrases) reject
- * the draft and force a redraft; drafting is transactional so a failed step
- * means no enrollment.
+ * Anti-spam copy hygiene. Every drafted message passes this lint before it
+ * can be stored. Hard failures reject the draft and force a redraft.
  *
- * Cold sends are plain text, link-free, image-free, with human capitalization
- * and no AI-tell phrasing. Template exemplar text is DATA, never executable.
+ * Cold sends are plain text, link-free, image-free, with human capitalization,
+ * no AI-tell phrasing, and NEVER dashes or hyphens (house style).
+ * Template exemplar text is STYLE DNA for Claude, never mail-merge / never sent as-is.
  */
 
 export type SanitizeResult = {
@@ -18,6 +17,8 @@ export type SanitizeResult = {
 const LINK_PATTERN = /(https?:\/\/|www\.)\S+/i;
 const HTML_TAG_PATTERN = /<[a-z][\s\S]*?>/i;
 const IMAGE_PATTERN = /!\[[^\]]*\]\([^)]*\)|<img\b/i;
+/** ASCII hyphen-minus, non-breaking hyphen, figure dash, en/em/horizontal dashes, minus. */
+const DASH_OR_HYPHEN = /[\u002D\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/;
 const PLACEHOLDER_PATTERNS = [
   /\[[^\]]{0,60}\]/, // [Name], [Company], [insert …]
   /\{\{[^}]*\}\}/, // {{first_name}}
@@ -28,7 +29,6 @@ const PLACEHOLDER_PATTERNS = [
 
 /** AI-tell + spam-trigger phrases (case-insensitive). */
 const BANNED_PHRASES = [
-  // AI tells
   "as an ai",
   "i hope this email finds you well",
   "i hope this message finds you well",
@@ -38,8 +38,8 @@ const BANNED_PHRASES = [
   "navigating the ever-evolving",
   "unlock the potential",
   "elevate your",
-  "game-changer",
-  "cutting-edge solutions",
+  "game changer",
+  "cutting edge solutions",
   "seamlessly integrate",
   "furthermore,",
   "moreover,",
@@ -47,13 +47,12 @@ const BANNED_PHRASES = [
   "leverage synergies",
   "synergy",
   "paradigm",
-  // spam triggers
   "100% free",
   "act now",
   "limited time offer",
-  "risk-free",
+  "risk free",
   "no obligation",
-  "money-back guarantee",
+  "money back guarantee",
   "click here",
   "click below",
   "buy now",
@@ -65,7 +64,7 @@ const BANNED_PHRASES = [
   "double your",
   "exclusive deal",
   "this is not spam",
-  "unsubscribe", // cold intro copy should not fake list language
+  "unsubscribe",
 ];
 
 export const EMAIL_BODY_MAX_CHARS = 1600;
@@ -79,7 +78,6 @@ function normalize(body: string): string {
     .replace(/\r\n/g, "\n")
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u201c\u201d]/g, '"')
-    .replace(/\u2014/g, "—")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -92,6 +90,14 @@ function shoutingRatio(text: string): number {
     (w) => w === w.toUpperCase() && /[A-Z]{3,}/.test(w),
   );
   return shouting.length / words.length;
+}
+
+function pushDashViolation(violations: string[], text: string) {
+  if (DASH_OR_HYPHEN.test(text)) {
+    violations.push(
+      "contains a dash or hyphen (rewrite with commas or spaces; never use -, –, or —)",
+    );
+  }
 }
 
 export function sanitizeOutreachBody(
@@ -110,14 +116,15 @@ export function sanitizeOutreachBody(
   }
 
   if (!options.allowLinks && LINK_PATTERN.test(cleaned)) {
-    violations.push("contains a link — cold sends must be link-free");
+    violations.push("contains a link; cold sends must be link-free");
   }
   if (HTML_TAG_PATTERN.test(cleaned)) {
-    violations.push("contains HTML — plain text only");
+    violations.push("contains HTML; plain text only");
   }
   if (IMAGE_PATTERN.test(cleaned)) {
     violations.push("contains an image reference");
   }
+  pushDashViolation(violations, cleaned);
   for (const pattern of PLACEHOLDER_PATTERNS) {
     if (pattern.test(cleaned)) {
       violations.push(`unresolved placeholder (${pattern.source})`);
@@ -160,6 +167,7 @@ export function sanitizeSubject(subject: string): SanitizeResult {
     violations.push(`subject too long (${cleaned.length} > ${EMAIL_SUBJECT_MAX_CHARS})`);
   }
   if (LINK_PATTERN.test(cleaned)) violations.push("subject contains a link");
+  pushDashViolation(violations, cleaned);
   if (/re:|fwd:/i.test(cleaned)) {
     violations.push("fake RE:/FWD: subject prefix");
   }
@@ -178,14 +186,23 @@ export function sanitizeSubject(subject: string): SanitizeResult {
 
 /**
  * Prompt-injection hygiene: exemplar/template text is wrapped as inert data.
- * Strips anything that looks like an instruction to the model and hard-caps
- * length so a pasted wall of text can't take over the prompt.
+ * Also strips dashes so few-shots never teach the model hyphenated copy.
  */
 export function sanitizeExemplarForPrompt(text: string, maxChars = 2400): string {
   const cleaned = normalize(text ?? "")
     .replace(/```/g, "'''")
     .replace(/<\/?[a-z][^>]*>/gi, "")
-    .replace(/^\s*(system|assistant|user)\s*:/gim, "$1 -")
-    .replace(/\b(ignore|disregard|forget)\b[\w\s,]{0,40}\b(instructions?|prompts?|rules?)\b[^.\n]*/gi, "[removed]");
+    .replace(/^\s*(system|assistant|user)\s*:/gim, "[$1]")
+    .replace(
+      /\b(ignore|disregard|forget)\b[\w\s,]{0,40}\b(instructions?|prompts?|rules?)\b[^.\n]*/gi,
+      "[removed]",
+    )
+    // House style: no dashes in exemplars shown to the model.
+    .replace(/[\u2010-\u2015\u2212]/g, ", ")
+    .replace(/--+/g, ", ")
+    .replace(/(\w)-(\w)/g, "$1 $2")
+    .replace(/ -/g, ",")
+    .replace(/- /g, ", ")
+    .replace(/-/g, " ");
   return cleaned.slice(0, maxChars);
 }

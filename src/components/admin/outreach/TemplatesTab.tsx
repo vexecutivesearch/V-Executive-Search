@@ -66,9 +66,33 @@ export function TemplatesTab() {
 
   return (
     <div className="space-y-4">
+      <div className="rounded-xl border border-sky-200 bg-sky-50 dark:border-sky-900 dark:bg-sky-950/40 px-4 py-3 text-sm text-sky-950 dark:text-sky-100">
+        <p className="font-semibold">How templates work (important)</p>
+        <ul className="mt-1.5 list-disc pl-5 text-xs space-y-1 text-sky-900/90 dark:text-sky-100/90">
+          <li>
+            These are <strong>style exemplars</strong> for Claude, not fill in the blank
+            mail merge and <strong>not what gets sent</strong>.
+          </li>
+          <li>
+            When you Add to Call List on a job listing, Claude reads 1–2 active exemplars
+            for that step, plus the real company / role facts, and writes a{" "}
+            <strong>new</strong> email or SMS in that voice.
+          </li>
+          <li>
+            Hardcoded names like &quot;Stacy&quot; or &quot;Plus Power&quot; in an exemplar
+            are from a winning past send. Claude must not copy those facts; it personalizes
+            off the selected listing.
+          </li>
+          <li>
+            House style: <strong>no dashes or hyphens</strong> in exemplars or outbound
+            copy (sanitizer rejects them).
+          </li>
+        </ul>
+      </div>
+
       <Section
-        title="Add a winning email/text"
-        subtitle="Paste real messages that got replies. They become style exemplars for the LLM — treated as data, never instructions."
+        title="Add a winning email/text (style exemplar)"
+        subtitle="Paste a real message that got a reply. Claude uses it as few shot voice DNA only. Do not use {{tokens}}, dashes, or hyphens."
       >
         <div className="grid sm:grid-cols-3 gap-3">
           <div>
@@ -115,18 +139,22 @@ export function TemplatesTab() {
           disabled={!draft.name.trim() || !draft.body.trim()}
           onClick={create}
         >
-          Add template
+          Add exemplar
         </button>
         {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
       </Section>
 
-      <Section title={`Template bank (${templates.length})`}>
+      <Section
+        title={`Style exemplar bank (${templates.length})`}
+        subtitle="Shown to Claude as few shot examples when drafting. Outbound messages are always freshly written for the selected job listing."
+      >
         <div className="space-y-3">
           {templates.map((t) => (
             <div key={t.id} className="border border-gray-200 dark:border-gray-800 rounded-lg p-3">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge tone="blue">{t.kind}</Badge>
                 <Badge>{t.channel}</Badge>
+                <Badge tone="gray">exemplar · not sent as is</Badge>
                 <span className="text-sm font-medium">{t.name}</span>
                 <Badge tone={t.isActive ? "green" : "gray"}>
                   {t.isActive ? "active" : "inactive"}

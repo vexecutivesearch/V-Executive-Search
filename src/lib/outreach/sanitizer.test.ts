@@ -69,6 +69,24 @@ describe("sanitizeOutreachBody (anti-spam copy hygiene)", () => {
     expect(sanitizeOutreachBody(tooLongText, { channel: "imessage" }).ok).toBe(false);
     expect(sanitizeOutreachBody("Too short.", { channel: "email" }).ok).toBe(false);
   });
+  it("rejects dashes and hyphens in body and subject", () => {
+    expect(
+      sanitizeOutreachBody(`${CLEAN_EMAIL}\n\nWe stay hands-on with every search.`, {
+        channel: "email",
+      }).ok,
+    ).toBe(false);
+    expect(
+      sanitizeOutreachBody(`${CLEAN_EMAIL}\n\nWe move fast — and stay close.`, {
+        channel: "email",
+      }).ok,
+    ).toBe(false);
+    expect(sanitizeSubject("Follow-up on your roles").ok).toBe(false);
+  });
+
+  it("accepts copy that uses spaces instead of hyphens", () => {
+    const body = `${CLEAN_EMAIL}\n\nWe stay hands on with every search.`;
+    expect(sanitizeOutreachBody(body, { channel: "email" }).ok).toBe(true);
+  });
 });
 
 describe("sanitizeSubject", () => {
@@ -90,6 +108,12 @@ describe("sanitizeExemplarForPrompt (prompt-injection hygiene)", () => {
     expect(cleaned).not.toMatch(/ignore all (previous|prior) instructions/i);
     expect(cleaned).not.toMatch(/^system\s*:/im);
     expect(cleaned).not.toContain("```");
+  });
+
+  it("strips dashes from exemplars before they reach the model", () => {
+    const cleaned = sanitizeExemplarForPrompt("hands-on, follow-up, long—term");
+    expect(cleaned).not.toMatch(/-/);
+    expect(cleaned).not.toMatch(/—/);
   });
 
   it("hard-caps length", () => {
