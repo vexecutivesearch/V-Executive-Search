@@ -8,14 +8,17 @@ import { seedOutreachTemplates } from "@/lib/outreach/seed-templates";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** House style: no ASCII/Unicode dashes or hyphens in exemplar copy. */
+/** House style: no ASCII/Unicode dashes or hyphens in exemplar copy (URLs exempt). */
 const DASH_OR_HYPHEN = /[\u002D\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/;
+const HTTPS_URL_PATTERN = /https?:\/\/\S+/gi;
 
 function rejectDashes(
   ...parts: Array<string | null | undefined>
 ): NextResponse | null {
   for (const part of parts) {
-    if (part && DASH_OR_HYPHEN.test(part)) {
+    if (!part) continue;
+    const withoutUrls = part.replace(HTTPS_URL_PATTERN, " ");
+    if (DASH_OR_HYPHEN.test(withoutUrls)) {
       return NextResponse.json(
         {
           error:

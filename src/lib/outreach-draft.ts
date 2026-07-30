@@ -145,7 +145,7 @@ const STEP_GUIDANCE: Record<string, string> = {
   text_3:
     "Final SMS. Warm goodbye that leaves the door open. Under 220 characters.",
   reply_positive:
-    "Reply to a positive response. Warm, confirms interest, proposes the given availability windows verbatim. Short.",
+    "Reply to a positive response. Warm, confirms interest. When a scheduling link is provided, put it on its own line so they can book 30 min; otherwise propose the given availability windows verbatim. Short.",
   reply_info_request:
     "Reply acknowledging their question, promising a substantive follow up. Do not invent fees, process details, or candidate names. Short.",
   reply_decline:
@@ -374,7 +374,7 @@ export async function draftEnrollmentReply(options: {
     situation =
       "You are replying to a POSITIVE response to a recruiter's outreach email. Keep the thread going naturally.";
     extraRules = options.includeSchedulingLink
-      ? `Include this scheduling link on its own line (they asked for one): ${options.includeSchedulingLink}`
+      ? `Include this scheduling link on its own line so they can book a 30 min call (do not invent other URLs):\n${options.includeSchedulingLink}`
       : `Offer EXACTLY these availability windows, as a short plain-text list, verbatim:\n${(options.availabilityLines ?? []).join("\n")}`;
   } else if (options.replyKind === "reply_info_request") {
     situation =

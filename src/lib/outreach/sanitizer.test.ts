@@ -37,6 +37,26 @@ describe("sanitizeOutreachBody (anti-spam copy hygiene)", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("allows Calendly HTTPS URLs with path hyphens when links permitted", () => {
+    const result = sanitizeOutreachBody(
+      `${CLEAN_EMAIL}\n\nGrab a slot here:\nhttps://calendly.com/odv-vexecutivesearch/30min`,
+      { channel: "email", allowLinks: true },
+    );
+    expect(result.violations).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("still rejects hyphens in prose even when links are permitted", () => {
+    const result = sanitizeOutreachBody(
+      `${CLEAN_EMAIL}\n\nWe stay hands-on.\nhttps://calendly.com/odv-vexecutivesearch/30min`,
+      { channel: "email", allowLinks: true },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.violations.some((v) => v.includes("dash") || v.includes("hyphen"))).toBe(
+      true,
+    );
+  });
+
   it("rejects unresolved placeholders", () => {
     for (const placeholder of ["[Name]", "{{company}}", "{first_name}", "<Company>"]) {
       const result = sanitizeOutreachBody(
@@ -114,6 +134,15 @@ describe("sanitizeExemplarForPrompt (prompt-injection hygiene)", () => {
     const cleaned = sanitizeExemplarForPrompt("hands-on, follow-up, long—term");
     expect(cleaned).not.toMatch(/-/);
     expect(cleaned).not.toMatch(/—/);
+  });
+
+  it("preserves https scheduling URLs (including path hyphens)", () => {
+    const url = "https://calendly.com/odv-vexecutivesearch/30min";
+    const cleaned = sanitizeExemplarForPrompt(
+      `Grab any 30 min here:\n${url}\nWe stay hands-on.`,
+    );
+    expect(cleaned).toContain(url);
+    expect(cleaned).toMatch(/hands on/);
   });
 
   it("hard-caps length", () => {

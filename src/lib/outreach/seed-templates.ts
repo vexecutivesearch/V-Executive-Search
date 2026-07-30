@@ -109,13 +109,11 @@ If the timing isn't right, no problem at all. Happy to reconnect whenever hiring
     channel: "email",
     exampleBody: `Hi Stacy,
 
-Great to hear from you, happy to set up a quick call. Here are a few windows that work on my end this week:
+Great to hear from you, happy to set up a quick call. Grab any 30 min that works for you here:
 
-Tuesday 10:00 to 10:30 AM ET
-Wednesday 2:00 to 2:30 PM ET
-Thursday 11:00 to 11:30 AM ET
+https://calendly.com/odv-vexecutivesearch/30min
 
-If none of those work, let me know what suits your schedule and I'll make it happen. Looking forward to it.`,
+If that link does not work for your schedule, reply with a couple of windows and I will make it happen. Looking forward to it.`,
   },
   {
     name: "Info request, hand off ack",

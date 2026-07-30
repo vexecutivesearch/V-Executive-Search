@@ -198,7 +198,9 @@ Setup checklist:
    flows + immutable versions, sending_profiles, outreach_settings).
 2. Vercel env: `ANTHROPIC_API_KEY` (drafting + reply classification),
    `OUTREACH_FROM_EMAIL` (fallback sender until domain profiles exist),
-   optional `OUTREACH_SENDER_NAME/TITLE/FIRM/PHONE`, `OUTREACH_SCHEDULING_LINK`,
+   optional `OUTREACH_SENDER_NAME/TITLE/FIRM/PHONE`,
+   `OUTREACH_SCHEDULING_LINK` (defaults to the ODV Calendly 30 min link when unset;
+   included on all positive / positive_link_request auto-replies),
    `RESEND_WEBHOOK_SECRET`, Google Calendar free/busy
    (`GOOGLE_CALENDAR_CLIENT_ID/SECRET/REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID`).
 3. Resend dashboard: add a webhook → `https://<crm>/api/webhooks/resend?token=<RESEND_WEBHOOK_SECRET>`

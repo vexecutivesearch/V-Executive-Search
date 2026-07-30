@@ -92,6 +92,13 @@ function shoutingRatio(text: string): number {
   return shouting.length / words.length;
 }
 
+/** HTTPS/HTTP URLs may contain path hyphens (e.g. Calendly); strip before dash lint. */
+const HTTPS_URL_PATTERN = /https?:\/\/\S+/gi;
+
+function withoutHttpUrls(text: string): string {
+  return text.replace(HTTPS_URL_PATTERN, " ");
+}
+
 function pushDashViolation(violations: string[], text: string) {
   if (DASH_OR_HYPHEN.test(text)) {
     violations.push(
@@ -124,7 +131,11 @@ export function sanitizeOutreachBody(
   if (IMAGE_PATTERN.test(cleaned)) {
     violations.push("contains an image reference");
   }
-  pushDashViolation(violations, cleaned);
+  // When links are allowed, ignore hyphens inside https:// URLs (Calendly paths, etc.).
+  pushDashViolation(
+    violations,
+    options.allowLinks ? withoutHttpUrls(cleaned) : cleaned,
+  );
   for (const pattern of PLACEHOLDER_PATTERNS) {
     if (pattern.test(cleaned)) {
       violations.push(`unresolved placeholder (${pattern.source})`);
@@ -186,10 +197,16 @@ export function sanitizeSubject(subject: string): SanitizeResult {
 
 /**
  * Prompt-injection hygiene: exemplar/template text is wrapped as inert data.
- * Also strips dashes so few-shots never teach the model hyphenated copy.
+ * Also strips dashes so few-shots never teach the model hyphenated copy,
+ * while preserving https:// URLs (scheduling links in reply exemplars).
  */
 export function sanitizeExemplarForPrompt(text: string, maxChars = 2400): string {
-  const cleaned = normalize(text ?? "")
+  const urls: string[] = [];
+  const withPlaceholders = normalize(text ?? "").replace(HTTPS_URL_PATTERN, (url) => {
+    urls.push(url);
+    return `__URL_${urls.length - 1}__`;
+  });
+  const cleaned = withPlaceholders
     .replace(/```/g, "'''")
     .replace(/<\/?[a-z][^>]*>/gi, "")
     .replace(/^\s*(system|assistant|user)\s*:/gim, "[$1]")
@@ -203,6 +220,7 @@ export function sanitizeExemplarForPrompt(text: string, maxChars = 2400): string
     .replace(/(\w)-(\w)/g, "$1 $2")
     .replace(/ -/g, ",")
     .replace(/- /g, ", ")
-    .replace(/-/g, " ");
+    .replace(/-/g, " ")
+    .replace(/__URL_(\d+)__/g, (_, i) => urls[Number(i)] ?? "");
   return cleaned.slice(0, maxChars);
 }

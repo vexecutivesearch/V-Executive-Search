@@ -31,11 +31,20 @@ import { getOrCreateOutreachSettings } from "@/lib/outreach/settings";
 import { addSuppression } from "@/lib/outreach/suppression";
 import { addBusinessDays } from "@/lib/outreach/timezone-infer";
 
+/** Default Calendly booking URL when OUTREACH_SCHEDULING_LINK is unset. */
+const DEFAULT_SCHEDULING_LINK =
+  "https://calendly.com/odv-vexecutivesearch/30min";
+
+function resolveSchedulingLink(): string {
+  const fromEnv = process.env.OUTREACH_SCHEDULING_LINK?.trim();
+  return fromEnv || DEFAULT_SCHEDULING_LINK;
+}
+
 /**
  * Rule engine — channel-agnostic. A text reply and an email reply hit
  * identical branching. Intent is LLM classified against Template bank reply
  * exemplars; that intent picks which reply email goes out next:
- *   positive / positive_link_request → reply_positive (auto-send)
+ *   positive / positive_link_request → reply_positive (auto-send, with scheduling link)
  *   info_request    → reply_info_request (auto-send ack) then hand-off
  *   negative        → reply_decline (auto-send close) then suppress contact
  *   opt_out         → stop + suppress, no reply email
@@ -133,7 +142,7 @@ async function sendThreadedAutoReply(options: {
     ? await suggestAvailability()
     : { lines: [] as string[], fromCalendar: false };
   const schedulingLink = options.includeSchedulingLink
-    ? process.env.OUTREACH_SCHEDULING_LINK ?? null
+    ? resolveSchedulingLink()
     : null;
 
   const body = await draftEnrollmentReply({
@@ -305,7 +314,7 @@ export async function applyReplyRules(
         enrollment,
         inbound,
         replyKind,
-        includeSchedulingLink: intent === "positive_link_request",
+        includeSchedulingLink: true,
       });
       // Company → meeting track.
       await db
