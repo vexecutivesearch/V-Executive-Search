@@ -485,6 +485,19 @@ export async function POST(request: NextRequest) {
     console.error("ICP annotate failed post-ingest:", err);
   }
 
+  // Outreach auto-enrollment (secondary path). Primary trigger is Add to
+  // Call List. Non-fatal: enrollment problems never break ingest.
+  let outreachEnrolled = 0;
+  if (enrichOnly && uniqueIds.length) {
+    try {
+      const { autoEnrollForCompanies } = await import("@/lib/outreach/enroll");
+      const enrollResult = await autoEnrollForCompanies(uniqueIds);
+      outreachEnrolled = enrollResult.enrolled;
+    } catch (err) {
+      console.error("Outreach auto-enroll failed post-ingest:", err);
+    }
+  }
+
   const dbFunnel = await measureDbFunnel();
   const geoSettings = await getGeoFocusSettings();
   const runListings = payload.companies.flatMap((c) =>
@@ -524,6 +537,7 @@ export async function POST(request: NextRequest) {
     jobs_resighted: jobsResighted,
     companies_scored: scored,
     companies_icp_annotated: icpAnnotated,
+    outreach_enrolled: outreachEnrolled,
     funnel: mergedFunnel,
   });
 }

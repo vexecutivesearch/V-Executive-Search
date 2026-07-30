@@ -14,6 +14,8 @@ import {
   companies,
   companyIcp,
   jobListings,
+  outreachMessages,
+  sequenceEnrollments,
   type CallListEntry,
   type CompanyStatus,
 } from "@/lib/db/schema";
@@ -1088,11 +1090,36 @@ export async function getCrmKpis(todayDate: string): Promise<CrmKpis> {
   };
 }
 
+export type CallListOutreachProgress = {
+  enrollmentId: string;
+  status: string;
+  channelPlan: "email_and_text" | "email_only";
+  stepsTotal: number;
+  stepsSent: number;
+  stepsQueued: number;
+  stepsDrafted: number;
+  lastSentKind: string | null;
+  label: string;
+};
+
 export type CallListItem = {
   entry: CallListEntry;
   company: CompanyCardData;
   marketLabel: string | null;
+  outreach: CallListOutreachProgress | null;
 };
+
+function outreachProgressLabel(p: Omit<CallListOutreachProgress, "label">): string {
+  if (p.status === "replied_positive") return "Seq: positive reply";
+  if (p.status === "stopped") return "Seq: stopped";
+  if (p.status === "paused") return "Seq: paused";
+  if (p.stepsSent > 0) {
+    return `Seq: ${p.lastSentKind ?? "step"} sent · ${p.stepsSent}/${p.stepsTotal}`;
+  }
+  if (p.stepsQueued > 0) return `Seq: queued · 0/${p.stepsTotal} sent`;
+  if (p.stepsDrafted > 0) return `Seq: drafted · awaiting send`;
+  return `Seq: ${p.status}`;
+}
 
 /** Full call list — curated queue, loads completely (no pagination). */
 export async function getCallListItems(): Promise<CallListItem[]> {
@@ -1107,24 +1134,80 @@ export async function getCallListItems(): Promise<CallListItem[]> {
     .orderBy(desc(callListEntries.addedAt));
   if (!entries.length) return [];
 
+  const companyIds = entries.map((e) => e.companyId);
   const companyRows = await db
     .select()
     .from(companies)
-    .where(inArray(companies.id, entries.map((e) => e.companyId)));
+    .where(inArray(companies.id, companyIds));
 
   const hydrated = await enrichCompanies(companyRows, geoSettings, {
     skipGeoFilter: true,
   });
   const byId = new Map(hydrated.map((c) => [c.id, c]));
 
+  // Latest enrollment per company (Call List progress badge).
+  const enrollments = await db
+    .select()
+    .from(sequenceEnrollments)
+    .where(inArray(sequenceEnrollments.companyId, companyIds))
+    .orderBy(desc(sequenceEnrollments.enrolledAt));
+  const enrollmentByCompany = new Map<string, (typeof enrollments)[number]>();
+  for (const enr of enrollments) {
+    if (!enrollmentByCompany.has(enr.companyId)) {
+      enrollmentByCompany.set(enr.companyId, enr);
+    }
+  }
+  const enrollmentIds = [...enrollmentByCompany.values()].map((e) => e.id);
+  const messageRows = enrollmentIds.length
+    ? await db
+        .select({
+          enrollmentId: outreachMessages.enrollmentId,
+          status: outreachMessages.status,
+          stepKind: outreachMessages.stepKind,
+          sentAt: outreachMessages.sentAt,
+        })
+        .from(outreachMessages)
+        .where(inArray(outreachMessages.enrollmentId, enrollmentIds))
+    : [];
+  const messagesByEnrollment = new Map<string, typeof messageRows>();
+  for (const m of messageRows) {
+    const list = messagesByEnrollment.get(m.enrollmentId) ?? [];
+    list.push(m);
+    messagesByEnrollment.set(m.enrollmentId, list);
+  }
+
   return entries
     .map((entry) => {
       const company = byId.get(entry.companyId);
       if (!company) return null;
+      const enr = enrollmentByCompany.get(entry.companyId) ?? null;
+      let outreach: CallListOutreachProgress | null = null;
+      if (enr) {
+        const msgs = messagesByEnrollment.get(enr.id) ?? [];
+        const sent = msgs.filter((m) => m.status === "sent");
+        const lastSent = [...sent].sort(
+          (a, b) =>
+            (b.sentAt?.getTime() ?? 0) - (a.sentAt?.getTime() ?? 0),
+        )[0];
+        const base = {
+          enrollmentId: enr.id,
+          status: enr.status,
+          channelPlan: (enr.phoneNumber
+            ? "email_and_text"
+            : "email_only") as "email_and_text" | "email_only",
+          stepsTotal: msgs.length,
+          stepsSent: sent.length,
+          stepsQueued: msgs.filter((m) => m.status === "queued").length,
+          stepsDrafted: msgs.filter((m) => m.status === "drafted").length,
+          lastSentKind: lastSent?.stepKind ?? null,
+        };
+        outreach = { ...base, label: outreachProgressLabel(base) };
+      }
       return {
         entry,
         company,
         marketLabel: resolveMarketLabel(company, index),
+        outreach,
       };
     })
     .filter((item): item is CallListItem => item !== null);

@@ -22,6 +22,8 @@ type WorkerContactPatch = {
   personal_phone?: string | null;
   company_phone?: string | null;
   source_provider?: string | null;
+  /** Outreach: IANA tz that wins over location inference (null clears). */
+  timezone_override?: string | null;
 };
 
 export async function PATCH(
@@ -61,6 +63,21 @@ export async function PATCH(
     updates.emailDeliverable = body.email_deliverable;
     updates.emailVerifiedAt = new Date();
     updates.presenceCheckedAt = new Date();
+  }
+
+  if ("timezone_override" in body) {
+    const tz = body.timezone_override?.trim() || null;
+    if (tz) {
+      try {
+        new Intl.DateTimeFormat("en-US", { timeZone: tz });
+      } catch {
+        return NextResponse.json(
+          { error: `Invalid IANA timezone: ${tz}` },
+          { status: 400 },
+        );
+      }
+    }
+    updates.timezoneOverride = tz;
   }
 
   const hasEnrichment =

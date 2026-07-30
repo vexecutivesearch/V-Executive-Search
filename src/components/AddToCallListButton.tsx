@@ -40,14 +40,27 @@ export function AddToCallListButton({
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [outreachNote, setOutreachNote] = useState<string | null>(null);
 
-  if (state === "on") return <OnCallListBadge />;
+  if (state === "on") {
+    return (
+      <span className="inline-flex flex-col items-end gap-0.5">
+        <OnCallListBadge />
+        {outreachNote && (
+          <span className="text-[10px] text-emerald-800 dark:text-emerald-300 max-w-[14rem] text-right">
+            {outreachNote}
+          </span>
+        )}
+      </span>
+    );
+  }
 
   async function handleAdd(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
     setLoading(true);
     setError(null);
+    setOutreachNote(null);
     try {
       const res = await fetch("/api/call-list", {
         method: "POST",
@@ -57,12 +70,31 @@ export function AddToCallListButton({
       const data = (await res.json()) as {
         entry?: CallListEntry;
         error?: string;
+        outreach?: {
+          enrolled?: boolean;
+          channelPlan?: string;
+          reason?: string;
+          dispatched?: boolean;
+        };
       };
       if (!res.ok || !data.entry) {
         setError(data.error ?? "Could not add to call list");
         return;
       }
       setState("on");
+      if (data.outreach?.enrolled) {
+        const plan =
+          data.outreach.channelPlan === "email_and_text"
+            ? "email + SMS drafted"
+            : "email sequence drafted";
+        setOutreachNote(
+          data.outreach.dispatched
+            ? `Outreach ${plan}, send queued`
+            : `Outreach ${plan} (check Admin → Outreach; enable + turn dry-run off to send)`,
+        );
+      } else if (data.outreach?.reason) {
+        setOutreachNote(`Outreach skipped: ${data.outreach.reason}`);
+      }
       onAdded?.(data.entry);
     } catch {
       setError("Network error");
@@ -80,12 +112,12 @@ export function AddToCallListButton({
         type="button"
         onClick={handleAdd}
         disabled={loading}
-        title="Approve this company + contact into the active call list"
+        title="Add to call list and draft a personalized outreach sequence from the job listing"
         className={`rounded-md font-medium transition-colors disabled:opacity-50 whitespace-nowrap border border-emerald-700 text-emerald-800 dark:text-emerald-300 dark:border-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 ${
           compact ? "px-2 py-1 text-xs" : "px-3 py-1.5 text-sm"
         }`}
       >
-        {loading ? "Adding…" : "Add to Call List"}
+        {loading ? "Adding + drafting…" : "Add to Call List"}
       </button>
       {error && (
         <span className="text-[10px] text-red-700 dark:text-red-400">{error}</span>

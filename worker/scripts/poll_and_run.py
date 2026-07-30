@@ -64,6 +64,23 @@ def main() -> int:
         except Exception as exc:
             logging.warning("iMessage poll pass failed (non-fatal): %s", exc)
 
+    # Outreach pump every tick: iMessage queue sends (macOS), chat.db inbound
+    # scan (macOS), IMAP reply poll (any OS). Each stage is non-fatal.
+    try:
+        import importlib.util as _ilu
+
+        pump_script = WORKER_ROOT / "scripts" / "outreach_pump.py"
+        if pump_script.exists():
+            spec = _ilu.spec_from_file_location("outreach_pump", pump_script)
+            if spec and spec.loader:
+                mod = _ilu.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                stats = mod.run_outreach_pump()
+                if any(stats.values()):
+                    logging.info("Outreach pump: %s", stats)
+    except Exception as exc:
+        logging.warning("Outreach pump failed (non-fatal): %s", exc)
+
     status = get_pipeline_status()
     if status.get("contactout_sync_requested_at"):
         logging.info(

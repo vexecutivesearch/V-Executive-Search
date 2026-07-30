@@ -13,6 +13,8 @@ import { compareContactsForOutreach } from "@/lib/contact-title-priority";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+/** Call-list add may LLM-draft a full outreach sequence. */
+export const maxDuration = 60;
 
 /** List entries, or check membership for one company (?company_id=). */
 export async function GET(request: NextRequest) {
@@ -117,5 +119,46 @@ export async function POST(request: NextRequest) {
     source: "call_list",
   });
 
-  return NextResponse.json({ entry, already_on_list: false });
+  // Outreach: adding to the call list is the intentional trigger — draft a
+  // personalized email+SMS sequence off the job listings, auto-approve, and
+  // advance so the intro is queued. Actual send still respects kill switch /
+  // dry-run on the Outreach Overview tab.
+  let outreach: {
+    enrolled: boolean;
+    enrollmentId?: string;
+    channelPlan?: string;
+    reason?: string;
+    dispatched?: boolean;
+  } | null = null;
+  if (primaryContactId) {
+    try {
+      const { enrollContact } = await import("@/lib/outreach/enroll");
+      const { getOrCreateOutreachSettings } = await import(
+        "@/lib/outreach/settings"
+      );
+      const settings = await getOrCreateOutreachSettings();
+      if (settings.autoEnroll) {
+        const result = await enrollContact(primaryContactId, {
+          actor: "call_list",
+          autoApprove: true,
+          advanceNow: true,
+        });
+        outreach = { ...result };
+        if (result.enrolled && settings.enabled && !settings.dryRun) {
+          const { runOutreachDispatch } = await import(
+            "@/lib/outreach/dispatch"
+          );
+          await runOutreachDispatch(new Date());
+          outreach.dispatched = true;
+        }
+      } else {
+        outreach = { enrolled: false, reason: "auto_enroll disabled" };
+      }
+    } catch (error) {
+      console.error("[call-list] outreach enroll failed (non-fatal):", error);
+      outreach = { enrolled: false, reason: "enroll_error" };
+    }
+  }
+
+  return NextResponse.json({ entry, already_on_list: false, outreach });
 }

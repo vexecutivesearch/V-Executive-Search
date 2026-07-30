@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { CallListItem } from "@/lib/crm-queries";
 import type { CallListEntry, CallStatus, Contact } from "@/lib/db/schema";
@@ -59,6 +59,10 @@ export function CallListRow({
   );
   const [highlightFollowUp, setHighlightFollowUp] = useState(false);
   const followUpRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setNotes(entry.notes ?? "");
+  }, [entry.notes]);
 
   const locked = entry.callStatus === "do_not_contact";
 
@@ -218,6 +222,14 @@ export function CallListRow({
                 Do not contact
               </span>
             )}
+            {item.outreach && (
+              <span
+                className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded bg-violet-100 text-violet-900 dark:bg-violet-950/50 dark:text-violet-200"
+                title={`Outreach sequencer · ${item.outreach.channelPlan.replace("_", " + ")} · ${item.outreach.status}`}
+              >
+                {item.outreach.label}
+              </span>
+            )}
           </div>
           <p className="text-xs text-gray-500 truncate">
             {[cityState, marketLabel, sector ?? company.industry]
@@ -355,6 +367,38 @@ export function CallListRow({
             <span>Added: {formatDate(entry.addedAt)}</span>
           </div>
 
+          {item.outreach && (
+            <div className="rounded-lg border border-violet-200 dark:border-violet-900 bg-violet-50/60 dark:bg-violet-950/30 p-3 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-medium uppercase tracking-wide text-violet-800 dark:text-violet-200">
+                  Sequence progress
+                </p>
+                <Link
+                  href={`/admin/outreach?tab=enrollments`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-xs text-violet-700 dark:text-violet-300 hover:underline"
+                >
+                  Open sequencer →
+                </Link>
+              </div>
+              <p className="mt-1 text-violet-950 dark:text-violet-100">
+                {item.outreach.label}
+                <span className="text-violet-700/80 dark:text-violet-300/80">
+                  {" "}
+                  · {item.outreach.channelPlan === "email_and_text"
+                    ? "email + iMessage"
+                    : "email only"}{" "}
+                  · status {item.outreach.status}
+                </span>
+              </p>
+              <p className="mt-0.5 text-xs text-violet-800/80 dark:text-violet-300/80">
+                {item.outreach.stepsSent} sent · {item.outreach.stepsQueued}{" "}
+                queued · {item.outreach.stepsDrafted} drafted ·{" "}
+                {item.outreach.stepsTotal} total steps
+              </p>
+            </div>
+          )}
+
           <div className="rounded-lg border border-blue-200 dark:border-blue-900 bg-blue-50/60 dark:bg-blue-950/30 p-3">
             <label className="block text-xs font-medium uppercase tracking-wide text-blue-800 dark:text-blue-200 mb-1">
               Outreach angle
@@ -458,7 +502,10 @@ export function CallListRow({
           </div>
 
           <label className="block text-xs text-gray-500">
-            Notes
+            Notes{" "}
+            <span className="font-normal text-gray-400">
+              (sequence sends append here automatically)
+            </span>
             <textarea
               value={notes}
               disabled={busy}
@@ -468,9 +515,9 @@ export function CallListRow({
                   patch({ notes: notes.trim() || null });
                 }
               }}
-              rows={2}
-              placeholder="Call notes, objections, next steps…"
-              className="mt-1 block w-full text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900"
+              rows={4}
+              placeholder="Call notes, objections, next steps… Automated outreach lines appear here too."
+              className="mt-1 block w-full text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900 font-mono text-[12px] leading-relaxed"
             />
           </label>
 
