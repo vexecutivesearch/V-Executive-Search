@@ -19,7 +19,7 @@ function businessToday(): string {
 /** Most recent touch: outreach notes bump updatedAt; attempts bump lastContactAt. */
 function latestActivityMs(entry: CallListEntry): number {
   const times = [entry.lastContactAt, entry.callStatusUpdatedAt, entry.updatedAt]
-    .filter((d): d is Date | string => d != null)
+    .filter((d): d is NonNullable<typeof d> => d != null)
     .map((d) => new Date(d).getTime())
     .filter((n) => !Number.isNaN(n));
   return times.length ? Math.max(...times) : 0;
