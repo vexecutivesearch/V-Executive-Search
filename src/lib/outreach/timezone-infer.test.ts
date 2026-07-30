@@ -52,14 +52,14 @@ describe("scheduleSendAt (weekday sends, contact-local hours, jitter)", () => {
       offsetDays: 2,
       timeZone: "America/New_York",
       windowStartHour: 9,
-      windowEndHour: 17,
+      windowEndHour: 19,
       random: () => 0.5,
     });
     const wc = wallClock(scheduled, "America/New_York");
     expect(wc.weekday).toBeGreaterThanOrEqual(1);
     expect(wc.weekday).toBeLessThanOrEqual(5);
     expect(wc.hour).toBeGreaterThanOrEqual(9);
-    expect(wc.hour).toBeLessThan(17);
+    expect(wc.hour).toBeLessThan(19);
   });
 
   it("rolls weekend targets forward to Monday", () => {
@@ -96,14 +96,14 @@ describe("scheduleSendAt (weekday sends, contact-local hours, jitter)", () => {
       offsetDays: 0,
       timeZone: "America/Chicago",
       windowStartHour: 9,
-      windowEndHour: 17,
+      windowEndHour: 19,
       random: () => 0.5,
     });
     expect(scheduled.getTime()).toBeGreaterThan(base.getTime());
     const wc = wallClock(scheduled, "America/Chicago");
     expect(wc.weekday).toBe(3); // still Wednesday
     expect(wc.hour).toBeGreaterThanOrEqual(9);
-    expect(wc.hour).toBeLessThan(17);
+    expect(wc.hour).toBeLessThan(19);
   });
 
   it("day-0 mid-window sends within about a minute, not a later random slot", () => {
@@ -113,7 +113,7 @@ describe("scheduleSendAt (weekday sends, contact-local hours, jitter)", () => {
       offsetDays: 0,
       timeZone: "America/Chicago",
       windowStartHour: 9,
-      windowEndHour: 17,
+      windowEndHour: 19,
       random: () => 0.5,
     });
     expect(scheduled.getTime()).toBeGreaterThan(midWindow.getTime());

@@ -222,7 +222,7 @@ export function scheduleSendAt(options: {
     offsetDays,
     timeZone,
     windowStartHour = 9,
-    windowEndHour = 17,
+    windowEndHour = 19,
     random = Math.random,
   } = options;
 
