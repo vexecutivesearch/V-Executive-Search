@@ -21,7 +21,8 @@ const SEED_TEMPLATES: Array<{
     | "text_2"
     | "text_3"
     | "reply_positive"
-    | "reply_info_request";
+    | "reply_info_request"
+    | "reply_decline";
   channel: "email" | "imessage";
   exampleSubject?: string;
   exampleBody: string;
@@ -126,6 +127,14 @@ If none of those work, let me know what suits your schedule and I'll make it hap
 Absolutely, happy to share more detail. Let me pull together the specifics on that and get back to you shortly with a proper answer.
 
 In the meantime, if it's easier to cover live, I'm glad to jump on a quick call whenever suits you.`,
+  },
+  {
+    name: "Decline, graceful close",
+    kind: "reply_decline",
+    channel: "email",
+    exampleBody: `Hi Stacy,
+
+Understood, thanks for letting me know. Wishing you the best with the search, and I'm happy to reconnect if hiring support would ever be useful down the road.`,
   },
 ];
 

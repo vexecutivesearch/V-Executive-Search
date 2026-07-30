@@ -454,6 +454,7 @@ export const outreachTemplateKindEnum = pgEnum("outreach_template_kind", [
   "text_3",
   "reply_positive",
   "reply_info_request",
+  "reply_decline",
 ]);
 
 export const enrollmentStatusEnum = pgEnum("enrollment_status", [

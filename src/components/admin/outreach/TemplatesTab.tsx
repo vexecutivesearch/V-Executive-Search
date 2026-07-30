@@ -13,6 +13,7 @@ const KINDS = [
   "text_3",
   "reply_positive",
   "reply_info_request",
+  "reply_decline",
 ];
 
 export function TemplatesTab() {
@@ -82,6 +83,12 @@ export function TemplatesTab() {
             Hardcoded names like &quot;Stacy&quot; or &quot;Plus Power&quot; in an exemplar
             are from a winning past send. Claude must not copy those facts; it personalizes
             off the selected listing.
+          </li>
+          <li>
+            Reply kinds (<code>reply_positive</code>, <code>reply_info_request</code>,{" "}
+            <code>reply_decline</code>) are also read by the classifier: when someone under
+            enrollment replies, Claude matches their message to these so the right next email
+            goes out (not a guess).
           </li>
           <li>
             House style: <strong>no dashes or hyphens</strong> in exemplars or outbound

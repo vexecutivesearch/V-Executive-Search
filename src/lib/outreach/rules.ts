@@ -11,12 +11,16 @@ import {
   type InboundMessage,
   type SequenceEnrollment,
 } from "@/lib/db/schema";
-import { draftPositiveReply } from "@/lib/outreach-draft";
+import { draftEnrollmentReply } from "@/lib/outreach-draft";
 import { suggestAvailability } from "@/lib/outreach/calendar";
 import { cancelSiblingEnrollments } from "@/lib/outreach/enroll";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
 import { contextForEnrollment } from "@/lib/outreach/node-draft";
 import { notifyReply } from "@/lib/outreach/notifications";
+import {
+  replyKindForIntent,
+  type ReplyTemplateKind,
+} from "@/lib/outreach/reply-playbook";
 import {
   defaultFromAddress,
   emailFooter,
@@ -29,15 +33,12 @@ import { addBusinessDays } from "@/lib/outreach/timezone-infer";
 
 /**
  * Rule engine — channel-agnostic. A text reply and an email reply hit
- * identical branching. Confirmed defaults:
- *   positive        → stop steps; DON'T suppress; threaded auto-reply with
- *                     live GCal windows; notify + follow-up task; company →
- *                     meeting track; cancel sibling sequences (one
- *                     conversation per company)
- *   positive_link_request → positive handling, but the reply carries a
- *                     scheduling link (thread established, link-safe)
- *   info_request    → stop automation, hand off with the exact quoted ask
- *   negative/opt_out→ stop + permanently suppress THAT contact only
+ * identical branching. Intent is LLM classified against Template bank reply
+ * exemplars; that intent picks which reply email goes out next:
+ *   positive / positive_link_request → reply_positive (auto-send)
+ *   info_request    → reply_info_request (auto-send ack) then hand-off
+ *   negative        → reply_decline (auto-send close) then suppress contact
+ *   opt_out         → stop + suppress, no reply email
  *   wrong_person    → stop + suppress, flag company for re-enrichment
  *   ooo             → don't stop; push next step +3 business days; 2 OOOs → pause
  *   courtesy        → stop sending, flag for manual review
@@ -117,19 +118,24 @@ async function lastSentEmail(enrollmentId: string) {
 async function sendThreadedAutoReply(options: {
   enrollment: SequenceEnrollment;
   inbound: InboundMessage;
-  includeSchedulingLink: boolean;
+  replyKind: ReplyTemplateKind;
+  includeSchedulingLink?: boolean;
 }): Promise<{ sent: boolean; usedCalendar: boolean }> {
-  const { enrollment, inbound } = options;
+  const { enrollment, inbound, replyKind } = options;
   const settings = await getOrCreateOutreachSettings();
   const context = await contextForEnrollment(enrollment);
   if (!context || !enrollment.emailAddress) return { sent: false, usedCalendar: false };
 
-  const availability = await suggestAvailability();
+  const needsAvailability = replyKind === "reply_positive" && !options.includeSchedulingLink;
+  const availability = needsAvailability
+    ? await suggestAvailability()
+    : { lines: [] as string[], fromCalendar: false };
   const schedulingLink = options.includeSchedulingLink
     ? process.env.OUTREACH_SCHEDULING_LINK ?? null
     : null;
 
-  const body = await draftPositiveReply({
+  const body = await draftEnrollmentReply({
+    replyKind,
     context,
     inboundSnippet: inbound.rawBody.slice(0, 800),
     availabilityLines: availability.lines,
@@ -163,7 +169,7 @@ async function sendThreadedAutoReply(options: {
   if (result.ok) {
     await db.insert(outreachMessages).values({
       enrollmentId: enrollment.id,
-      stepKind: "reply_positive",
+      stepKind: replyKind,
       channel: "email",
       status: "sent",
       subject: previous?.subject ? `Re: ${previous.subject}` : "Re: your reply",
@@ -175,9 +181,10 @@ async function sendThreadedAutoReply(options: {
     await logEnrollmentEvent({
       enrollmentId: enrollment.id,
       eventType: "sent",
-      actor: "rule:positive",
+      actor: `rule:${replyKind}`,
       payload: {
         auto_reply: true,
+        reply_kind: replyKind,
         threaded_to: previous?.messageId ?? null,
         from_calendar: availability.fromCalendar,
         scheduling_link: Boolean(schedulingLink),
@@ -291,9 +298,11 @@ export async function applyReplyRules(
     case "positive_link_request": {
       await stopPendingSteps(enrollment.id, actor);
       await setEnrollmentStatus(enrollment, "replied_positive", actor, "positive reply");
+      const replyKind = replyKindForIntent(intent) ?? "reply_positive";
       const reply = await sendThreadedAutoReply({
         enrollment,
         inbound,
+        replyKind,
         includeSchedulingLink: intent === "positive_link_request",
       });
       // Company → meeting track.
@@ -313,6 +322,7 @@ export async function applyReplyRules(
         actor,
         payload: {
           auto_reply_sent: reply.sent,
+          reply_kind: replyKind,
           used_calendar: reply.usedCalendar,
           siblings_cancelled: cancelled,
           company_status: "meeting",
@@ -320,38 +330,87 @@ export async function applyReplyRules(
       });
       return {
         intent,
-        actionTaken: `stopped; auto-replied (${reply.sent ? "sent" : "FAILED — manual"}); ${cancelled} sibling(s) cancelled; company → meeting`,
+        actionTaken: `stopped; ${replyKind} (${reply.sent ? "sent" : "FAILED — manual"}); ${cancelled} sibling(s) cancelled; company → meeting`,
       };
     }
 
     case "info_request": {
       await stopPendingSteps(enrollment.id, actor);
-      await setEnrollmentStatus(enrollment, "waiting_on_manual", actor, "info request — hand-off");
+      const replyKind = replyKindForIntent(intent) ?? "reply_info_request";
+      const reply = await sendThreadedAutoReply({
+        enrollment,
+        inbound,
+        replyKind,
+      });
+      await setEnrollmentStatus(
+        enrollment,
+        "waiting_on_manual",
+        actor,
+        "info request — ack sent, hand-off for substantive answer",
+      );
       await notifyReply({ ...base, intent, createFollowUpTask: true });
       await logEnrollmentEvent({
         enrollmentId: enrollment.id,
         eventType: "rule_action",
         actor,
-        payload: { hand_off: true, quoted_ask: snippet },
+        payload: {
+          hand_off: true,
+          auto_reply_sent: reply.sent,
+          reply_kind: replyKind,
+          quoted_ask: snippet,
+        },
       });
-      return { intent, actionTaken: "stopped automation; handed off with quoted ask" };
+      return {
+        intent,
+        actionTaken: `${replyKind} (${reply.sent ? "sent" : "FAILED"}); stopped automation; handed off with quoted ask`,
+      };
     }
 
-    case "negative":
-    case "opt_out": {
+    case "negative": {
       await stopPendingSteps(enrollment.id, actor);
-      await setEnrollmentStatus(
+      const replyKind = replyKindForIntent(intent) ?? "reply_decline";
+      const reply = await sendThreadedAutoReply({
         enrollment,
-        intent === "opt_out" ? "suppressed" : "replied_negative",
-        actor,
-        intent,
-      );
-      // Permanently suppress THAT contact only (email + phone); colleagues continue.
+        inbound,
+        replyKind,
+      });
+      await setEnrollmentStatus(enrollment, "replied_negative", actor, "negative");
       await addSuppression({
         email: enrollment.emailAddress,
         phone: enrollment.phoneNumber,
         channel: "all",
-        reason: intent === "opt_out" ? "opt-out reply" : "negative reply",
+        reason: "negative reply",
+        legalBasis: "recipient request",
+        contactId: enrollment.contactId,
+      });
+      await notifyReply({ ...base, intent, createFollowUpTask: false });
+      await logEnrollmentEvent({
+        enrollmentId: enrollment.id,
+        eventType: "rule_action",
+        actor,
+        payload: {
+          auto_reply_sent: reply.sent,
+          reply_kind: replyKind,
+          suppressed_contact: enrollment.contactId,
+          colleagues_unaffected: true,
+        },
+      });
+      return {
+        intent,
+        actionTaken: `${replyKind} (${reply.sent ? "sent" : "FAILED"}); contact suppressed (colleagues continue)`,
+      };
+    }
+
+    case "opt_out": {
+      await stopPendingSteps(enrollment.id, actor);
+      await setEnrollmentStatus(enrollment, "suppressed", actor, "opt_out");
+      // Permanently suppress THAT contact only (email + phone); colleagues continue.
+      // No auto-reply email on opt-out / STOP.
+      await addSuppression({
+        email: enrollment.emailAddress,
+        phone: enrollment.phoneNumber,
+        channel: "all",
+        reason: "opt-out reply",
         legalBasis: "recipient request",
         contactId: enrollment.contactId,
       });
@@ -362,7 +421,7 @@ export async function applyReplyRules(
         actor,
         payload: { suppressed_contact: enrollment.contactId, colleagues_unaffected: true },
       });
-      return { intent, actionTaken: "stopped + contact suppressed (colleagues continue)" };
+      return { intent, actionTaken: "stopped + contact suppressed (colleagues continue); no reply email" };
     }
 
     case "wrong_person": {

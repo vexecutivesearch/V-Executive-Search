@@ -1,12 +1,16 @@
 import type { InboundIntent } from "@/lib/db/schema";
+import {
+  formatReplyPlaybookForClassifier,
+  loadActiveReplyPlaybook,
+} from "@/lib/outreach/reply-playbook";
 import { sanitizeExemplarForPrompt } from "@/lib/outreach/sanitizer";
 
 /**
  * Inbound intent classification: cheap deterministic patterns first (STOP,
  * OOO, bounces — these must never depend on an LLM), then a few-shot LLM
- * classifier (same Anthropic setup as generate-opener). Low confidence →
- * unknown → pause + flag; we NEVER auto-suppress on a guess.
- * Auto-reply/OOO are classified out so they never pollute reply-rate health.
+ * classifier grounded in our Template bank reply exemplars so the chosen
+ * intent deliberately maps to which reply email goes out next.
+ * Low confidence → unknown → pause + flag; we NEVER auto-suppress on a guess.
  */
 
 const DEFAULT_MODEL = "claude-3-5-haiku-20241022";
@@ -102,17 +106,17 @@ export function classifyHeuristic(options: {
   return null;
 }
 
-const FEW_SHOT = `Examples:
+const FEW_SHOT = `Short labeled examples (inbound → intent):
 - "Yes, I'd be happy to chat. Does Thursday work?" → positive
-- "Sure — send me your calendar link and I'll grab a slot." → positive_link_request
+- "Sure, send me your calendar link and I'll grab a slot." → positive_link_request
 - "What are your fees? Do you work on contingency?" → info_request
 - "We're all set with recruiting agencies, thanks though." → negative
 - "Please remove me from your list." → opt_out
-- "I don't handle hiring — you want our HR director, Sarah." → wrong_person
+- "I don't handle hiring, you want our HR director, Sarah." → wrong_person
 - "I am out of the office until Monday with limited email access." → ooo
 - "Thanks for reaching out!" → courtesy
 - "Delete my information from your database." → data_deletion
-- "asdf 👍" → unknown`;
+- "asdf" → unknown`;
 
 export async function classifyWithLlm(options: {
   body: string;
@@ -124,20 +128,41 @@ export async function classifyWithLlm(options: {
 
   const model =
     process.env.OUTREACH_CLASSIFY_MODEL ?? process.env.OPENER_MODEL ?? DEFAULT_MODEL;
-  const prompt = `You classify replies to a recruiter's cold outreach (${options.channel}). Choose EXACTLY one intent:
 
-positive — wants to talk / agrees to a call / asks to schedule
-positive_link_request — positive AND asks for a calendar/scheduling link
-info_request — asks a substantive question (fees, process, candidates) without committing
-negative — polite or blunt "not interested / all set"
-opt_out — demands no further contact / unsubscribe / STOP
-wrong_person — says someone else handles hiring
-ooo — out-of-office or automatic reply
-courtesy — contentless pleasantry ("thanks!", "ok")
-data_deletion — asks for their data to be deleted
-unknown — cannot tell
+  let playbookBlock = "";
+  try {
+    const playbook = await loadActiveReplyPlaybook();
+    playbookBlock = formatReplyPlaybookForClassifier(playbook);
+  } catch (error) {
+    console.error("[outreach] classify playbook load failed:", error);
+  }
 
-Rules: a positive that mentions a calendar/scheduling link is positive_link_request, NOT info_request. Auto-replies are always ooo.
+  const prompt = `You classify replies to a recruiter's cold outreach (${options.channel}).
+Your job is to pick the intent that determines which of OUR response emails goes out next.
+Do not invent a category. Match the inbound to the playbook and intent list.
+
+Choose EXACTLY one intent:
+
+positive — wants to talk / agrees to a call / asks to schedule → we send reply_positive
+positive_link_request — positive AND asks for a calendar/scheduling link → we send reply_positive (with link)
+info_request — asks a substantive question (fees, process, candidates) without committing → we send reply_info_request
+negative — polite or blunt "not interested / all set" → we send reply_decline then stop
+opt_out — demands no further contact / unsubscribe / STOP → no reply email, suppress
+wrong_person — says someone else handles hiring → no reply email, suppress + re enrich
+ooo — out of office or automatic reply → delay sequence, no reply email
+courtesy — contentless pleasantry ("thanks!", "ok") → pause for manual, no auto reply
+data_deletion — asks for their data to be deleted → purge, no reply email
+unknown — cannot tell → pause for human review
+
+Rules:
+- A positive that mentions a calendar/scheduling link is positive_link_request, NOT info_request.
+- Auto replies are always ooo.
+- If they ask a real question AND also want a call, prefer positive (the call answers the question).
+- Prefer info_request over courtesy when there is a concrete ask.
+- Prefer negative over courtesy when they decline interest.
+- The playbook exemplars are OUR outbound style for each intent. Use them to decide which bucket the inbound belongs in.
+
+${playbookBlock || "(Template bank playbook unavailable — use the intent definitions above.)"}
 
 ${FEW_SHOT}
 

@@ -117,6 +117,7 @@ const STEP_KINDS = new Set([
   "text_3",
   "reply_positive",
   "reply_info_request",
+  "reply_decline",
 ]);
 
 /** Strict structural validation — returns human-readable problems. */
