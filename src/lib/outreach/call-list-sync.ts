@@ -30,7 +30,7 @@ export async function recordCallListOutreachEvent(options: {
   /** Short human line, e.g. "Outreach intro email sent: Support for…" */
   summary: string;
   /** companyActivities type */
-  activityType?: "email" | "note" | "call";
+  activityType?: "email" | "note" | "call" | "meeting";
   /** Bump attempts + lastContactAt (real outbound touches). */
   bumpAttempt?: boolean;
   /**

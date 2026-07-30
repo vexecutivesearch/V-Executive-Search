@@ -23,7 +23,7 @@ export const CALL_STATUS_LABELS: Record<CallStatus, string> = {
   voicemail_left: "Voicemail Left",
   spoke_follow_up: "Spoke — Follow-Up Needed",
   email_sent: "Email Sent",
-  meeting_scheduled: "Meeting Scheduled",
+  meeting_scheduled: "Call Booked",
   proposal_sent: "Proposal Sent",
   client_won: "Client Won",
   not_interested: "Not Interested",

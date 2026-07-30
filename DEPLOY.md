@@ -214,7 +214,14 @@ Setup checklist:
    for `email.delivered`, `email.bounced`, `email.complained`. The handler
    matches `resend_id` against outreach messages and ignores transactional app
    emails (a bounced daily report never dings a profile or suppresses anyone).
-4. Worker env (`~/.vsearch/worker.env`) for the Reply-To mailbox:
+4. Calendly → CRM Call Booked: create a webhook subscription for
+   `invitee.created` + `invitee.canceled` →
+   `https://v-executive-search-delta.vercel.app/api/webhooks/calendly?token=<CALENDLY_WEBHOOK_SECRET>`.
+   Vercel env: `CALENDLY_WEBHOOK_SECRET` (required for `?token=`), optional
+   `CALENDLY_WEBHOOK_SIGNING_KEY` (HMAC header verify), optional
+   `CALENDLY_API_TOKEN` (hydrate start/end when the payload is URI-only).
+   Outlook invites come from Calendly’s connected calendar for `odv@vexecutivesearch.com` (already set up) — the CRM does not push to Outlook.
+5. Worker env (`~/.vsearch/worker.env`) for the Reply-To mailbox:
    - `OUTREACH_IMAP_HOST=outlook.office365.com`
    - `OUTREACH_IMAP_USER=…`
    - **Preferred (M365 / GoDaddy):** `OUTREACH_MS_CLIENT_ID` (+ optional
@@ -226,11 +233,11 @@ Setup checklist:
      allows basic IMAP auth.
    The existing 5-min poll agent pumps iMessage sends, chat.db inbound scans,
    and IMAP replies (`worker/scripts/outreach_pump.py`).
-5. Domain rotation: Admin → Outreach → Domains → add a sending subdomain →
+6. Domain rotation: Admin → Outreach → Domains → add a sending subdomain →
    create the shown SPF/DKIM/DMARC records → Verify DNS. Unverified profiles
    cannot send; verified ones warm up 5/day → +5 per clean week → ~50/day with
    automatic rollback on bounce >2% / complaint >0.1%.
-6. Crons are already in `vercel.json` (`/api/cron/outreach-dispatch` every
+7. Crons are already in `vercel.json` (`/api/cron/outreach-dispatch` every
    15 min in the send window).
 
 Enrollment: automatic at the end of enrich ingest (verified-deliverable email,
