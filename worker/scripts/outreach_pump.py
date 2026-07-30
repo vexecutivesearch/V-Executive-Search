@@ -202,6 +202,19 @@ def _normalize_phone(value: str) -> str:
     return digits[-10:] if len(digits) >= 10 else ""
 
 
+def _is_substantive_imessage_text(text: str | None) -> bool:
+    """Reject empty / attachment-placeholder chat.db rows.
+
+    Messages.app often stores tapbacks, stickers, and failed-delivery stubs with
+    only U+FFFC (object replacement) in ``text``. Posting those as inbound
+    pauses enrollments as ``unknown`` (false "SMS failed" / false delivery).
+    """
+    if text is None:
+        return False
+    cleaned = "".join(ch for ch in str(text) if ch not in "\ufffc\ufffd").strip()
+    return bool(cleaned)
+
+
 def scan_chat_db(watch_phones: set[str]) -> int:
     """Post inbound texts from watched numbers. Returns count posted."""
     if sys.platform != "darwin" or not CHAT_DB.exists() or not watch_phones:
@@ -243,6 +256,8 @@ def scan_chat_db(watch_phones: set[str]) -> int:
         # Filter self-sent messages — otherwise our own outbound texts loop
         # back as "replies".
         if is_from_me:
+            continue
+        if not _is_substantive_imessage_text(text):
             continue
         phone = _normalize_phone(str(handle or ""))
         if not phone or phone not in watch_phones:

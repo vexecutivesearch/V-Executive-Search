@@ -45,6 +45,17 @@ def test_normalize_phone():
     assert pump._normalize_phone("12345") == ""
 
 
+def test_is_substantive_imessage_text():
+    pump = _load_pump()
+    assert pump._is_substantive_imessage_text("Yes, let's talk!")
+    assert not pump._is_substantive_imessage_text(None)
+    assert not pump._is_substantive_imessage_text("")
+    assert not pump._is_substantive_imessage_text("   ")
+    assert not pump._is_substantive_imessage_text("￼")
+    assert not pump._is_substantive_imessage_text("￼￼  ")
+    assert pump._is_substantive_imessage_text("ok ￼")
+
+
 def test_chat_scan_filters_self_and_unwatched(tmp_path, monkeypatch):
     pump = _load_pump()
     db_path = tmp_path / "chat.db"
@@ -54,6 +65,7 @@ def test_chat_scan_filters_self_and_unwatched(tmp_path, monkeypatch):
             ("g1", "Yes, let's talk!", 0, "+15615550100"),   # watched inbound → post
             ("g2", "our own outbound text", 1, "+15615550100"),  # is_from_me → skip
             ("g3", "hello from a stranger", 0, "+19995550000"),  # unwatched → skip
+            ("g4", "￼", 0, "+15615550100"),  # attachment/delivery stub → skip
         ],
     )
     monkeypatch.setattr(pump, "CHAT_DB", db_path)

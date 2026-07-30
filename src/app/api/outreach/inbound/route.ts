@@ -33,9 +33,16 @@ export async function POST(request: NextRequest) {
 
   const results = [];
   for (const message of payload.messages ?? []) {
-    if (!message.body?.trim() || !["email", "imessage"].includes(message.channel)) {
+    // Strip Messages.app object-replacement stubs (tapbacks / delivery
+    // placeholders) — they are not real replies and must not pause flows.
+    const body =
+      message.channel === "imessage"
+        ? (message.body ?? "").replace(/[\uFFFC\uFFFD]/g, "").trim()
+        : (message.body ?? "").trim();
+    if (!body || !["email", "imessage"].includes(message.channel)) {
       continue;
     }
+    message.body = body;
     try {
       const result = await ingestInboundMessage({
         channel: message.channel,
