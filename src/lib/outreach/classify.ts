@@ -124,7 +124,12 @@ export async function classifyWithLlm(options: {
   channel: "email" | "imessage";
 }): Promise<Classification> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return { intent: "unknown", confidence: 0, via: "fallback" };
+  if (!apiKey) {
+    console.error(
+      "[outreach] ANTHROPIC_API_KEY is not set — cannot classify inbound; pausing as unknown",
+    );
+    return { intent: "unknown", confidence: 0, via: "fallback" };
+  }
 
   const model =
     process.env.OUTREACH_CLASSIFY_MODEL ?? process.env.OPENER_MODEL ?? DEFAULT_MODEL;

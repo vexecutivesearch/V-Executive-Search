@@ -249,22 +249,33 @@ export async function ingestInboundMessage(options: {
         ),
       );
     const templateIds = [...new Set(sentMessages.map((m) => m.templateId).filter(Boolean))] as string[];
-    if (templateIds.length && !["ooo", "bounce_hard", "bounce_soft"].includes(classification.intent)) {
+    if (templateIds.length) {
       const { outreachTemplates } = await import("@/lib/db/schema");
       const { sql } = await import("drizzle-orm");
-      await db
-        .update(outreachTemplates)
-        .set({
-          timesReplied: sql`${outreachTemplates.timesReplied} + 1`,
-          ...(classification.intent.startsWith("positive")
-            ? { timesPositive: sql`${outreachTemplates.timesPositive} + 1` }
-            : {}),
-          ...(classification.intent === "opt_out"
-            ? { timesOptOut: sql`${outreachTemplates.timesOptOut} + 1` }
-            : {}),
-          updatedAt: new Date(),
-        })
-        .where(inArray(outreachTemplates.id, templateIds));
+      const isNoise = ["ooo", "bounce_hard", "bounce_soft"].includes(
+        classification.intent,
+      );
+      const isComplaint = classification.intent === "complaint";
+      const isOptOut =
+        classification.intent === "opt_out" || isComplaint;
+      if (!isNoise) {
+        await db
+          .update(outreachTemplates)
+          .set({
+            // Complaints are not real replies — count as opt-outs only.
+            ...(!isComplaint
+              ? { timesReplied: sql`${outreachTemplates.timesReplied} + 1` }
+              : {}),
+            ...(classification.intent.startsWith("positive")
+              ? { timesPositive: sql`${outreachTemplates.timesPositive} + 1` }
+              : {}),
+            ...(isOptOut
+              ? { timesOptOut: sql`${outreachTemplates.timesOptOut} + 1` }
+              : {}),
+            updatedAt: new Date(),
+          })
+          .where(inArray(outreachTemplates.id, templateIds));
+      }
     }
   } catch (error) {
     console.error("[outreach] template counter update failed", error);

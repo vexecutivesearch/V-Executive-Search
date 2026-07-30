@@ -546,6 +546,7 @@ export type EnrollmentNodeState = {
   manual_deadline?: string;
   split_assignments?: Record<string, string>;
   ooo_count?: number;
+  soft_bounce_count?: number;
   [key: string]: unknown;
 };
 

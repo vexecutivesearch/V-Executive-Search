@@ -42,7 +42,9 @@ import { addBusinessDays } from "@/lib/outreach/timezone-infer";
  *   wrong_person    → stop + suppress, flag company for re-enrichment
  *   ooo             → don't stop; push next step +3 business days; 2 OOOs → pause
  *   courtesy        → stop sending, flag for manual review
- *   data_deletion   → purge drafts + inbound bodies, full suppression, audit
+ *   bounce_hard     → stop + suppress email
+ *   bounce_soft     → push next step +1 business day; 3 soft bounces → pause
+ *   complaint       → stop + suppress email (spam complaint); no reply email
  *   unknown         → pause + notify
  * Every action writes to enrollment_events.
  */
@@ -522,12 +524,76 @@ export async function applyReplyRules(
     }
 
     case "bounce_soft": {
+      const state = { ...(enrollment.nodeState ?? {}) };
+      const softCount = Number(state.soft_bounce_count ?? 0) + 1;
+      state.soft_bounce_count = softCount;
+      if (softCount >= 3) {
+        await stopPendingSteps(enrollment.id, actor);
+        await db
+          .update(sequenceEnrollments)
+          .set({
+            status: "paused",
+            nodeState: state,
+            stopReason: "repeated soft bounces",
+            nextStepAt: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(sequenceEnrollments.id, enrollment.id));
+        await logEnrollmentEvent({
+          enrollmentId: enrollment.id,
+          eventType: "rule_action",
+          actor,
+          payload: { soft_bounce_count: softCount, action: "paused" },
+        });
+        return { intent, actionTaken: "third soft bounce — paused" };
+      }
       const pushed = addBusinessDays(new Date(), 1, enrollment.timezone);
       await db
         .update(sequenceEnrollments)
-        .set({ nextStepAt: pushed, updatedAt: new Date() })
+        .set({ nextStepAt: pushed, nodeState: state, updatedAt: new Date() })
         .where(eq(sequenceEnrollments.id, enrollment.id));
-      return { intent, actionTaken: "soft bounce — backoff retry" };
+      await db
+        .update(outreachMessages)
+        .set({ scheduledFor: pushed, updatedAt: new Date() })
+        .where(
+          and(
+            eq(outreachMessages.enrollmentId, enrollment.id),
+            eq(outreachMessages.status, "queued"),
+          ),
+        );
+      await logEnrollmentEvent({
+        enrollmentId: enrollment.id,
+        eventType: "rule_action",
+        actor,
+        payload: { rescheduled_to: pushed.toISOString(), soft_bounce_count: softCount },
+      });
+      return {
+        intent,
+        actionTaken: `soft bounce — backoff +1 business day (${softCount}/3)`,
+      };
+    }
+
+    case "complaint": {
+      await stopPendingSteps(enrollment.id, actor);
+      await setEnrollmentStatus(enrollment, "suppressed", actor, "spam complaint");
+      await addSuppression({
+        email: enrollment.emailAddress,
+        channel: "email",
+        reason: "spam complaint",
+        legalBasis: "recipient spam complaint",
+        contactId: enrollment.contactId,
+      });
+      await notifyReply({ ...base, intent, createFollowUpTask: false });
+      await logEnrollmentEvent({
+        enrollmentId: enrollment.id,
+        eventType: "rule_action",
+        actor,
+        payload: { suppressed_contact: enrollment.contactId, reason: "spam complaint" },
+      });
+      return {
+        intent,
+        actionTaken: "spam complaint — stopped + email suppressed; no reply email",
+      };
     }
 
     default: {
@@ -541,7 +607,7 @@ export async function applyReplyRules(
         enrollmentId: enrollment.id,
         eventType: "rule_action",
         actor: "rule:unknown",
-        payload: { action: "paused_for_review" },
+        payload: { action: "paused_for_review", original_intent: intent },
       });
       return { intent: "unknown", actionTaken: "paused + notified" };
     }

@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
     if (message.sendingProfileId) {
       await bumpProfileCounters(message.sendingProfileId, { totalComplaints: 1 });
     }
-    // Complaints are treated as opt-outs — suppress the contact.
+    // Rules engine owns stop + suppress for complaint (no bolt-on here).
     await ingestInboundMessage({
       channel: "email",
       fromAddress: enrollment?.emailAddress,
@@ -110,16 +110,6 @@ export async function POST(request: NextRequest) {
       externalId: `resend:${type}:${resendId}`,
       preclassifiedIntent: "complaint",
     });
-    // complaint intent falls into default rule → pause; force suppression:
-    if (enrollment) {
-      const { addSuppression } = await import("@/lib/outreach/suppression");
-      await addSuppression({
-        email: enrollment.emailAddress,
-        channel: "email",
-        reason: "spam complaint",
-        contactId: enrollment.contactId,
-      });
-    }
     return NextResponse.json({ ok: true });
   }
 
