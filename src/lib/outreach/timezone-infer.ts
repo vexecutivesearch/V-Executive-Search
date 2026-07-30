@@ -241,14 +241,21 @@ export function scheduleSendAt(options: {
   const minute = jitter % 60;
   let scheduled = dateInTimezone(wc.year, wc.month, wc.day, hour, minute, timeZone);
 
-  // Same-day sends whose window already passed move to the next weekday.
-  if (offsetDays === 0 && scheduled <= base) {
+  // Day-0: if we're already inside today's send window, send almost immediately
+  // (not a random later slot 15–60 minutes out). Outside the window → next weekday.
+  if (offsetDays === 0) {
     const nowWc = wallClock(base, timeZone);
-    if (nowWc.hour < windowEndHour - 1 && nowWc.weekday !== 0 && nowWc.weekday !== 6) {
-      // Still inside today's window — send shortly after now with jitter.
-      const minutesAhead = 2 + Math.floor(random() * 20);
-      scheduled = new Date(base.getTime() + minutesAhead * 60_000);
-    } else {
+    const inWindow =
+      nowWc.weekday !== 0 &&
+      nowWc.weekday !== 6 &&
+      nowWc.hour >= windowStartHour &&
+      nowWc.hour < windowEndHour;
+    if (inWindow) {
+      // 5–45 seconds ahead so dispatch/worker can pick it up without looking deferred.
+      const secondsAhead = 5 + Math.floor(random() * 40);
+      return new Date(base.getTime() + secondsAhead * 1000);
+    }
+    if (scheduled <= base) {
       return scheduleSendAt({ ...options, offsetDays: 1 });
     }
   }

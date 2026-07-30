@@ -106,7 +106,7 @@ describe("scheduleSendAt (weekday sends, contact-local hours, jitter)", () => {
     expect(wc.hour).toBeLessThan(17);
   });
 
-  it("day-0 mid-window with an already-passed jitter slot sends shortly after now", () => {
+  it("day-0 mid-window sends within about a minute, not a later random slot", () => {
     const midWindow = new Date("2026-07-15T20:00:00Z"); // 3 PM CT Wednesday
     const scheduled = scheduleSendAt({
       base: midWindow,
@@ -114,10 +114,10 @@ describe("scheduleSendAt (weekday sends, contact-local hours, jitter)", () => {
       timeZone: "America/Chicago",
       windowStartHour: 9,
       windowEndHour: 17,
-      random: () => 0.01, // jitter points at ~9 AM — already passed
+      random: () => 0.5,
     });
     expect(scheduled.getTime()).toBeGreaterThan(midWindow.getTime());
-    expect(scheduled.getTime() - midWindow.getTime()).toBeLessThan(45 * 60_000);
+    expect(scheduled.getTime() - midWindow.getTime()).toBeLessThan(60_000);
   });
 });
 
