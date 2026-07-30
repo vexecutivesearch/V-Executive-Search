@@ -759,14 +759,28 @@ def pump_imessage_queue() -> int:
 PENDING_STATE_KEY = "pending_text_verifications"
 
 
+def _read_pending() -> dict[str, Any]:
+    """Pending records from the state file, ignoring anything malformed.
+
+    The state file outlives releases, so a shape written by another version must
+    degrade to "nothing pending" rather than break the whole pump stage.
+    """
+    raw = _load_state().get(PENDING_STATE_KEY)
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in raw.items()
+        if isinstance(value, dict) and value.get("rowid") is not None
+    }
+
+
 def _remember_pending_send(message_id: str, record: dict[str, Any]) -> None:
-    state = _load_state()
-    pending = dict(state.get(PENDING_STATE_KEY) or {})
+    pending = _read_pending()
     # Keyed by CRM message id, so re-recording the same send overwrites rather
     # than queueing a second re-check for it.
     pending[message_id] = record
-    state[PENDING_STATE_KEY] = pending
-    _save_state(state)
+    _write_pending(pending)
 
 
 def _write_pending(pending: dict[str, Any]) -> None:
@@ -819,8 +833,7 @@ def resolve_pending_text_sends() -> int:
     """
     if sys.platform != "darwin":
         return 0
-    state = _load_state()
-    pending: dict[str, Any] = dict(state.get(PENDING_STATE_KEY) or {})
+    pending = _read_pending()
     if not pending:
         return 0
     crm = _crm()
@@ -1313,7 +1326,12 @@ def fetch_watchlist() -> set[str]:
 
 
 def run_outreach_pump() -> dict[str, int]:
-    """One pump pass. Each stage isolated — a failure never blocks the rest."""
+    """One pump pass. Each stage isolated — a failure never blocks the rest.
+
+    Stage order matters: they share one state file and each reloads it before
+    writing, so a stage that writes state must not be followed by one already
+    holding a stale snapshot.
+    """
     stats = {"texts_resolved": 0, "texts_sent": 0, "texts_in": 0, "emails_in": 0}
     try:
         # First, so a message rescued by the SMS retry leaves on this tick.

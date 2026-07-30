@@ -1038,6 +1038,20 @@ def test_pending_recheck_is_a_noop_with_nothing_pending(tmp_path, monkeypatch):
     assert pump.resolve_pending_text_sends() == 0
 
 
+def test_pending_recheck_ignores_state_it_cannot_understand(tmp_path, monkeypatch):
+    """The state file outlives releases — a foreign shape must not break the stage."""
+    pump = _load_pump()
+    monkeypatch.setattr(pump.sys, "platform", "darwin")
+    monkeypatch.setattr(pump, "STATE_FILE", tmp_path / "state.json")
+
+    for junk in ([], "nope", {"m1": "not a dict"}, {"m1": {"phone": "+1786"}}):
+        pump._save_state({"chat_last_rowid": 7, pump.PENDING_STATE_KEY: junk})
+        assert pump._read_pending() == {}
+        assert pump.resolve_pending_text_sends() == 0
+        # Unrelated state survives the sanitising.
+        assert pump._load_state()["chat_last_rowid"] == 7
+
+
 # --- CRM status reporting -------------------------------------------------
 
 
