@@ -452,6 +452,7 @@ export async function applyReplyRules(
       await recordCallListOutreachEvent({
         companyId: enrollment.companyId,
         contactId: enrollment.contactId,
+        callStatus: "bad_contact",
         summary: `Outreach: wrong person — re-enrich for the right contact. Reply: ${snippet.slice(0, 200)}`,
       });
       await notifyReply({ ...base, intent, createFollowUpTask: false });

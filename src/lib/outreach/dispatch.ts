@@ -93,6 +93,7 @@ async function logSendActivity(
     contactId: enrollment.contactId,
     activityType: "email",
     bumpAttempt: true,
+    callStatus: "email_sent",
     summary: `Outreach ${message.stepKind} email sent${
       message.subject ? `: ${message.subject}` : ""
     }`,

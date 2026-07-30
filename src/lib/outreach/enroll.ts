@@ -61,18 +61,22 @@ async function ineligibilityReason(
   companyStatus: string,
   icpStatus: string,
   emailAddress: string | null,
+  options?: { bypassIcpFail?: boolean },
 ): Promise<string | null> {
   if (!emailAddress) return "no email address";
   if (contact.emailDeliverable !== true) return "email not verified deliverable";
   if (companyStatus !== "new") return `company status is ${companyStatus}`;
-  if (icpStatus === "fail") return "ICP fail";
+  // Intentional Call List adds skip ICP fail — the recruiter already chose them.
+  if (icpStatus === "fail" && !options?.bypassIcpFail) return "ICP fail";
 
   const [icpRow] = await db
     .select({ flags: companyIcp.exclusionFlags })
     .from(companyIcp)
     .where(eq(companyIcp.companyId, contact.companyId))
     .limit(1);
-  if (icpRow?.flags?.includes("staffing_agency")) return "staffing agency";
+  if (icpRow?.flags?.includes("staffing_agency") && !options?.bypassIcpFail) {
+    return "staffing agency";
+  }
 
   const [prior] = await db
     .select({ id: sequenceEnrollments.id })
@@ -135,13 +139,31 @@ export async function enrollContact(
   if (!company) return { enrolled: false, reason: "company not found" };
 
   const emailAddress = pickEmail(contact, settings.workEmailPreferred);
+  const fromCallList = options?.actor === "call_list";
   const reason = await ineligibilityReason(
     contact,
     company.status,
     company.icpStatus,
     emailAddress,
+    { bypassIcpFail: fromCallList },
   );
-  if (reason) return { enrolled: false, reason };
+  if (reason) {
+    if (fromCallList) {
+      try {
+        const { recordCallListOutreachEvent } = await import(
+          "@/lib/outreach/call-list-sync"
+        );
+        await recordCallListOutreachEvent({
+          companyId: company.id,
+          contactId: contact.id,
+          summary: `Outreach enroll failed: ${reason}`,
+        });
+      } catch {
+        /* non-fatal */
+      }
+    }
+    return { enrolled: false, reason };
+  }
 
   const companyEnrollments = await db
     .select({ id: sequenceEnrollments.id })

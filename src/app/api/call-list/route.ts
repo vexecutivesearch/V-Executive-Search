@@ -159,6 +159,29 @@ export async function POST(request: NextRequest) {
       console.error("[call-list] outreach enroll failed (non-fatal):", error);
       outreach = { enrolled: false, reason: "enroll_error" };
     }
+  } else {
+    outreach = { enrolled: false, reason: "no primary contact" };
+  }
+
+  if (outreach && !outreach.enrolled && primaryContactId) {
+    // enrollContact already notes most failures; catch empty primary / disabled.
+    if (
+      outreach.reason === "auto_enroll disabled" ||
+      outreach.reason === "enroll_error"
+    ) {
+      try {
+        const { recordCallListOutreachEvent } = await import(
+          "@/lib/outreach/call-list-sync"
+        );
+        await recordCallListOutreachEvent({
+          companyId,
+          contactId: primaryContactId,
+          summary: `Outreach enroll failed: ${outreach.reason}`,
+        });
+      } catch {
+        /* non-fatal */
+      }
+    }
   }
 
   return NextResponse.json({ entry, already_on_list: false, outreach });

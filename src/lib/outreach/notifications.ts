@@ -28,18 +28,43 @@ export async function notifyReply(options: {
 
   if (options.createFollowUpTask && options.companyId) {
     try {
-      const { recordCallListOutreachEvent } = await import(
-        "@/lib/outreach/call-list-sync"
-      );
+      const {
+        callStatusForReplyIntent,
+        recordCallListOutreachEvent,
+      } = await import("@/lib/outreach/call-list-sync");
       await recordCallListOutreachEvent({
         companyId: options.companyId,
         contactId: options.contactId ?? null,
+        callStatus: callStatusForReplyIntent(options.intent),
         summary: `Outreach reply (${options.intent})${
           options.contactName ? ` from ${options.contactName}` : ""
         }: ${options.snippet.slice(0, 300)}`,
       });
     } catch (error) {
       console.error("[outreach] follow-up task insert failed", error);
+    }
+  }
+
+  // Even without a follow-up task, advance Call List status for terminal intents.
+  if (!options.createFollowUpTask && options.companyId) {
+    try {
+      const {
+        callStatusForReplyIntent,
+        recordCallListOutreachEvent,
+      } = await import("@/lib/outreach/call-list-sync");
+      const callStatus = callStatusForReplyIntent(options.intent);
+      if (callStatus) {
+        await recordCallListOutreachEvent({
+          companyId: options.companyId,
+          contactId: options.contactId ?? null,
+          callStatus,
+          summary: `Outreach reply (${options.intent})${
+            options.contactName ? ` from ${options.contactName}` : ""
+          }: ${options.snippet.slice(0, 300)}`,
+        });
+      }
+    } catch (error) {
+      console.error("[outreach] call-list reply status sync failed", error);
     }
   }
 

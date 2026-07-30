@@ -140,6 +140,7 @@ export async function POST(request: NextRequest) {
           companyId: enr.companyId,
           contactId: enr.contactId,
           bumpAttempt: true,
+          callStatus: "email_sent",
           summary: `Outreach ${message.stepKind} iMessage sent`,
         });
         const { companies } = await import("@/lib/db/schema");

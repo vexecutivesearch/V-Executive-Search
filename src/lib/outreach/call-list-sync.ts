@@ -1,11 +1,17 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { callListEntries, companyActivities } from "@/lib/db/schema";
+import {
+  callListEntries,
+  companyActivities,
+  type CallStatus,
+} from "@/lib/db/schema";
+import { TERMINAL_STATUSES } from "@/lib/call-status";
 
 /**
  * Keep the Call List in sync with the Outreach Sequencer: every automated
  * touch writes a timestamped line into call_list_entries.notes (visible on
- * the Call List row) and a companyActivities row (company dossier / history).
+ * the Call List row), updates call_status when appropriate, and a
+ * companyActivities row (company dossier / history).
  */
 
 function stampLine(line: string): string {
@@ -27,6 +33,11 @@ export async function recordCallListOutreachEvent(options: {
   activityType?: "email" | "note" | "call";
   /** Bump attempts + lastContactAt (real outbound touches). */
   bumpAttempt?: boolean;
+  /**
+   * Advance Call List workflow status. Skipped when the row is already in a
+   * terminal status (won / not interested / DNC / bad contact).
+   */
+  callStatus?: CallStatus;
 }): Promise<void> {
   const line = stampLine(options.summary);
   try {
@@ -37,12 +48,20 @@ export async function recordCallListOutreachEvent(options: {
       .limit(1);
     if (entry) {
       const prev = entry.notes?.trim() ? `${entry.notes.trim()}\n` : "";
+      const terminal = TERMINAL_STATUSES.has(entry.callStatus);
+      const nextStatus =
+        options.callStatus && !terminal ? options.callStatus : entry.callStatus;
+      const statusChanged = nextStatus !== entry.callStatus;
       await db
         .update(callListEntries)
         .set({
           notes: `${prev}${line}`,
           attempts: options.bumpAttempt ? entry.attempts + 1 : entry.attempts,
           lastContactAt: options.bumpAttempt ? new Date() : entry.lastContactAt,
+          callStatus: nextStatus,
+          callStatusUpdatedAt: statusChanged
+            ? new Date()
+            : entry.callStatusUpdatedAt,
           updatedAt: new Date(),
         })
         .where(eq(callListEntries.id, entry.id));
@@ -61,5 +80,27 @@ export async function recordCallListOutreachEvent(options: {
     });
   } catch (error) {
     console.error("[outreach] company activity insert failed", error);
+  }
+}
+
+/** Map inbound outreach intents onto Call List workflow statuses. */
+export function callStatusForReplyIntent(intent: string): CallStatus | undefined {
+  switch (intent) {
+    case "positive":
+    case "positive_link_request":
+      return "meeting_scheduled";
+    case "info_request":
+    case "courtesy":
+      return "spoke_follow_up";
+    case "negative":
+      return "not_interested";
+    case "opt_out":
+    case "complaint":
+    case "data_deletion":
+      return "do_not_contact";
+    case "wrong_person":
+      return "bad_contact";
+    default:
+      return undefined;
   }
 }
