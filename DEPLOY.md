@@ -62,15 +62,21 @@ Worker `CRM_API_URL` and email “Open CRM” links must **never** point at lega
 
 - [ ] Clone repo on the **worker Mac** (editable checkout for promote/bootstrap only)
 - [ ] Install **Python ≥ 3.10** (Homebrew `python@3.12`); system `/usr/bin/python3` (3.9) is too old for the worker package
+- [ ] Grant Full Disk Access to the frozen interpreter so inbound texts work — see [Full Disk Access](#full-disk-access-inbound-texts)
 - [ ] Create canonical env: `mkdir -p ~/.vsearch && cp worker/.env.example ~/.vsearch/worker.env` and fill keys  
       Set `CRM_API_URL=https://v-executive-search-delta.vercel.app` (no trailing slash)
 - [ ] Promote a tested SHA to `worker-production` on **origin and vexec**, then:
 
 ```bash
-WORKER_BOOTSTRAP_PYTHON=/opt/homebrew/bin/python3.12 \
-  bash worker/scripts/bootstrap_release.sh
+bash worker/scripts/bootstrap_release.sh
 bash worker/scripts/verify_release_launchd.sh
 ```
+
+  Bootstrap builds the release venv against the frozen interpreter at
+  `~/.vsearch/python/...` (installing it first if missing) — see
+  [Full Disk Access](#full-disk-access-inbound-texts). Do **not** override
+  `WORKER_BOOTSTRAP_PYTHON` with a Homebrew path; that reintroduces the
+  upgrade-voids-the-grant bug.
 
 - [ ] Admin → Worker status: SHA matches `worker-production`, **drift false**
 - [ ] Confirm `SERPAPI_SCHEDULE_GATE_BYPASS` is **unset** in `~/.vsearch/worker.env`
@@ -232,7 +238,8 @@ Setup checklist:
    - **Legacy:** `OUTREACH_IMAP_PASSWORD` (app password) when the tenant still
      allows basic IMAP auth.
    The existing 5-min poll agent pumps iMessage sends, chat.db inbound scans,
-   and IMAP replies (`worker/scripts/outreach_pump.py`).
+   and IMAP replies (`worker/scripts/outreach_pump.py`). Inbound texts also
+   need [Full Disk Access](#full-disk-access-inbound-texts).
 6. Domain rotation: Admin → Outreach → Domains → add a sending subdomain →
    create the shown SPF/DKIM/DMARC records → Verify DNS. Unverified profiles
    cannot send; verified ones warm up 5/day → +5 per clean week → ~50/day with
@@ -255,6 +262,52 @@ engine (positive → threaded auto-reply with live calendar windows + cancel
 sibling sequences; opt-out → per-channel suppression; OOO → +3 business days;
 data deletion → purge + suppress). Every decision lands in the
 `enrollment_events` audit log.
+
+### Full Disk Access (inbound texts)
+
+Reading `~/Library/Messages/chat.db` needs Full Disk Access. macOS TCC ignores
+the launcher (`caffeinate`) and the venv symlink and judges the **interpreter
+binary it resolves to**, keyed to an absolute path plus that binary's exact
+code-signature hash.
+
+So the grant must go on a path Homebrew never rewrites. `install_stable_python.sh`
+copies the Homebrew framework to `~/.vsearch/python/`, rewrites the three Mach-O
+files that hardcode the versioned Cellar path, and re-signs ad-hoc. The result is
+frozen: `brew upgrade python@3.12` cannot move or modify it, so one grant lasts.
+The script is idempotent and refuses to rebuild without `--force`, because
+rewriting the binary changes its hash and voids the grant.
+
+One-time grant on a new worker Mac:
+
+```bash
+bash worker/scripts/install_stable_python.sh     # prints the exact path
+open ~/.vsearch/python/Python.framework/Versions/3.12/bin
+```
+
+Then drag `python3.12` from that Finder window onto **System Settings → Privacy
+& Security → Full Disk Access** and switch it on. Drag-and-drop is required —
+the `+` button will not select a bare unix binary.
+
+Verify from launchd, never from a terminal (a terminal inherits its parent app's
+Full Disk Access and reports a false pass):
+
+```bash
+launchctl kickstart -k gui/$UID/com.vexecsearch.poll
+grep chat.db ~/Projects/V-Executive-Search-release/worker/logs/poll_stderr.log | tail -3
+```
+
+`chat.db scan: N row(s) past rowid=…` is healthy. `chat.db unreadable — inbound
+texts are NOT being ingested` means the grant is missing or lapsed. To check the
+interpreter directly, run `worker/scripts/check_full_disk_access.py` from a
+launchd job.
+
+Switching an already-live venv onto the frozen interpreter (grant it **first**,
+or inbound texts stop):
+
+```bash
+bash worker/scripts/point_venv_at_stable_python.sh <release>/worker/.venv
+bash worker/scripts/point_venv_at_stable_python.sh --revert <release>/worker/.venv   # rollback
+```
 
 ### Legacy note
 

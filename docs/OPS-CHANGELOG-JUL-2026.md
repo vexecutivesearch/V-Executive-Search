@@ -88,8 +88,9 @@ git push origin <sha>:refs/heads/worker-production
 git push vexec <sha>:refs/heads/worker-production
 
 # On mini — editable clone, Python ≥3.10 (Homebrew 3.12)
-WORKER_BOOTSTRAP_PYTHON=/opt/homebrew/bin/python3.12 \
-  bash worker/scripts/bootstrap_release.sh
+# Do NOT pin WORKER_BOOTSTRAP_PYTHON to a Homebrew path: the venv must resolve to
+# the frozen ~/.vsearch/python build that holds the chat.db Full Disk Access grant.
+bash worker/scripts/bootstrap_release.sh
 bash worker/scripts/verify_release_launchd.sh
 launchctl list | grep vexecsearch
 
@@ -99,6 +100,32 @@ WORKER_ENV_FILE=~/.vsearch/worker.env .venv/bin/python scripts/run_daily.py --em
 ```
 
 Canonical secrets: `~/.vsearch/worker.env` only (chmod 600). Never commit.
+
+---
+
+## Full Disk Access survives Homebrew upgrades (Jul 30)
+
+Inbound texts died with `chat.db scan failed: unable to open database file`. The
+grant existed, but macOS TCC had it keyed to
+`/opt/homebrew/Cellar/python@3.12/3.12.13_4/.../bin/python3.12` — path plus that
+binary's exact code-signature hash. TCC judges the interpreter that opens the
+file, not `caffeinate` and not the venv symlink, so any `brew upgrade python@3.12`
+relocates the binary and silently voids the grant. The pump logs one non-fatal
+line and keeps running, so the outage is invisible.
+
+Fix: `worker/scripts/install_stable_python.sh` copies the framework to
+`~/.vsearch/python/`, rewrites the three Mach-O files that hardcode the versioned
+Cellar path, and re-signs ad-hoc. Homebrew never touches that path, so the copy
+and its hash are frozen and the grant survives. Bootstrap, launchd install, and
+`setup_mac.sh` all build the venv against it, so a re-bootstrap cannot revert.
+
+The copy also binds `pyexpat` straight to Homebrew's `libexpat`, so the runtime
+no longer depends on `DYLD_LIBRARY_PATH` being set (previously `pip` itself
+failed without it).
+
+**Rule:** `--force` on that installer changes the hash and voids the grant. So
+does any other rewrite of the binary. Re-granting is drag-and-drop only — the
+Full Disk Access `+` button cannot select a bare unix binary.
 
 ---
 

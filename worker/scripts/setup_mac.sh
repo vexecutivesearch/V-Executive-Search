@@ -26,9 +26,19 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+# Prefer the frozen interpreter under $HOME. macOS TCC grants Full Disk Access
+# to the binary behind the venv symlink, and a Homebrew Cellar path carries a
+# version number that `brew upgrade` changes — which voids the grant the worker
+# needs to read chat.db for inbound texts.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  bash "$WORKER_ROOT/scripts/install_stable_python.sh" --quiet || true
+  STABLE_PYTHON="$(bash "$WORKER_ROOT/scripts/install_stable_python.sh" --path)"
+fi
+
 # Prefer Homebrew Python 3.10+ (system Python on macOS is often 3.9).
 PYTHON=""
 for candidate in \
+  "${STABLE_PYTHON:-}" \
   "${HOMEBREW_PREFIX:-/opt/homebrew}/bin/python3.12" \
   "${HOMEBREW_PREFIX:-/opt/homebrew}/bin/python3.11" \
   "${HOMEBREW_PREFIX:-/opt/homebrew}/bin/python3" \

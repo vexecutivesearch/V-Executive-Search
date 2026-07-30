@@ -8,8 +8,23 @@ RELEASE_REF="${WORKER_RELEASE_REF:-origin/worker-production}"
 RELEASE_CHECKOUT="${WORKER_RELEASE_CHECKOUT:-${SOURCE_REPO_ROOT}-release}"
 PREVIOUS_CHECKOUT="${WORKER_PREVIOUS_RELEASE_CHECKOUT:-${RELEASE_CHECKOUT}-previous}"
 RUNTIME_ENV_FILE="${WORKER_RUNTIME_ENV_FILE:-${WORKER_ENV_FILE:-$HOME/.vsearch/worker.env}}"
-BOOTSTRAP_PYTHON="${WORKER_BOOTSTRAP_PYTHON:-python3}"
+STABLE_PYTHON_INSTALLER="$SOURCE_WORKER_ROOT/scripts/install_stable_python.sh"
 EXPAT_LIB="${HOMEBREW_PREFIX:-/opt/homebrew}/opt/expat/lib"
+
+# Build the venv against the frozen interpreter under $HOME, never the Homebrew
+# Cellar. macOS TCC resolves the venv symlink and grants Full Disk Access to the
+# real binary, so a Cellar-backed venv loses chat.db access (and therefore all
+# inbound SMS) the next time `brew upgrade python@3.12` moves that binary.
+BOOTSTRAP_PYTHON="${WORKER_BOOTSTRAP_PYTHON:-}"
+if [[ -z "$BOOTSTRAP_PYTHON" && "$(uname -s)" == "Darwin" ]]; then
+  # Non-fatal: a machine with no Homebrew python@3.12 still bootstraps on
+  # plain python3 below, just without the durable Full Disk Access grant.
+  bash "$STABLE_PYTHON_INSTALLER" --quiet || true
+  BOOTSTRAP_PYTHON="$(bash "$STABLE_PYTHON_INSTALLER" --path)"
+fi
+if [[ -z "$BOOTSTRAP_PYTHON" || ! -x "$BOOTSTRAP_PYTHON" ]]; then
+  BOOTSTRAP_PYTHON=python3
+fi
 PY_ENV=()
 if [[ -d "$EXPAT_LIB" ]]; then
   PY_ENV=(env "DYLD_LIBRARY_PATH=${EXPAT_LIB}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}")
@@ -70,10 +85,20 @@ fi
 echo "→ Copying worker runtime env"
 ln -s "$RUNTIME_ENV_FILE" "$TMP_CHECKOUT/worker/.env"
 
-echo "→ Creating release venv"
+echo "→ Creating release venv ($BOOTSTRAP_PYTHON)"
 "${PY_ENV[@]}" "$BOOTSTRAP_PYTHON" -m venv "$TMP_CHECKOUT/worker/.venv"
 "${PY_ENV[@]}" "$TMP_CHECKOUT/worker/.venv/bin/python" -m pip install -q --upgrade pip setuptools wheel
 "${PY_ENV[@]}" "$TMP_CHECKOUT/worker/.venv/bin/python" -m pip install -q -e "$TMP_CHECKOUT/worker"
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  TCC_PYTHON="$(readlink -f "$TMP_CHECKOUT/worker/.venv/bin/python")"
+  echo "→ Full Disk Access is judged against: $TCC_PYTHON"
+  if [[ "$TCC_PYTHON" == *"/Cellar/"* ]]; then
+    echo "  WARNING: that path contains a Homebrew version number, so the next"
+    echo "  \`brew upgrade python@3.12\` will move it and silently kill inbound SMS."
+    echo "  Fix: bash $STABLE_PYTHON_INSTALLER"
+  fi
+fi
 
 echo "→ Swapping release checkout"
 rm -rf "$PREVIOUS_CHECKOUT"

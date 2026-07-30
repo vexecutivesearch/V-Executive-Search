@@ -18,6 +18,25 @@ if [[ ! -x "$PYTHON" ]]; then
   exit 1
 fi
 
+# launchd runs caffeinate → venv python → the pump, but macOS TCC ignores the
+# launcher and judges Full Disk Access against the interpreter it resolves the
+# venv symlink to. A Cellar-backed interpreter carries a version number in its
+# path, so `brew upgrade python@3.12` relocates it and inbound SMS dies with a
+# single non-fatal log line. Name the real grant target here so that is visible.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  TCC_PYTHON="$(readlink -f "$PYTHON")"
+  echo "Full Disk Access is judged against: $TCC_PYTHON"
+  if [[ "$TCC_PYTHON" == *"/Cellar/"* ]]; then
+    echo ""
+    echo "  WARNING: that is a versioned Homebrew path. The Full Disk Access grant"
+    echo "  keyed to it will stop applying after the next \`brew upgrade python@3.12\`,"
+    echo "  silently disabling all inbound text ingestion."
+    echo "  Fix: bash $WORKER_ROOT/scripts/install_stable_python.sh"
+    echo "       bash $WORKER_ROOT/scripts/point_venv_at_stable_python.sh $WORKER_ROOT/.venv"
+    echo ""
+  fi
+fi
+
 if [[ ! -f "$WORKER_ENV_FILE" ]]; then
   echo "Missing canonical worker env at $WORKER_ENV_FILE"
   echo "Create it from the current worker/.env before installing launchd."

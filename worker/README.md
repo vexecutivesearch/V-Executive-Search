@@ -43,8 +43,7 @@ git push origin <tested-sha>:refs/heads/worker-production
 git push vexec <tested-sha>:refs/heads/worker-production
 
 # On the mini, from the editable clone — ONLY when no scrape is running:
-WORKER_BOOTSTRAP_PYTHON=/opt/homebrew/bin/python3.12 \
-  bash worker/scripts/bootstrap_release.sh
+bash worker/scripts/bootstrap_release.sh
 bash worker/scripts/verify_release_launchd.sh
 ```
 
@@ -174,6 +173,34 @@ Presence job at **7:30 AM** (Messages must be signed in on the worker Mac):
 python scripts/check_imessage.py --limit 20
 ```
 
+### Full Disk Access (inbound texts)
+
+The pump reads `~/Library/Messages/chat.db`, which needs Full Disk Access.
+macOS TCC ignores `caffeinate` and the venv symlink and judges the interpreter
+binary it resolves to, keyed to its absolute path **and** its exact
+code-signature hash. A Homebrew Cellar path carries a version number, so
+`brew upgrade python@3.12` moves the binary and voids the grant — inbound texts
+then stop with one non-fatal log line and nothing else changes.
+
+The venv therefore points at a frozen copy Homebrew never touches:
+
+```bash
+bash scripts/install_stable_python.sh   # idempotent; --force voids the grant
+# → ~/.vsearch/python/Python.framework/Versions/3.12/bin/python3.12
+```
+
+Grant it once by dragging that binary onto System Settings → Privacy & Security
+→ Full Disk Access (the `+` button cannot select a bare unix binary):
+
+```bash
+open ~/.vsearch/python/Python.framework/Versions/3.12/bin
+```
+
+Check the state with `scripts/check_full_disk_access.py`, but run it **from
+launchd** — a terminal inherits its parent app's access and reports a false pass.
+In the poll log, `chat.db scan: N row(s) past rowid=…` is healthy and
+`chat.db unreadable` means the grant is missing.
+
 ### Outreach IMAP (PR #14 — pending merge)
 
 When testing the Outreach tip on `worker-production`, prefer **Microsoft 365 OAuth** over mailbox passwords (GoDaddy often hides app passwords). See [DEPLOY.md](../DEPLOY.md) → Outreach IMAP and [docs/OPS-CHANGELOG-JUL-2026.md](../docs/OPS-CHANGELOG-JUL-2026.md).
@@ -202,7 +229,7 @@ WORKER_ENV_FILE=~/.vsearch/worker.env .venv/bin/python scripts/run_daily.py --em
 | `CONTACTOUT_API_KEY` | canonical env + Vercel | Personal email/mobile |
 | `SERPAPI_API_KEY` | canonical env | Google Jobs via SerpApi |
 | `WORKER_ENV_FILE` | launchd / shell | Path to canonical env (default `~/.vsearch/worker.env`) |
-| `WORKER_BOOTSTRAP_PYTHON` | bootstrap | e.g. `/opt/homebrew/bin/python3.12` |
+| `WORKER_BOOTSTRAP_PYTHON` | bootstrap | Override the venv interpreter. Leave unset — the default is the frozen `~/.vsearch/python` build that keeps Full Disk Access working |
 | `WORKER_SELF_SYNC_ENABLED` | optional | Sync to release ref before runs |
 | `WORKER_RELEASE_REF` | optional | Default `origin/worker-production` |
 | `OUTREACH_MS_CLIENT_ID` / `TENANT_ID` | PR #14 | IMAP OAuth (XOAUTH2) |

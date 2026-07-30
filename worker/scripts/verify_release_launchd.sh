@@ -47,3 +47,16 @@ if [[ "$loaded_count" -ne "${#LABELS[@]}" ]]; then
 fi
 
 echo "OK: ${#LABELS[@]} agents loaded and all point at $RELEASE_WORKER_ROOT"
+
+# Not a launchd fault so it does not fail the check, but a Cellar-backed
+# interpreter means the chat.db Full Disk Access grant is one `brew upgrade`
+# away from lapsing, and the only symptom is one non-fatal log line.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  TCC_PYTHON="$(readlink -f "$RELEASE_WORKER_ROOT/.venv/bin/python" 2>/dev/null || echo '')"
+  echo "Full Disk Access is judged against: ${TCC_PYTHON:-<missing venv>}"
+  if [[ "$TCC_PYTHON" == *"/Cellar/"* ]]; then
+    echo "WARNING: versioned Homebrew path — the next \`brew upgrade python@3.12\` will"
+    echo "         void the grant and silently stop inbound text ingestion."
+    echo "         Fix: bash $RELEASE_WORKER_ROOT/scripts/install_stable_python.sh"
+  fi
+fi
