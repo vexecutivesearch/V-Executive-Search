@@ -208,10 +208,9 @@ is running and polling `/api/outreach/imessage-queue`.
 
 Most business mobiles are **not** iMessage accounts. Messages.app accepts an
 iMessage to one anyway and then shows a blue "Not Delivered" bubble, so the
-worker verifies every send against `chat.db` (`is_delivered` / `error`) instead
-of trusting the AppleScript return, and retries once over the **SMS** service
-when iMessage fails. It then remembers which transport worked for that number
-and skips the doomed iMessage attempt on later steps.
+worker never trusts the AppleScript return. It decides the transport up front
+from Apple's own IDS registry, verifies the send against `chat.db`, and retries
+once over the **SMS** service when iMessage provably cannot deliver.
 
 That fallback needs an SMS service to exist on the Mac, which only happens with
 **Text Message Forwarding** enabled for this Mac on the paired iPhone (iPhone →
@@ -223,28 +222,71 @@ gives a false pass):
 
 ```bash
 launchctl kickstart -k gui/$UID/com.vexecsearch.poll
-grep -E 'sent via|Text Message Forwarding' \
+grep -E 'sent via|no iMessage account|late verify|Text Message Forwarding' \
   ~/Projects/V-Executive-Search-release/worker/logs/poll_stderr.log | tail -5
 ```
 
-Set `OUTREACH_SMS_FALLBACK=0` in `~/.vsearch/worker.env` to disable the retry
-(iMessage-only sends); `OUTREACH_SEND_VERIFY_SECONDS` (default 45) bounds how
-long a send waits for its delivery verdict.
+##### Which signals actually work
 
-The retry fires on a **non-zero `error`** column. Messages does not always write
-one: tapping "Send as Text Message" (or macOS's own Send-as-SMS setting)
-rewrites the original row in place — `service` flips to `SMS` and
-`was_downgraded` is set, with `error` still 0 — so the OS gets there first and
-the worker's own retry never runs. A send that stays quiet past the verify
-window is reported unconfirmed rather than failed, on purpose: re-sending a
-slow-but-fine iMessage would double-text the contact.
+Measured on the release Mac's `chat.db` (210 messages, 98 outbound) — the
+obvious columns are the wrong ones:
+
+| Signal | Reality | Verdict |
+| --- | --- | --- |
+| `error != 0` | **0 of 210** rows, including a genuinely failed send | useless alone; kept as a backstop |
+| `is_delivered` | `1` on **all 95** outbound iMessage rows, including 2 never delivered | never trusted for iMessage |
+| `date_delivered` | set on all 93 real receipts (p50 0.39s, p90 0.98s, **max 5.08s**), NULL on both failures | **the delivery signal** |
+| `was_downgraded` | `1` on the one row Messages re-sent as SMS itself | already delivered — never retry |
+| IDS `com.apple.madrid` status | `1` for all 4 numbers with delivered blue bubbles, `2` for all 3 with no Apple account | **the capability signal** |
+
+`identityservicesd` caches every capability lookup Messages performs in
+`~/Library/IdentityServices/ids-query.db`. A handle it resolved for iMessage is
+in `ZIDSQUERYSDADDRESSABLE` with `ZIDSQUERYSDSTATUS.ZSTATUS = 1`; one it could
+not is `ZSTATUS = 2` and never addressable. That is the only trustworthy
+capability answer on the box — `buddy "x" of service` is an AppleScript
+reference specifier that resolves for any well-formed string, and
+`handle.service` in `chat.db` optimistically says `iMessage` for numbers that
+have none. Any problem reading the store (missing, renamed tables) degrades to
+"unknown", which sends iMessage-first exactly as before.
+
+##### How a failed send gets rescued
+
+1. **Before sending**, a number IDS says has no Apple account goes out as SMS
+   directly — no undeliverable blue bubble is ever created.
+2. **Inline**, for `OUTREACH_SEND_VERIFY_SECONDS` (default 20, ~4× the 5.08s
+   worst-case receipt), the pump watches the row. The send itself triggers the
+   IDS lookup, so "no Apple account" normally lands within a second or two and
+   the SMS retry happens on the same tick.
+3. **Asynchronously**, a send still lacking a receipt is recorded in
+   `~/.vsearch/outreach_state.json` against its `chat.db` ROWID and reported
+   `sent` (so the queue cannot serve it twice). Later ticks re-read that exact
+   row — Messages rewrites rows in place, so the ROWID survives a downgrade.
+
+The re-check never blocks a poll and cannot double-send. A record authorises at
+most **one** SMS retry, and the flag is persisted *before* the send so a crash
+leaves the message unretried rather than retried twice. It retries only when IDS
+confirms the number has no Apple account: a receipt-less iMessage to a real
+Apple account (phone off, no signal) still arrives later, and texting again
+would duplicate it. A `was_downgraded` row is treated as delivered-over-SMS, not
+as a fresh failure. Nothing is retried inside
+`OUTREACH_PENDING_GRACE_SECONDS` (default 120), and after
+`OUTREACH_PENDING_MAX_AGE_SECONDS` (default 3600) the message is marked
+**failed** with a manual-send note instead of being watched forever.
+
+Set `OUTREACH_SMS_FALLBACK=0` in `~/.vsearch/worker.env` for iMessage-only sends.
+
+The transport the CRM records lands in the enrollment event payload
+(`transport`), and a send that was reported `sent` but never delivered is
+corrected to `failed` by the late verification.
 
 The learned transport is derived from `chat.db` at send time and cached
 nowhere, so a number "forgets" only when its Messages conversation is deleted.
 To re-run the full transport ladder without destroying that history, set
 `OUTREACH_TRANSPORT_RESET` in `~/.vsearch/worker.env` to a comma-separated list
-of numbers (or `all`). It takes effect on the next poll tick — the pump reloads
-the env each run, so no launchd reload is needed.
+of numbers (or `all`). It outranks both the learned transport and the IDS
+shortcut, so the number really does start from iMessage and exercise the whole
+ladder. It takes effect on the next poll tick — the pump reloads the env each
+run, so no launchd reload is needed.
 
 #### Automation (Apple Events) permission
 

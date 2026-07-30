@@ -38,8 +38,15 @@ def check_imessage(address: str) -> bool | None:
 
     So treat True as "presumed textable" — the gate that keeps text steps off
     contacts with no usable phone at all. Which transport actually carries the
-    message is decided at send time by outreach_pump.send_text(), which
-    verifies delivery in chat.db and falls back to SMS.
+    message is decided at send time by outreach_pump.send_text(), which routes on
+    Apple's IDS registry, verifies delivery in chat.db, and falls back to SMS.
+
+    Do NOT wire that IDS capability answer in here to return False for numbers
+    with no Apple account. enroll.ts gates text steps on
+    ``imessageCapable === true``, so a False would drop those contacts out of
+    text outreach altogether — and SMS reaches them perfectly well. The two
+    questions are genuinely different: "can we text this person" (here) versus
+    "which transport" (send time).
     """
     escaped = address.replace("\\", "\\\\").replace('"', '\\"')
     script = f'''

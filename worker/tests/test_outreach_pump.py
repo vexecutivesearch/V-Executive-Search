@@ -5,6 +5,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 WORKER_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(WORKER_ROOT))
 
@@ -281,53 +283,142 @@ def test_chat_scan_does_not_advance_state_on_post_failure(tmp_path, monkeypatch)
 
 
 # --- send path: delivery verification + SMS fallback ----------------------
+#
+# Column semantics here mirror the release Mac's chat.db, where the shapes are
+# not the obvious ones:
+#   * error has never been non-zero in 210 rows, including a genuinely failed
+#     send, so it cannot be the failure signal.
+#   * is_delivered is 1 on all 95 outbound iMessage rows, including two that were
+#     never delivered. date_delivered is the honest receipt: set on all 93 real
+#     deliveries, NULL on both failures.
+#   * a failed iMessage is not a new row — Messages rewrites the original in
+#     place, flipping service to SMS and setting was_downgraded.
+
+SEND_COLUMNS = (
+    "service",
+    "is_sent",
+    "is_delivered",
+    "error",
+    "was_downgraded",
+    "date_delivered",
+    "date_read",
+)
 
 
-def _make_send_db(path: Path, rows=()):
-    """Empty chat.db carrying the outbound status columns, plus optional history.
-
-    Rows are (handle, service, is_sent, is_delivered, error).
-    """
+def _make_send_db(path: Path, rows=(), columns=SEND_COLUMNS):
+    """Empty chat.db carrying the outbound status columns, plus optional history."""
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT)")
+    declared = ", ".join(
+        f"{name} {'TEXT' if name == 'service' else 'INTEGER'}" for name in columns
+    )
     conn.execute(
         "CREATE TABLE message (ROWID INTEGER PRIMARY KEY AUTOINCREMENT,"
-        " service TEXT, is_from_me INTEGER, is_sent INTEGER,"
-        " is_delivered INTEGER, error INTEGER, handle_id INTEGER)"
+        f" is_from_me INTEGER, handle_id INTEGER, {declared})"
     )
     conn.commit()
     conn.close()
     for row in rows:
-        _append_send_row(path, *row)
+        _append_send_row(path, **row)
 
 
-def _append_send_row(path: Path, handle, service, is_sent, is_delivered, error):
+def _append_send_row(path: Path, handle, service, **fields):
     """Append one outbound row, the way Messages.app would after a send."""
     conn = sqlite3.connect(path)
-    found = conn.execute(
-        "SELECT ROWID FROM handle WHERE id = ?", (handle,)
-    ).fetchone()
-    if found:
-        handle_id = found[0]
-    else:
-        handle_id = conn.execute(
-            "INSERT INTO handle (id) VALUES (?)", (handle,)
-        ).lastrowid
+    found = conn.execute("SELECT ROWID FROM handle WHERE id = ?", (handle,)).fetchone()
+    handle_id = (
+        found[0]
+        if found
+        else conn.execute("INSERT INTO handle (id) VALUES (?)", (handle,)).lastrowid
+    )
+    present = {row[1] for row in conn.execute("PRAGMA table_info(message)")}
+    # chat.db declares these NOT NULL DEFAULT 0; leaving them NULL would make
+    # queries like "error = 0" quietly match nothing.
+    values = {
+        "service": service,
+        "is_sent": 1,
+        "is_delivered": 0,
+        "error": 0,
+        "was_downgraded": 0,
+        "date_delivered": 0,
+        "date_read": 0,
+        **fields,
+    }
+    values = {k: v for k, v in values.items() if k in present}
+    names = ", ".join(["is_from_me", "handle_id", *values])
+    rowid = conn.execute(
+        f"INSERT INTO message ({names}) VALUES (1, ?, {', '.join('?' * len(values))})",
+        (handle_id, *values.values()),
+    ).lastrowid
+    conn.commit()
+    conn.close()
+    return rowid
+
+
+def _rewrite_send_row(path: Path, rowid: int, **fields):
+    """Update a row in place — what Messages does when it downgrades a send."""
+    conn = sqlite3.connect(path)
+    assignments = ", ".join(f"{name} = ?" for name in fields)
     conn.execute(
-        "INSERT INTO message (service, is_from_me, is_sent, is_delivered, error,"
-        " handle_id) VALUES (?, 1, ?, ?, ?, ?)",
-        (service, is_sent, is_delivered, error, handle_id),
+        f"UPDATE message SET {assignments} WHERE ROWID = ?",
+        (*fields.values(), rowid),
     )
     conn.commit()
     conn.close()
 
 
-def _stub_sends(pump, monkeypatch, *, sms_available=True):
+def _make_ids_db(path: Path, capable=(), incapable=()):
+    """A stand-in for ~/Library/IdentityServices/ids-query.db.
+
+    Same two tables the real Core Data store exposes: a handle IDS resolved for
+    iMessage is addressable with ZSTATUS 1, one it could not is ZSTATUS 2 only.
+    """
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE ZIDSQUERYSDADDRESSABLE (Z_PK INTEGER PRIMARY KEY,"
+        " ZSERVICE TEXT, ZURI TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE ZIDSQUERYSDSTATUS (Z_PK INTEGER PRIMARY KEY, ZSERVICE TEXT,"
+        " ZURI TEXT, ZSTATUS INTEGER)"
+    )
+    for phone in capable:
+        conn.execute(
+            "INSERT INTO ZIDSQUERYSDADDRESSABLE (ZSERVICE, ZURI) VALUES"
+            " ('com.apple.madrid', ?)",
+            (f"tel:{phone}",),
+        )
+        conn.execute(
+            "INSERT INTO ZIDSQUERYSDSTATUS (ZSERVICE, ZURI, ZSTATUS) VALUES"
+            " ('com.apple.madrid', ?, 1)",
+            (f"tel:{phone}",),
+        )
+    for phone in incapable:
+        conn.execute(
+            "INSERT INTO ZIDSQUERYSDSTATUS (ZSERVICE, ZURI, ZSTATUS) VALUES"
+            " ('com.apple.madrid', ?, 2)",
+            (f"tel:{phone}",),
+        )
+        # FaceTime/Continuity rows share the table; a non-iMessage service must
+        # never be mistaken for the iMessage verdict.
+        conn.execute(
+            "INSERT INTO ZIDSQUERYSDSTATUS (ZSERVICE, ZURI, ZSTATUS) VALUES"
+            " ('com.apple.private.alloy.screensharing', ?, 1)",
+            (f"tel:{phone}",),
+        )
+    conn.commit()
+    conn.close()
+
+
+def _stub_sends(pump, monkeypatch, *, sms_available=True, ids_db=None):
     """Record every AppleScript send instead of touching Messages.app."""
     calls = []
     monkeypatch.setattr(pump.sys, "platform", "darwin")
     monkeypatch.setattr(pump, "SEND_VERIFY_POLL_SECONDS", 0)
     monkeypatch.setattr(pump, "SEND_VERIFY_SECONDS", 0)
+    # Absent unless a test opts in, so "no IDS answer" is the default and the
+    # legacy behaviour stays under test.
+    monkeypatch.setattr(pump, "IDS_QUERY_DB", ids_db or Path("/nonexistent/ids.db"))
     monkeypatch.setattr(
         pump, "messages_service_available", lambda service: sms_available
     )
@@ -340,31 +431,200 @@ def _stub_sends(pump, monkeypatch, *, sms_available=True):
     return calls
 
 
-def test_send_falls_back_to_sms_when_imessage_not_delivered(tmp_path, monkeypatch):
-    """The Proven Theory v5 bug: a non-iMessage number silently stayed 'sent'."""
+def _send_landing(pump, monkeypatch, db_path, handle, outcomes):
+    """Make each stubbed send write the chat.db row Messages would have written."""
+    accepted = pump._applescript_send
+    queue = iter(outcomes)
+    landed = []
+
+    def send_then_land(phone, body, service):
+        result = accepted(phone, body, service)
+        row = next(queue, None)
+        if row is not None:
+            landed.append(_append_send_row(db_path, handle, **row))
+        return result
+
+    monkeypatch.setattr(pump, "_applescript_send", send_then_land)
+    return landed
+
+
+# --- the capability signal ------------------------------------------------
+
+
+def test_ids_capability_reads_apples_own_registry(tmp_path, monkeypatch):
+    pump = _load_pump()
+    ids_db = tmp_path / "ids-query.db"
+    _make_ids_db(ids_db, capable=["+13055550303"], incapable=["+17864083193"])
+    monkeypatch.setattr(pump.sys, "platform", "darwin")
+    monkeypatch.setattr(pump, "IDS_QUERY_DB", ids_db)
+
+    assert pump.imessage_capability("+13055550303") == pump.CAPABILITY_CAPABLE
+    assert pump.imessage_capability("+17864083193") == pump.CAPABILITY_INCAPABLE
+    # Never looked up → no opinion, so the send path behaves as it always did.
+    assert pump.imessage_capability("+15615550100") == pump.CAPABILITY_UNKNOWN
+    # Formatting differences must not change the verdict.
+    assert pump.imessage_capability("(786) 408-3193") == pump.CAPABILITY_INCAPABLE
+
+
+def test_ids_capability_degrades_to_unknown_not_incapable(tmp_path, monkeypatch):
+    """A private Apple store may vanish or be renamed — never mis-route on it."""
+    pump = _load_pump()
+    monkeypatch.setattr(pump.sys, "platform", "darwin")
+
+    monkeypatch.setattr(pump, "IDS_QUERY_DB", tmp_path / "missing.db")
+    assert pump.imessage_capability("+17864083193") == pump.CAPABILITY_UNKNOWN
+
+    renamed = tmp_path / "renamed.db"
+    conn = sqlite3.connect(renamed)
+    conn.execute("CREATE TABLE ZIDSQUERYSDSOMETHINGELSE (ZURI TEXT)")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(pump, "IDS_QUERY_DB", renamed)
+    assert pump.imessage_capability("+17864083193") == pump.CAPABILITY_UNKNOWN
+
+
+def test_ids_capability_lets_positive_evidence_win(tmp_path, monkeypatch):
+    """A stale "not registered" row must never divert a real iMessage number."""
+    pump = _load_pump()
+    ids_db = tmp_path / "ids-query.db"
+    _make_ids_db(ids_db, capable=["+13055550303"], incapable=["+13055550303"])
+    monkeypatch.setattr(pump.sys, "platform", "darwin")
+    monkeypatch.setattr(pump, "IDS_QUERY_DB", ids_db)
+
+    assert pump.imessage_capability("+13055550303") == pump.CAPABILITY_CAPABLE
+
+
+# --- proactive routing ----------------------------------------------------
+
+
+def test_send_skips_imessage_for_a_number_with_no_apple_account(tmp_path, monkeypatch):
+    """Best outcome: never create the undeliverable blue bubble in the first place."""
+    pump = _load_pump()
+    db_path = tmp_path / "chat.db"
+    _make_send_db(db_path)
+    ids_db = tmp_path / "ids-query.db"
+    _make_ids_db(ids_db, incapable=["+17864083193"])
+    monkeypatch.setattr(pump, "CHAT_DB", db_path)
+    calls = _stub_sends(pump, monkeypatch, ids_db=ids_db)
+    _send_landing(pump, monkeypatch, db_path, "+17864083193", [{"service": "SMS"}])
+
+    result = pump.send_text("+17864083193", "hi")
+    assert result.ok is True
+    assert result.service == "SMS"
+    assert result.pending is None
+    assert [c[2] for c in calls] == ["sms"]
+
+
+def test_send_still_uses_imessage_for_a_capable_number(tmp_path, monkeypatch):
+    """The IDS check must not cost genuine iMessage numbers their blue bubble."""
+    pump = _load_pump()
+    db_path = tmp_path / "chat.db"
+    _make_send_db(db_path)
+    ids_db = tmp_path / "ids-query.db"
+    _make_ids_db(ids_db, capable=["+15615550100"])
+    monkeypatch.setattr(pump, "CHAT_DB", db_path)
+    calls = _stub_sends(pump, monkeypatch, ids_db=ids_db)
+    _send_landing(
+        pump,
+        monkeypatch,
+        db_path,
+        "+15615550100",
+        [{"service": "iMessage", "is_delivered": 1, "date_delivered": 700_000_000}],
+    )
+
+    result = pump.send_text("+15615550100", "hi")
+    assert (result.ok, result.service, result.pending) == (True, "iMessage", None)
+    assert [c[2] for c in calls] == ["imessage"]
+
+
+# --- reactive fallback ----------------------------------------------------
+
+
+def test_send_falls_back_to_sms_when_ids_says_no_imessage_account(
+    tmp_path, monkeypatch
+):
+    """The real v7 shape: error stays 0 and the receipt never comes.
+
+    The send itself makes Messages perform the IDS lookup, so the "no Apple
+    account" answer is available within the confirm window and the SMS retry
+    happens on the same tick — no waiting, no human tap.
+    """
+    pump = _load_pump()
+    db_path = tmp_path / "chat.db"
+    _make_send_db(db_path)
+    ids_db = tmp_path / "ids-query.db"
+    _make_ids_db(ids_db, incapable=["+17864083193"])
+    monkeypatch.setattr(pump, "CHAT_DB", db_path)
+    # Reset forces the ladder even though IDS could have skipped iMessage.
+    monkeypatch.setenv("OUTREACH_TRANSPORT_RESET", "+17864083193")
+    calls = _stub_sends(pump, monkeypatch, ids_db=ids_db)
+    _send_landing(
+        pump,
+        monkeypatch,
+        db_path,
+        "+17864083193",
+        [
+            # Not Delivered, exactly as Messages records it: sent, error 0,
+            # is_delivered set anyway, and no receipt timestamp.
+            {"service": "iMessage", "is_delivered": 1, "date_delivered": 0},
+            {"service": "SMS"},
+        ],
+    )
+
+    result = pump.send_text("+17864083193", "hi")
+    assert result.ok is True
+    assert result.error is None
+    assert result.service == "SMS"
+    assert result.pending is None
+    assert [c[2] for c in calls] == ["imessage", "sms"]
+
+
+def test_is_delivered_alone_never_confirms_an_imessage(tmp_path, monkeypatch):
+    """The bug in one assertion: is_delivered=1 with no receipt is not delivery."""
+    pump = _load_pump()
+    stuck = {
+        "service": "iMessage",
+        "is_sent": 1,
+        "is_delivered": 1,
+        "error": 0,
+        "was_downgraded": 0,
+        "date_delivered": 0,
+        "date_read": 0,
+        "receipts_tracked": True,
+    }
+    assert pump._classify_outbound(stuck, "imessage")[0] == pump.DELIVERY_PENDING
+    assert (
+        pump._classify_outbound({**stuck, "date_delivered": 700_000_000}, "imessage")[0]
+        == pump.DELIVERY_CONFIRMED
+    )
+    # A read receipt is delivery too, even if the delivered one went missing.
+    assert (
+        pump._classify_outbound({**stuck, "date_read": 700_000_000}, "imessage")[0]
+        == pump.DELIVERY_CONFIRMED
+    )
+
+
+def test_downgraded_row_counts_as_sent_over_sms_and_is_not_resent(
+    tmp_path, monkeypatch
+):
+    """was_downgraded=1 means Messages already delivered it as SMS itself."""
     pump = _load_pump()
     db_path = tmp_path / "chat.db"
     _make_send_db(db_path)
     monkeypatch.setattr(pump, "CHAT_DB", db_path)
     calls = _stub_sends(pump, monkeypatch)
+    _send_landing(
+        pump,
+        monkeypatch,
+        db_path,
+        "+17864083193",
+        [{"service": "SMS", "was_downgraded": 1}],
+    )
 
-    # iMessage attempt lands a Not Delivered row (error != 0); the SMS retry
-    # lands a clean row — the same sequence Messages.app writes.
-    outcomes = iter([("iMessage", 0, 0, 1), ("SMS", 1, 0, 0)])
-    real_send = pump._applescript_send
-
-    def send_then_advance(phone, body, service):
-        result = real_send(phone, body, service)
-        _append_send_row(db_path, "+17864083193", *next(outcomes))
-        return result
-
-    monkeypatch.setattr(pump, "_applescript_send", send_then_advance)
-
-    ok, error, service = pump.send_text("+17864083193", "hi")
-    assert ok is True
-    assert error is None
-    assert service == "SMS"
-    assert [c[2] for c in calls] == ["imessage", "sms"]
+    result = pump.send_text("+17864083193", "hi")
+    assert (result.ok, result.service, result.pending) == (True, "SMS", None)
+    # One send only — the contact already has the text.
+    assert [c[2] for c in calls] == ["imessage"]
 
 
 def test_send_reports_failure_when_no_sms_service(tmp_path, monkeypatch):
@@ -372,54 +632,64 @@ def test_send_reports_failure_when_no_sms_service(tmp_path, monkeypatch):
     pump = _load_pump()
     db_path = tmp_path / "chat.db"
     _make_send_db(db_path)
+    ids_db = tmp_path / "ids-query.db"
+    _make_ids_db(ids_db, incapable=["+17864083193"])
     monkeypatch.setattr(pump, "CHAT_DB", db_path)
-    _stub_sends(pump, monkeypatch, sms_available=False)
-    real_send = pump._applescript_send
+    monkeypatch.setenv("OUTREACH_TRANSPORT_RESET", "+17864083193")
+    calls = _stub_sends(pump, monkeypatch, sms_available=False, ids_db=ids_db)
+    _send_landing(
+        pump,
+        monkeypatch,
+        db_path,
+        "+17864083193",
+        [{"service": "iMessage", "is_delivered": 1}],
+    )
 
-    def send_then_fail(phone, body, service):
-        result = real_send(phone, body, service)
-        _append_send_row(db_path, "+17864083193", "iMessage", 0, 0, 1)
-        return result
-
-    monkeypatch.setattr(pump, "_applescript_send", send_then_fail)
-
-    ok, error, service = pump.send_text("+17864083193", "hi")
-    assert ok is False
-    assert service is None
-    assert "not delivered" in error
-    assert "Text Message Forwarding" in error
+    result = pump.send_text("+17864083193", "hi")
+    assert result.ok is False
+    assert result.service is None
+    assert result.pending is None
+    assert "not delivered" in result.error
+    assert "Text Message Forwarding" in result.error
+    assert [c[2] for c in calls] == ["imessage"]
 
 
-def test_send_confirms_delivered_imessage_without_fallback(tmp_path, monkeypatch):
+def test_send_records_pending_when_capability_is_unknown(tmp_path, monkeypatch):
+    """No receipt and no IDS verdict: hand it to the re-check, do not re-send.
+
+    A receipt-less iMessage to a real Apple account (phone off, no signal) still
+    arrives later, so texting again here would duplicate it.
+    """
     pump = _load_pump()
     db_path = tmp_path / "chat.db"
     _make_send_db(db_path)
     monkeypatch.setattr(pump, "CHAT_DB", db_path)
     calls = _stub_sends(pump, monkeypatch)
-    real_send = pump._applescript_send
+    landed = _send_landing(
+        pump,
+        monkeypatch,
+        db_path,
+        "+15615550100",
+        [{"service": "iMessage", "is_delivered": 1}],
+    )
 
-    def send_then_deliver(phone, body, service):
-        result = real_send(phone, body, service)
-        _append_send_row(db_path, "+15615550100", "iMessage", 1, 1, 0)
-        return result
-
-    monkeypatch.setattr(pump, "_applescript_send", send_then_deliver)
-
-    ok, error, service = pump.send_text("+15615550100", "hi")
-    assert (ok, error, service) == (True, None, "iMessage")
+    result = pump.send_text("+15615550100", "hi")
+    assert result.ok is True
     assert [c[2] for c in calls] == ["imessage"]
+    assert result.pending["rowid"] == landed[0]
+    assert result.pending["sms_retried"] is False
+    assert result.pending["phone"] == "+15615550100"
 
 
 def test_send_prefers_sms_for_a_known_sms_only_number(tmp_path, monkeypatch):
     """History says SMS worked here, so skip the doomed iMessage attempt."""
     pump = _load_pump()
     db_path = tmp_path / "chat.db"
-    _make_send_db(db_path, [("+17864083193", "SMS", 1, 0, 0)])
+    _make_send_db(db_path, [{"handle": "+17864083193", "service": "SMS"}])
     monkeypatch.setattr(pump, "CHAT_DB", db_path)
     calls = _stub_sends(pump, monkeypatch)
 
-    ok, _error, _service = pump.send_text("+17864083193", "hi")
-    assert ok is True
+    assert pump.send_text("+17864083193", "hi").ok is True
     assert [c[2] for c in calls] == ["sms"]
 
 
@@ -427,17 +697,27 @@ def test_transport_reset_replays_the_imessage_attempt(tmp_path, monkeypatch):
     """Re-test the full ladder on a known-SMS number without wiping chat.db."""
     pump = _load_pump()
     db_path = tmp_path / "chat.db"
-    _make_send_db(db_path, [("+17864083193", "SMS", 1, 0, 0)])
+    _make_send_db(db_path, [{"handle": "+17864083193", "service": "SMS"}])
+    ids_db = tmp_path / "ids-query.db"
+    # Reset outranks the IDS shortcut too, or the ladder could never be replayed.
+    _make_ids_db(ids_db, incapable=["+17864083193"])
     monkeypatch.setattr(pump, "CHAT_DB", db_path)
-    calls = _stub_sends(pump, monkeypatch)
+    calls = _stub_sends(pump, monkeypatch, ids_db=ids_db)
     monkeypatch.setenv("OUTREACH_TRANSPORT_RESET", "(786) 408-3193")
+    _send_landing(
+        pump,
+        monkeypatch,
+        db_path,
+        "+17864083193",
+        [{"service": "iMessage", "is_delivered": 1}, {"service": "SMS"}],
+    )
 
-    ok, _error, _service = pump.send_text("+17864083193", "hi")
-    assert ok is True
-    assert [c[2] for c in calls] == ["imessage"]
+    result = pump.send_text("+17864083193", "hi")
+    assert result.ok is True
+    assert [c[2] for c in calls] == ["imessage", "sms"]
 
     # Scoped: another number keeps its learned transport.
-    _append_send_row(db_path, "+15615550100", "SMS", 1, 0, 0)
+    _append_send_row(db_path, "+15615550100", "SMS")
     calls.clear()
     pump.send_text("+15615550100", "hi")
     assert [c[2] for c in calls] == ["sms"]
@@ -446,10 +726,17 @@ def test_transport_reset_replays_the_imessage_attempt(tmp_path, monkeypatch):
 def test_transport_reset_accepts_all(tmp_path, monkeypatch):
     pump = _load_pump()
     db_path = tmp_path / "chat.db"
-    _make_send_db(db_path, [("+17864083193", "SMS", 1, 0, 0)])
+    _make_send_db(db_path, [{"handle": "+17864083193", "service": "SMS"}])
     monkeypatch.setattr(pump, "CHAT_DB", db_path)
     calls = _stub_sends(pump, monkeypatch)
     monkeypatch.setenv("OUTREACH_TRANSPORT_RESET", "all")
+    _send_landing(
+        pump,
+        monkeypatch,
+        db_path,
+        "+17864083193",
+        [{"service": "iMessage", "is_delivered": 1}],
+    )
 
     pump.send_text("+17864083193", "hi")
     assert [c[2] for c in calls] == ["imessage"]
@@ -458,7 +745,7 @@ def test_transport_reset_accepts_all(tmp_path, monkeypatch):
 def test_transport_reset_unset_keeps_learned_transport(tmp_path, monkeypatch):
     pump = _load_pump()
     db_path = tmp_path / "chat.db"
-    _make_send_db(db_path, [("+17864083193", "SMS", 1, 0, 0)])
+    _make_send_db(db_path, [{"handle": "+17864083193", "service": "SMS"}])
     monkeypatch.setattr(pump, "CHAT_DB", db_path)
     calls = _stub_sends(pump, monkeypatch)
     monkeypatch.delenv("OUTREACH_TRANSPORT_RESET", raising=False)
@@ -473,9 +760,30 @@ def test_send_treats_unverifiable_delivery_as_sent(tmp_path, monkeypatch):
     monkeypatch.setattr(pump, "CHAT_DB", tmp_path / "missing.db")
     calls = _stub_sends(pump, monkeypatch)
 
-    ok, error, service = pump.send_text("+15615550100", "hi")
-    assert (ok, error) == (True, None)
-    assert service == "imessage"
+    result = pump.send_text("+15615550100", "hi")
+    assert (result.ok, result.error, result.service) == (True, None, "imessage")
+    # Nothing to re-check against, so no pending record to act on later either.
+    assert result.pending is None
+    assert [c[2] for c in calls] == ["imessage"]
+
+
+def test_send_works_on_a_schema_without_receipt_columns(tmp_path, monkeypatch):
+    """Older chat.db has no date_delivered — fall back to is_delivered, don't hang."""
+    pump = _load_pump()
+    db_path = tmp_path / "chat.db"
+    _make_send_db(db_path, columns=("service", "is_sent", "is_delivered", "error"))
+    monkeypatch.setattr(pump, "CHAT_DB", db_path)
+    calls = _stub_sends(pump, monkeypatch)
+    _send_landing(
+        pump,
+        monkeypatch,
+        db_path,
+        "+15615550100",
+        [{"service": "iMessage", "is_delivered": 1}],
+    )
+
+    result = pump.send_text("+15615550100", "hi")
+    assert (result.ok, result.service, result.pending) == (True, "iMessage", None)
     assert [c[2] for c in calls] == ["imessage"]
 
 
@@ -486,19 +794,251 @@ def test_send_never_tries_more_than_two_transports(tmp_path, monkeypatch):
     _make_send_db(db_path)
     monkeypatch.setattr(pump, "CHAT_DB", db_path)
     calls = _stub_sends(pump, monkeypatch)
-    real_send = pump._applescript_send
+    _send_landing(
+        pump,
+        monkeypatch,
+        db_path,
+        "+17864083193",
+        [
+            {"service": "iMessage", "is_sent": 0, "error": 22},
+            {"service": "SMS", "is_sent": 0, "error": 22},
+        ],
+    )
 
-    def always_fail(phone, body, service):
-        result = real_send(phone, body, service)
-        _append_send_row(db_path, "+17864083193", service, 0, 0, 22)
-        return result
-
-    monkeypatch.setattr(pump, "_applescript_send", always_fail)
-
-    ok, error, _service = pump.send_text("+17864083193", "hi")
-    assert ok is False
+    result = pump.send_text("+17864083193", "hi")
+    assert result.ok is False
     assert len(calls) == 2
-    assert error.count("not delivered") == 2
+    assert result.error.count("not delivered") == 2
+
+
+# --- the asynchronous re-check -------------------------------------------
+
+
+def _crm_stub(pump, monkeypatch, queue=()):
+    """Capture every status post; serve ``queue`` from the queue endpoint."""
+    posted = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"messages": list(queue)}
+
+    monkeypatch.setenv("CRM_API_URL", "https://crm.example")
+    monkeypatch.setenv("CRM_API_KEY", "test")
+    monkeypatch.setattr(pump.requests, "get", lambda *a, **k: FakeResponse())
+    monkeypatch.setattr(
+        pump.requests,
+        "post",
+        lambda url, headers=None, json=None, timeout=None: posted.extend(
+            json["results"]
+        )
+        or FakeResponse(),
+    )
+    return posted
+
+
+def _pending_setup(pump, monkeypatch, tmp_path, *, ids_db=None, sms_available=True):
+    """chat.db + state file + stubs for the re-check, with one iMessage sent."""
+    db_path = tmp_path / "chat.db"
+    _make_send_db(db_path)
+    monkeypatch.setattr(pump, "CHAT_DB", db_path)
+    monkeypatch.setattr(pump, "STATE_FILE", tmp_path / "state.json")
+    calls = _stub_sends(
+        pump, monkeypatch, ids_db=ids_db, sms_available=sms_available
+    )
+    rowid = _append_send_row(
+        db_path, "+17864083193", "iMessage", is_delivered=1, date_delivered=0
+    )
+    pump._remember_pending_send(
+        "m1",
+        {
+            "phone": "+17864083193",
+            "body": "hi",
+            "rowid": rowid,
+            # Well past the grace period.
+            "sent_at": pump.time.time() - 600,
+            "sms_retried": False,
+        },
+    )
+    return db_path, rowid, calls
+
+
+def test_pending_recheck_retries_over_sms_and_reports_the_transport(
+    tmp_path, monkeypatch
+):
+    pump = _load_pump()
+    ids_db = tmp_path / "ids-query.db"
+    _make_ids_db(ids_db, incapable=["+17864083193"])
+    _db, _rowid, calls = _pending_setup(pump, monkeypatch, tmp_path, ids_db=ids_db)
+    posted = _crm_stub(pump, monkeypatch)
+
+    assert pump.resolve_pending_text_sends() == 1
+    assert [c[2] for c in calls] == ["sms"]
+    assert posted == [
+        {"id": "m1", "status": "sent", "transport": "sms", "verification": "late"}
+    ]
+    # Record consumed, so the next tick has nothing left to do.
+    assert pump._load_state().get(pump.PENDING_STATE_KEY) == {}
+
+
+def test_pending_recheck_never_sends_twice(tmp_path, monkeypatch):
+    """The whole point: repeated polls must not re-text anyone."""
+    pump = _load_pump()
+    ids_db = tmp_path / "ids-query.db"
+    _make_ids_db(ids_db, incapable=["+17864083193"])
+    _db, _rowid, calls = _pending_setup(pump, monkeypatch, tmp_path, ids_db=ids_db)
+    _crm_stub(pump, monkeypatch)
+
+    assert pump.resolve_pending_text_sends() == 1
+    assert pump.resolve_pending_text_sends() == 0
+    assert pump.resolve_pending_text_sends() == 0
+    assert [c[2] for c in calls] == ["sms"]
+
+
+def test_pending_recheck_keeps_the_one_shot_flag_across_a_crash(tmp_path, monkeypatch):
+    """The retry flag is persisted before sending, so a crash cannot duplicate."""
+    pump = _load_pump()
+    ids_db = tmp_path / "ids-query.db"
+    _make_ids_db(ids_db, incapable=["+17864083193"])
+    _db, _rowid, calls = _pending_setup(pump, monkeypatch, tmp_path, ids_db=ids_db)
+    _crm_stub(pump, monkeypatch)
+
+    def die(phone, body, service):
+        calls.append((phone, body, service))
+        raise RuntimeError("worker killed mid-send")
+
+    monkeypatch.setattr(pump, "_applescript_send", die)
+    with pytest.raises(RuntimeError):
+        pump.resolve_pending_text_sends()
+    assert pump._load_state()[pump.PENDING_STATE_KEY]["m1"]["sms_retried"] is True
+
+    # Recovered process: the record is still there but its retry is spent.
+    def record(phone, body, service):
+        calls.append((phone, body, service))
+        return True, None
+
+    monkeypatch.setattr(pump, "_applescript_send", record)
+    pump.resolve_pending_text_sends()
+    assert [c[2] for c in calls] == ["sms"]
+
+
+def test_pending_recheck_does_not_resend_a_downgraded_row(tmp_path, monkeypatch):
+    """Messages rewrote the row and delivered it — a second text is the bug."""
+    pump = _load_pump()
+    ids_db = tmp_path / "ids-query.db"
+    _make_ids_db(ids_db, incapable=["+17864083193"])
+    db_path, rowid, calls = _pending_setup(
+        pump, monkeypatch, tmp_path, ids_db=ids_db
+    )
+    posted = _crm_stub(pump, monkeypatch)
+    # The in-place rewrite: same ROWID, service flipped, was_downgraded set.
+    _rewrite_send_row(db_path, rowid, service="SMS", was_downgraded=1)
+
+    assert pump.resolve_pending_text_sends() == 1
+    assert calls == []
+    assert posted[0]["transport"] == "sms"
+    assert posted[0]["status"] == "sent"
+
+
+def test_pending_recheck_confirms_a_late_delivery_receipt(tmp_path, monkeypatch):
+    pump = _load_pump()
+    db_path, rowid, calls = _pending_setup(pump, monkeypatch, tmp_path)
+    posted = _crm_stub(pump, monkeypatch)
+    _rewrite_send_row(db_path, rowid, date_delivered=700_000_000)
+
+    assert pump.resolve_pending_text_sends() == 1
+    assert calls == []
+    assert posted == [
+        {"id": "m1", "status": "sent", "transport": "imessage", "verification": "late"}
+    ]
+
+
+def test_pending_recheck_holds_off_inside_the_grace_period(tmp_path, monkeypatch):
+    """A receipt still in flight must not look like a failure."""
+    pump = _load_pump()
+    ids_db = tmp_path / "ids-query.db"
+    _make_ids_db(ids_db, incapable=["+17864083193"])
+    _db, _rowid, calls = _pending_setup(pump, monkeypatch, tmp_path, ids_db=ids_db)
+    _crm_stub(pump, monkeypatch)
+    state = pump._load_state()
+    state[pump.PENDING_STATE_KEY]["m1"]["sent_at"] = pump.time.time()
+    pump._save_state(state)
+
+    assert pump.resolve_pending_text_sends() == 0
+    assert calls == []
+    assert "m1" in pump._load_state()[pump.PENDING_STATE_KEY]
+
+
+def test_pending_recheck_will_not_retry_without_an_ids_verdict(tmp_path, monkeypatch):
+    """No positive evidence iMessage failed → wait it out, never duplicate.
+
+    At the deadline the message is reported failed, which is honest: it was
+    recorded sent and never delivered.
+    """
+    pump = _load_pump()
+    _db, _rowid, calls = _pending_setup(pump, monkeypatch, tmp_path)
+    posted = _crm_stub(pump, monkeypatch)
+
+    assert pump.resolve_pending_text_sends() == 0
+    assert calls == []
+
+    state = pump._load_state()
+    state[pump.PENDING_STATE_KEY]["m1"]["sent_at"] = (
+        pump.time.time() - pump.PENDING_MAX_AGE_SECONDS - 1
+    )
+    pump._save_state(state)
+
+    assert pump.resolve_pending_text_sends() == 1
+    assert calls == []
+    assert posted[0]["status"] == "failed"
+    assert posted[0]["verification"] == "late"
+    assert pump._load_state()[pump.PENDING_STATE_KEY] == {}
+
+
+def test_pending_recheck_reports_failed_when_no_sms_service(tmp_path, monkeypatch):
+    pump = _load_pump()
+    ids_db = tmp_path / "ids-query.db"
+    _make_ids_db(ids_db, incapable=["+17864083193"])
+    _db, _rowid, calls = _pending_setup(
+        pump, monkeypatch, tmp_path, ids_db=ids_db, sms_available=False
+    )
+    posted = _crm_stub(pump, monkeypatch)
+
+    assert pump.resolve_pending_text_sends() == 1
+    assert calls == []
+    assert posted[0]["status"] == "failed"
+    assert "Text Message Forwarding" in posted[0]["error"]
+
+
+def test_pending_recheck_leaves_a_vanished_row_alone(tmp_path, monkeypatch):
+    """Conversation deleted: no evidence either way, so send nothing."""
+    pump = _load_pump()
+    ids_db = tmp_path / "ids-query.db"
+    _make_ids_db(ids_db, incapable=["+17864083193"])
+    db_path, rowid, calls = _pending_setup(
+        pump, monkeypatch, tmp_path, ids_db=ids_db
+    )
+    posted = _crm_stub(pump, monkeypatch)
+    conn = sqlite3.connect(db_path)
+    conn.execute("DELETE FROM message WHERE ROWID = ?", (rowid,))
+    conn.commit()
+    conn.close()
+
+    assert pump.resolve_pending_text_sends() == 1
+    assert calls == []
+    assert posted[0]["status"] == "sent"
+
+
+def test_pending_recheck_is_a_noop_with_nothing_pending(tmp_path, monkeypatch):
+    pump = _load_pump()
+    monkeypatch.setattr(pump.sys, "platform", "darwin")
+    monkeypatch.setattr(pump, "STATE_FILE", tmp_path / "state.json")
+    assert pump.resolve_pending_text_sends() == 0
+
+
+# --- CRM status reporting -------------------------------------------------
 
 
 def test_pump_marks_failed_send_failed_not_sent(monkeypatch):
@@ -506,30 +1046,69 @@ def test_pump_marks_failed_send_failed_not_sent(monkeypatch):
     pump = _load_pump()
     monkeypatch.setattr(pump.sys, "platform", "darwin")
     monkeypatch.setattr(pump, "SEND_DELAY_SECONDS", 0)
-    monkeypatch.setenv("CRM_API_URL", "https://crm.example")
-    monkeypatch.setenv("CRM_API_KEY", "test")
     monkeypatch.setattr(
-        pump, "send_text", lambda phone, body: (False, "imessage: not delivered", None)
+        pump,
+        "send_text",
+        lambda phone, body: pump.SendResult(False, "imessage: not delivered", None),
     )
-
-    class FakeResponse:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"messages": [{"id": "m1", "phone": "+17864083193", "body": "hi"}]}
-
-    posted = {}
-    monkeypatch.setattr(pump.requests, "get", lambda *a, **k: FakeResponse())
-    monkeypatch.setattr(
-        pump.requests,
-        "post",
-        lambda url, headers=None, json=None, timeout=None: posted.update(
-            results=json["results"]
-        )
-        or FakeResponse(),
+    posted = _crm_stub(
+        pump, monkeypatch, [{"id": "m1", "phone": "+17864083193", "body": "hi"}]
     )
 
     assert pump.pump_imessage_queue() == 1
-    assert posted["results"][0]["status"] == "failed"
-    assert "not delivered" in posted["results"][0]["error"]
+    assert posted[0]["status"] == "failed"
+    assert "not delivered" in posted[0]["error"]
+
+
+def test_pump_reports_the_transport_that_carried_the_text(monkeypatch):
+    pump = _load_pump()
+    monkeypatch.setattr(pump.sys, "platform", "darwin")
+    monkeypatch.setattr(pump, "SEND_DELAY_SECONDS", 0)
+    monkeypatch.setattr(
+        pump, "send_text", lambda phone, body: pump.SendResult(True, None, "SMS")
+    )
+    posted = _crm_stub(
+        pump, monkeypatch, [{"id": "m1", "phone": "+17864083193", "body": "hi"}]
+    )
+
+    assert pump.pump_imessage_queue() == 1
+    assert posted[0] == {"id": "m1", "status": "sent", "transport": "SMS"}
+
+
+def test_pump_persists_a_pending_send_for_the_next_tick(tmp_path, monkeypatch):
+    """Reported sent so the queue won't re-serve it, but still tracked locally."""
+    pump = _load_pump()
+    monkeypatch.setattr(pump.sys, "platform", "darwin")
+    monkeypatch.setattr(pump, "SEND_DELAY_SECONDS", 0)
+    monkeypatch.setattr(pump, "STATE_FILE", tmp_path / "state.json")
+    pending = {
+        "phone": "+17864083193",
+        "body": "hi",
+        "rowid": 41,
+        "sent_at": 1.0,
+        "sms_retried": False,
+    }
+    monkeypatch.setattr(
+        pump,
+        "send_text",
+        lambda phone, body: pump.SendResult(True, None, "iMessage", pending),
+    )
+    posted = _crm_stub(
+        pump, monkeypatch, [{"id": "m1", "phone": "+17864083193", "body": "hi"}]
+    )
+
+    assert pump.pump_imessage_queue() == 1
+    assert posted[0]["status"] == "sent"
+    assert pump._load_state()[pump.PENDING_STATE_KEY]["m1"]["rowid"] == 41
+
+
+def test_pending_record_for_one_message_is_never_duplicated(tmp_path, monkeypatch):
+    pump = _load_pump()
+    monkeypatch.setattr(pump, "STATE_FILE", tmp_path / "state.json")
+    base = {"phone": "+17864083193", "body": "hi", "sent_at": 1.0, "sms_retried": False}
+    pump._remember_pending_send("m1", {**base, "rowid": 41})
+    pump._remember_pending_send("m1", {**base, "rowid": 42})
+
+    pending = pump._load_state()[pump.PENDING_STATE_KEY]
+    assert list(pending) == ["m1"]
+    assert pending["m1"]["rowid"] == 42

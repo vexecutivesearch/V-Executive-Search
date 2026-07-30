@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
 """Outreach worker pump — runs each poll tick (every 5 min via launchd poll).
 
-Three jobs, all idempotent and independently non-fatal:
-  1. Text sends      — poll /api/outreach/imessage-queue, send via Messages.app
+Four jobs, all idempotent and independently non-fatal:
+  1. Pending re-check — finish verifying iMessage sends from earlier ticks that
+     had no delivery receipt yet, retrying once over SMS when Apple's own IDS
+     registry says the handle cannot take an iMessage. (macOS only)
+  2. Text sends      — poll /api/outreach/imessage-queue, send via Messages.app
      AppleScript, confirm delivery in chat.db, fall back to green-bubble SMS
-     when iMessage comes back Not Delivered, post statuses back. (macOS only)
-  2. chat.db scan    — inbound texts from enrolled numbers since the last
+     when iMessage cannot deliver, post statuses back. (macOS only)
+  3. chat.db scan    — inbound texts from enrolled numbers since the last
      scanned ROWID, self-sent messages filtered (is_from_me), posted to
      /api/outreach/inbound. (macOS only)
-  3. IMAP poll       — new mail in the Reply-To mailbox posted to
+  4. IMAP poll       — new mail in the Reply-To mailbox posted to
      /api/outreach/inbound with In-Reply-To for threading. (any OS)
 
-State (last chat.db rowid, last IMAP UID) lives in ~/.vsearch/outreach_state.json
-so release swaps never re-ingest history (the CRM also dedupes on external_id).
+State (last chat.db rowid, last IMAP UID, sends awaiting a delivery verdict)
+lives in ~/.vsearch/outreach_state.json so release swaps never re-ingest history
+(the CRM also dedupes on external_id).
 
 Env:
   OUTREACH_TRANSPORT_RESET — comma-separated numbers (or "all") to forget the
-    chat.db-learned transport for, so the next send retries iMessage first
+    learned transport AND the IDS capability shortcut for, so the next send
+    replays the whole iMessage → SMS ladder
+  OUTREACH_SEND_VERIFY_SECONDS — inline confirm window per send (default 20)
+  OUTREACH_PENDING_GRACE_SECONDS / OUTREACH_PENDING_MAX_AGE_SECONDS — bounds on
+    the asynchronous re-check
   OUTREACH_IMAP_HOST / OUTREACH_IMAP_USER
   OUTREACH_IMAP_FOLDER (default INBOX) / OUTREACH_IMAP_PORT (default 993)
   Auth (prefer OAuth for M365 / GoDaddy — app passwords are often unavailable):
@@ -39,7 +47,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import requests
 
@@ -60,11 +68,24 @@ STATE_FILE = Path(
     or Path.home() / ".vsearch" / "outreach_state.json"
 ).expanduser()
 CHAT_DB = Path.home() / "Library" / "Messages" / "chat.db"
+# identityservicesd's cache of every "can this address take an iMessage" lookup
+# Messages has performed. The only trustworthy capability signal on the box.
+IDS_QUERY_DB = Path.home() / "Library" / "IdentityServices" / "ids-query.db"
 SEND_DELAY_SECONDS = float(os.environ.get("OUTREACH_IMESSAGE_DELAY", "4"))
-# How long to watch chat.db for a delivery verdict before giving up and calling
-# the send unconfirmed (never "failed" — see _await_delivery).
-SEND_VERIFY_SECONDS = float(os.environ.get("OUTREACH_SEND_VERIFY_SECONDS", "45"))
+# Inline confirm window: how long a send waits for its delivery receipt before
+# handing the verdict to the asynchronous re-check. Delivery receipts on this Mac
+# land in under a second (93 receipts: p50 0.39s, p90 0.98s, max 5.08s), so 20s
+# is ~4x the worst case observed and still keeps a poll tick short.
+SEND_VERIFY_SECONDS = float(os.environ.get("OUTREACH_SEND_VERIFY_SECONDS", "20"))
 SEND_VERIFY_POLL_SECONDS = float(os.environ.get("OUTREACH_SEND_VERIFY_POLL", "3"))
+# A row younger than this is never called failed by the async re-check, so a
+# receipt still in flight can't trigger a retry. Far above the 5.08s worst case.
+PENDING_GRACE_SECONDS = float(os.environ.get("OUTREACH_PENDING_GRACE_SECONDS", "120"))
+# Hard stop on re-checking. Past this a send is reported for what it is instead
+# of being watched forever.
+PENDING_MAX_AGE_SECONDS = float(
+    os.environ.get("OUTREACH_PENDING_MAX_AGE_SECONDS", "3600")
+)
 SMS_FALLBACK_ENABLED = (os.environ.get("OUTREACH_SMS_FALLBACK", "1") or "").strip().lower() not in {
     "0",
     "false",
@@ -116,6 +137,22 @@ _SMS_LIKE_SERVICES = {"sms", "rcs"}
 DELIVERY_CONFIRMED = "delivered"
 DELIVERY_FAILED = "failed"
 DELIVERY_PENDING = "pending"
+# Messages itself gave up on iMessage and re-sent the row over SMS. The contact
+# already has the text, so this is a success — and must never look like a fresh
+# failure, or the re-check would text them a second time.
+DELIVERY_DOWNGRADED = "downgraded"
+
+CAPABILITY_CAPABLE = "capable"
+CAPABILITY_INCAPABLE = "incapable"
+CAPABILITY_UNKNOWN = "unknown"
+
+# The IDS service name for iMessage. identityservicesd keys its lookup cache by
+# service, and every other name in there is FaceTime/Continuity plumbing.
+_IMESSAGE_IDS_SERVICE = "com.apple.madrid"
+# ZIDSQUERYSDSTATUS.ZSTATUS observed on this Mac: 1 for a handle IDS resolved to
+# an Apple account, 2 for one it could not. Anything else is treated as unknown.
+_IDS_STATUS_REGISTERED = 1
+_IDS_STATUS_NOT_REGISTERED = 2
 
 
 def _phone_candidates(phone: str) -> list[str]:
@@ -193,6 +230,82 @@ def _applescript_send(phone: str, body: str, service: str) -> tuple[bool, str | 
     return False, last_error
 
 
+# --- iMessage capability (Apple's own IDS registry) -----------------------
+
+_capability_warned = False
+
+
+def _capability_unavailable(reason: str) -> str:
+    """UNKNOWN, said out loud once.
+
+    Losing this store is not fatal — sends fall back to iMessage-first — but it
+    silently removes the only signal that can tell "no Apple account" from
+    "iMessage that will arrive later", which is what authorises the SMS retry.
+    """
+    global _capability_warned
+    if not _capability_warned:
+        _capability_warned = True
+        logger.warning(
+            "IDS capability lookup unavailable (%s) — sends will try iMessage "
+            "first and the SMS retry can no longer be triggered automatically",
+            reason,
+        )
+    return CAPABILITY_UNKNOWN
+
+
+def imessage_capability(phone: str) -> str:
+    """Can this number take an iMessage at all? Reads Apple's IDS lookup cache.
+
+    Messages resolves capability asynchronously through IDS and exposes no
+    synchronous AppleScript equivalent, but identityservicesd persists every
+    answer in ~/Library/IdentityServices/ids-query.db. For the iMessage service
+    (``com.apple.madrid``) a resolvable handle gets a ZIDSQUERYSDADDRESSABLE row
+    and ZIDSQUERYSDSTATUS.ZSTATUS = 1; an unresolvable one gets ZSTATUS = 2 and
+    never becomes addressable.
+
+    On the release Mac that split is exact: the four numbers with delivered blue
+    bubbles all read addressable/1, and the three with no Apple account all read
+    2 — including +1786…3193, whose iMessage had to be downgraded by hand.
+
+    Positive evidence wins over negative so a stale "not registered" row can
+    never divert a number that genuinely is on iMessage, and every failure
+    (missing file, renamed Core Data table, unreadable) returns UNKNOWN, which
+    sends exactly as it did before this lookup existed.
+    """
+    phone_key = _normalize_phone(phone)
+    if sys.platform != "darwin" or not phone_key:
+        return CAPABILITY_UNKNOWN
+    if not IDS_QUERY_DB.exists():
+        return _capability_unavailable(f"{IDS_QUERY_DB} is missing")
+    try:
+        conn = sqlite3.connect(f"file:{IDS_QUERY_DB}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        return _capability_unavailable(str(exc))
+    try:
+        for uri, in conn.execute(
+            "SELECT ZURI FROM ZIDSQUERYSDADDRESSABLE WHERE ZSERVICE = ?",
+            (_IMESSAGE_IDS_SERVICE,),
+        ):
+            if _normalize_phone(str(uri or "")) == phone_key:
+                return CAPABILITY_CAPABLE
+        verdict = CAPABILITY_UNKNOWN
+        for uri, status in conn.execute(
+            "SELECT ZURI, ZSTATUS FROM ZIDSQUERYSDSTATUS WHERE ZSERVICE = ?",
+            (_IMESSAGE_IDS_SERVICE,),
+        ):
+            if _normalize_phone(str(uri or "")) != phone_key:
+                continue
+            if status == _IDS_STATUS_REGISTERED:
+                return CAPABILITY_CAPABLE
+            if status == _IDS_STATUS_NOT_REGISTERED:
+                verdict = CAPABILITY_INCAPABLE
+        return verdict
+    except sqlite3.Error as exc:
+        return _capability_unavailable(str(exc))
+    finally:
+        conn.close()
+
+
 # --- delivery verification ------------------------------------------------
 
 def _chat_db_connect() -> sqlite3.Connection | None:
@@ -218,13 +331,60 @@ def _chat_db_max_rowid() -> int | None:
         conn.close()
 
 
+# Columns the verdict is read from. Selected defensively because chat.db grows
+# columns between macOS releases and the test fixtures build a minimal table.
+_OUTBOUND_COLUMNS = (
+    "service",
+    "is_sent",
+    "is_delivered",
+    "error",
+    "was_downgraded",
+    "date_delivered",
+    "date_read",
+)
+
+
+def _outbound_projection(conn: sqlite3.Connection) -> tuple[str, bool]:
+    """SELECT list for _OUTBOUND_COLUMNS, plus "are receipt timestamps here".
+
+    Absent columns come back as NULL so one query shape works on every schema.
+    """
+    try:
+        present = {row[1] for row in conn.execute("PRAGMA table_info(message)")}
+    except sqlite3.Error:
+        present = set()
+    projection = ", ".join(
+        f"m.{name}" if name in present else f"NULL AS {name}"
+        for name in _OUTBOUND_COLUMNS
+    )
+    return projection, "date_delivered" in present
+
+
+def _row_status(row: tuple, receipts_tracked: bool) -> dict[str, Any]:
+    rowid, service, is_sent, is_delivered, error, downgraded, delivered_at, read_at = (
+        row[:8]
+    )
+    return {
+        "rowid": int(rowid),
+        "service": str(service or ""),
+        "is_sent": int(is_sent or 0),
+        "is_delivered": int(is_delivered or 0),
+        "error": int(error or 0),
+        "was_downgraded": int(downgraded or 0),
+        "date_delivered": int(delivered_at or 0),
+        "date_read": int(read_at or 0),
+        "receipts_tracked": receipts_tracked,
+    }
+
+
 def _find_outbound_row(
     conn: sqlite3.Connection, phone_key: str, after_rowid: int
-) -> tuple[str, int, int, int] | None:
+) -> dict[str, Any] | None:
     """Newest outbound row to ``phone_key`` past the watermark."""
+    projection, receipts_tracked = _outbound_projection(conn)
     cursor = conn.execute(
-        """
-        SELECT m.service, m.is_sent, m.is_delivered, m.error, h.id
+        f"""
+        SELECT m.ROWID, {projection}, h.id
         FROM message m
         JOIN handle h ON h.ROWID = m.handle_id
         WHERE m.is_from_me = 1 AND m.ROWID > ?
@@ -233,59 +393,127 @@ def _find_outbound_row(
         """,
         (after_rowid,),
     )
-    for service, is_sent, is_delivered, error, handle in cursor:
-        if _normalize_phone(str(handle or "")) == phone_key:
-            return (
-                str(service or ""),
-                int(is_sent or 0),
-                int(is_delivered or 0),
-                int(error or 0),
-            )
+    for row in cursor:
+        if _normalize_phone(str(row[-1] or "")) == phone_key:
+            return _row_status(row, receipts_tracked)
     return None
+
+
+def _read_outbound_row(
+    conn: sqlite3.Connection, rowid: int
+) -> dict[str, Any] | None:
+    """Re-read one pinned row. Messages rewrites rows in place, so the ROWID
+    recorded at send time still identifies the same message after a downgrade."""
+    projection, receipts_tracked = _outbound_projection(conn)
+    row = conn.execute(
+        f"""
+        SELECT m.ROWID, {projection}, m.handle_id
+        FROM message m
+        WHERE m.ROWID = ? AND m.is_from_me = 1
+        """,
+        (rowid,),
+    ).fetchone()
+    return _row_status(row, receipts_tracked) if row else None
+
+
+def _classify_outbound(status: dict[str, Any], sent_via: str) -> tuple[str, str | None]:
+    """Turn one chat.db row into a delivery verdict. Returns (state, detail).
+
+    ``is_delivered`` is deliberately not trusted for iMessage: all 95 outbound
+    iMessage rows on this Mac carry ``is_delivered = 1``, including two that were
+    never delivered, so the flag cannot distinguish them. ``date_delivered`` can
+    — it is set on all 93 real receipts and NULL on both failures. Likewise
+    ``error`` has never been non-zero in 210 rows, so it is kept only as a
+    belt-and-braces check rather than the primary signal.
+    """
+    service = status["service"].lower()
+    if status["error"]:
+        return DELIVERY_FAILED, f"{service or 'unknown'} error={status['error']}"
+    # An iMessage row whose service has flipped to SMS is the in-place rewrite
+    # Messages performs when it gives up on the blue bubble.
+    if status["was_downgraded"] or (
+        sent_via == "imessage" and service in _SMS_LIKE_SERVICES
+    ):
+        return DELIVERY_DOWNGRADED, "Messages re-sent it over SMS itself"
+    if service in _SMS_LIKE_SERVICES:
+        # SMS gets no delivery receipt at all — handing it to the relay is as
+        # much confirmation as exists.
+        return (DELIVERY_CONFIRMED, None) if status["is_sent"] else (DELIVERY_PENDING, None)
+    if status["date_delivered"] or status["date_read"]:
+        return DELIVERY_CONFIRMED, None
+    if not status["receipts_tracked"] and status["is_delivered"]:
+        # Schema too old to carry receipt timestamps; the flag is all there is.
+        return DELIVERY_CONFIRMED, None
+    return DELIVERY_PENDING, None
+
+
+class Verdict(NamedTuple):
+    state: str
+    detail: str | None
+    service: str | None
+    rowid: int | None
 
 
 def _await_delivery(
     phone: str,
     after_rowid: int | None,
-    timeout: float = SEND_VERIFY_SECONDS,
-    poll: float = SEND_VERIFY_POLL_SECONDS,
-) -> tuple[str, str | None, str | None]:
+    sent_via: str = "imessage",
+    timeout: float | None = None,
+    poll: float | None = None,
+) -> Verdict:
     """Watch chat.db for the verdict on the row we just created.
 
-    Returns (state, detail, service). Only a non-zero ``error`` column is
-    treated as failure: iMessage delivery receipts can lag, and SMS never sets
-    ``is_delivered`` at all, so a quiet row at timeout is PENDING rather than
-    failed. That asymmetry keeps a slow-but-fine send from being re-sent.
+    Returns as soon as there is one. A quiet iMessage row is only called failed
+    when IDS says the handle has no Apple account — the send itself triggers that
+    lookup, so the answer is usually cached within a second or two. Without that
+    corroboration a quiet row stays PENDING and is handed to the asynchronous
+    re-check, because a receipt-less iMessage to a real Apple account (phone off,
+    no signal) will still arrive and re-sending it would double-text the contact.
     """
     phone_key = _normalize_phone(phone)
     if not phone_key or after_rowid is None:
-        return DELIVERY_PENDING, "delivery unverified (chat.db unavailable)", None
+        return Verdict(
+            DELIVERY_PENDING, "delivery unverified (chat.db unavailable)", None, None
+        )
 
+    # Read the window off the module at call time, not as a default argument, so
+    # it stays overridable.
+    timeout = SEND_VERIFY_SECONDS if timeout is None else timeout
+    poll = SEND_VERIFY_POLL_SECONDS if poll is None else poll
     deadline = time.monotonic() + timeout
     seen_service: str | None = None
+    seen_rowid: int | None = None
     while True:
         conn = _chat_db_connect()
         if conn is None:
-            return DELIVERY_PENDING, "delivery unverified (chat.db unreadable)", None
+            return Verdict(
+                DELIVERY_PENDING, "delivery unverified (chat.db unreadable)", None, None
+            )
         try:
-            found = _find_outbound_row(conn, phone_key, after_rowid)
+            status = _find_outbound_row(conn, phone_key, after_rowid)
         except sqlite3.Error as exc:
-            return DELIVERY_PENDING, f"delivery unverified ({exc})", None
+            return Verdict(DELIVERY_PENDING, f"delivery unverified ({exc})", None, None)
         finally:
             conn.close()
 
-        if found:
-            service, is_sent, is_delivered, error = found
-            seen_service = service or seen_service
-            if error:
-                return DELIVERY_FAILED, f"{service or 'unknown'} error={error}", service
-            if service.lower() in _SMS_LIKE_SERVICES and is_sent:
-                return DELIVERY_CONFIRMED, None, service
-            if is_delivered:
-                return DELIVERY_CONFIRMED, None, service
+        if status:
+            seen_service = status["service"] or seen_service
+            seen_rowid = status["rowid"]
+            state, detail = _classify_outbound(status, sent_via)
+            if state != DELIVERY_PENDING:
+                return Verdict(state, detail, status["service"], seen_rowid)
+            if sent_via == "imessage" and (
+                imessage_capability(phone) == CAPABILITY_INCAPABLE
+            ):
+                return Verdict(
+                    DELIVERY_FAILED,
+                    "no iMessage account for this number (IDS)",
+                    status["service"],
+                    seen_rowid,
+                )
 
         if time.monotonic() >= deadline:
-            return DELIVERY_PENDING, None, seen_service
+            return Verdict(DELIVERY_PENDING, None, seen_service, seen_rowid)
         time.sleep(poll)
 
 
@@ -305,15 +533,19 @@ def _transport_reset_numbers() -> set[str]:
     return {key for key in (_normalize_phone(part) for part in raw.split(",")) if key}
 
 
+def _transport_reset(phone: str) -> bool:
+    reset = _transport_reset_numbers()
+    return bool(reset) and ("*" in reset or _normalize_phone(phone) in reset)
+
+
 def _preferred_service(phone: str) -> str | None:
     """Transport that last worked for this number, learned from chat.db.
 
     Lets a known SMS-only number skip the doomed iMessage attempt (and its
-    ~45s verification wait) on every later step of the sequence.
+    verification wait) on every later step of the sequence.
     """
     phone_key = _normalize_phone(phone)
-    reset = _transport_reset_numbers()
-    if reset and ("*" in reset or phone_key in reset):
+    if _transport_reset(phone):
         logger.info("transport reset for %s — starting from iMessage", phone)
         return None
     conn = _chat_db_connect()
@@ -344,25 +576,57 @@ def _preferred_service(phone: str) -> str | None:
         conn.close()
 
 
-def send_text(phone: str, body: str) -> tuple[bool, str | None, str | None]:
-    """Send one outreach text and confirm it actually left. Returns (ok, error, service).
+NO_SMS_SERVICE = (
+    "no SMS service — enable Text Message Forwarding for this Mac on the paired "
+    "iPhone (Settings → Messages → Text Message Forwarding)"
+)
 
-    Tries at most two transports — the one history says works for this number
-    (default iMessage), then SMS if iMessage came back Not Delivered — so a
-    single queue item can never loop.
+
+class SendResult(NamedTuple):
+    ok: bool
+    error: str | None
+    service: str | None
+    #: Set when the send was accepted but has no delivery verdict yet. The caller
+    #: persists it so a later tick can finish the job — see
+    #: resolve_pending_text_sends().
+    pending: dict[str, Any] | None = None
+
+
+def _send_plan(phone: str) -> list[str]:
+    """Transports to try, best-first.
+
+    Order of authority: an explicit transport reset (replay the whole ladder),
+    then Apple's IDS registry (a number with no Apple account skips the blue
+    bubble entirely — nothing to fall back from), then the transport chat.db says
+    last worked, then plain iMessage-first with SMS behind it.
     """
-    preferred = _preferred_service(phone) or "imessage"
-    plan = [preferred]
-    if preferred == "imessage" and SMS_FALLBACK_ENABLED:
-        plan.append("sms")
+    if _transport_reset(phone):
+        return ["imessage", "sms"] if SMS_FALLBACK_ENABLED else ["imessage"]
 
+    if imessage_capability(phone) == CAPABILITY_INCAPABLE:
+        logger.info("%s has no iMessage account (IDS) — sending as SMS", phone)
+        return ["sms"] if SMS_FALLBACK_ENABLED else ["imessage"]
+
+    preferred = _preferred_service(phone) or "imessage"
+    if preferred == "imessage" and SMS_FALLBACK_ENABLED:
+        return ["imessage", "sms"]
+    return [preferred]
+
+
+def send_text(phone: str, body: str) -> SendResult:
+    """Send one outreach text and confirm it actually left.
+
+    Tries at most two transports — the one history and IDS say should work
+    (default iMessage), then SMS if iMessage provably cannot deliver — so a
+    single queue item can never loop. A send that is accepted but still has no
+    receipt when the confirm window closes comes back ok with ``pending`` set,
+    never re-sent inline: blocking a poll tick for minutes is not an option and
+    re-sending on a hunch double-texts people.
+    """
     problems: list[str] = []
-    for service in plan:
+    for service in _send_plan(phone):
         if service == "sms" and not messages_service_available("sms"):
-            problems.append(
-                "no SMS service — enable Text Message Forwarding for this Mac on "
-                "the paired iPhone (Settings → Messages → Text Message Forwarding)"
-            )
+            problems.append(NO_SMS_SERVICE)
             break
 
         watermark = _chat_db_max_rowid()
@@ -371,23 +635,70 @@ def send_text(phone: str, body: str) -> tuple[bool, str | None, str | None]:
             problems.append(f"{service}: {error}")
             continue
 
-        state, detail, actual = _await_delivery(phone, watermark)
-        if state == DELIVERY_FAILED:
-            problems.append(f"{service}: not delivered ({detail})")
+        verdict = _await_delivery(phone, watermark, sent_via=service)
+        if verdict.state == DELIVERY_FAILED:
+            problems.append(f"{service}: not delivered ({verdict.detail})")
             continue
-        if state == DELIVERY_PENDING and detail:
+        if verdict.state == DELIVERY_DOWNGRADED:
+            # Messages beat us to it; the contact has the text as SMS already.
+            logger.info("send to %s: %s", phone, verdict.detail)
+            return SendResult(True, None, "SMS")
+        if verdict.state == DELIVERY_PENDING and verdict.detail:
             # Verification unavailable (usually chat.db/TCC). Trust the accept
             # rather than re-sending blind and double-texting the contact.
-            logger.warning("send to %s: %s", phone, detail)
-        return True, None, (actual or service)
+            logger.warning("send to %s: %s", phone, verdict.detail)
+            return SendResult(True, None, verdict.service or service)
 
-    return False, "; ".join(problems) or "unknown send failure", None
+        pending = None
+        if verdict.state == DELIVERY_PENDING and service == "imessage":
+            if verdict.rowid is None:
+                # No row to pin means no way to re-examine this exact send, and a
+                # re-check that guesses which row is ours could retry the wrong
+                # message. Trust the accept instead.
+                logger.warning(
+                    "send to %s accepted but no chat.db row to verify", phone
+                )
+            else:
+                pending = {
+                    "phone": phone,
+                    "body": body,
+                    "rowid": verdict.rowid,
+                    "sent_at": time.time(),
+                    "sms_retried": False,
+                }
+                logger.info(
+                    "send to %s has no delivery receipt yet — re-checking rowid %d "
+                    "on a later tick",
+                    phone,
+                    verdict.rowid,
+                )
+        return SendResult(True, None, verdict.service or service, pending)
+
+    return SendResult(False, "; ".join(problems) or "unknown send failure", None)
 
 
 def send_imessage(phone: str, body: str) -> tuple[bool, str | None]:
     """Back-compat shim for callers that predate the SMS fallback."""
-    ok, error, _service = send_text(phone, body)
-    return ok, error
+    result = send_text(phone, body)
+    return result.ok, result.error
+
+
+def _post_send_results(
+    base: str, key: str, results: list[dict[str, Any]]
+) -> bool:
+    if not results:
+        return True
+    try:
+        requests.post(
+            f"{base}/api/outreach/imessage-queue",
+            headers=_headers(key),
+            json={"results": results},
+            timeout=30,
+        ).raise_for_status()
+        return True
+    except requests.RequestException as exc:
+        logger.warning("imessage status post failed: %s", exc)
+        return False
 
 
 def pump_imessage_queue() -> int:
@@ -414,32 +725,183 @@ def pump_imessage_queue() -> int:
 
     results = []
     for message in messages:
-        ok, error, service = send_text(str(message["phone"]), str(message["body"]))
+        message_id = str(message["id"])
+        result = send_text(str(message["phone"]), str(message["body"]))
+        if result.pending:
+            # Recorded before the status post so a crash in between leaves the
+            # send re-checkable rather than silently accepted.
+            _remember_pending_send(message_id, result.pending)
         results.append(
             {
-                "id": message["id"],
-                "status": "sent" if ok else "failed",
-                **({"error": error} if error else {}),
+                "id": message_id,
+                # Reported sent so the queue does not serve it again — a second
+                # GET would re-send it, and the transport is corrected later by
+                # resolve_pending_text_sends() if the receipt never lands.
+                "status": "sent" if result.ok else "failed",
+                **({"transport": result.service} if result.ok and result.service else {}),
+                **({"error": result.error} if result.error else {}),
             }
         )
         logger.info(
             "outreach text %s → %s%s",
-            message["id"],
-            f"sent via {service}" if ok else "FAILED",
-            f" ({error})" if error else "",
+            message_id,
+            f"sent via {result.service}" if result.ok else "FAILED",
+            f" ({result.error})" if result.error else "",
         )
         time.sleep(SEND_DELAY_SECONDS)
 
-    try:
-        requests.post(
-            f"{base}/api/outreach/imessage-queue",
-            headers=_headers(key),
-            json={"results": results},
-            timeout=30,
-        ).raise_for_status()
-    except requests.RequestException as exc:
-        logger.warning("imessage status post failed: %s", exc)
+    _post_send_results(base, key, results)
     return len(results)
+
+
+# --- asynchronous delivery re-check ---------------------------------------
+
+PENDING_STATE_KEY = "pending_text_verifications"
+
+
+def _remember_pending_send(message_id: str, record: dict[str, Any]) -> None:
+    state = _load_state()
+    pending = dict(state.get(PENDING_STATE_KEY) or {})
+    # Keyed by CRM message id, so re-recording the same send overwrites rather
+    # than queueing a second re-check for it.
+    pending[message_id] = record
+    state[PENDING_STATE_KEY] = pending
+    _save_state(state)
+
+
+def _write_pending(pending: dict[str, Any]) -> None:
+    state = _load_state()
+    state[PENDING_STATE_KEY] = pending
+    _save_state(state)
+
+
+def _pending_verdict(record: dict[str, Any], now: float) -> tuple[str, str | None]:
+    """Re-examine one pinned row. Returns (state, detail).
+
+    Never returns FAILED for a row that Messages has already downgraded, and
+    never before the grace period, so an in-flight receipt cannot be mistaken for
+    a failure. FAILED additionally requires IDS to say the number has no Apple
+    account: without that corroboration a receipt-less iMessage may simply be
+    waiting for a phone to come back online, and texting again would duplicate it.
+    """
+    conn = _chat_db_connect()
+    if conn is None:
+        return DELIVERY_PENDING, "chat.db unreadable"
+    try:
+        status = _read_outbound_row(conn, int(record["rowid"]))
+    except (sqlite3.Error, KeyError, TypeError, ValueError) as exc:
+        return DELIVERY_PENDING, f"row unreadable ({exc})"
+    finally:
+        conn.close()
+
+    if status is None:
+        # Conversation deleted, or history trimmed. No evidence either way, so
+        # do not send anything.
+        return DELIVERY_CONFIRMED, "row no longer in chat.db — leaving as sent"
+
+    state, detail = _classify_outbound(status, "imessage")
+    if state != DELIVERY_PENDING:
+        return state, detail
+    if now - float(record.get("sent_at") or 0) < PENDING_GRACE_SECONDS:
+        return DELIVERY_PENDING, "within grace period"
+    if imessage_capability(str(record.get("phone") or "")) == CAPABILITY_INCAPABLE:
+        return DELIVERY_FAILED, "no iMessage account for this number (IDS)"
+    return DELIVERY_PENDING, "no delivery receipt yet"
+
+
+def resolve_pending_text_sends() -> int:
+    """Finish verifying earlier sends; retry once over SMS. Returns count resolved.
+
+    Runs before new sends each tick so a rescued message goes out promptly. Every
+    record leaves this function either resolved (dropped) or older, and a record
+    can authorise at most one SMS retry in its whole life, so no contact can be
+    texted twice by this path.
+    """
+    if sys.platform != "darwin":
+        return 0
+    state = _load_state()
+    pending: dict[str, Any] = dict(state.get(PENDING_STATE_KEY) or {})
+    if not pending:
+        return 0
+    crm = _crm()
+    if not crm:
+        return 0
+    base, key = crm
+
+    now = time.time()
+    results: list[dict[str, Any]] = []
+    resolved: list[str] = []
+    for message_id, record in sorted(pending.items()):
+        verdict, detail = _pending_verdict(record, now)
+        phone = str(record.get("phone") or "")
+        age = now - float(record.get("sent_at") or 0)
+
+        if verdict == DELIVERY_CONFIRMED:
+            logger.info("late verify %s: delivered via iMessage", message_id)
+            results.append({"id": message_id, "status": "sent", "transport": "imessage",
+                            "verification": "late"})
+            resolved.append(message_id)
+            continue
+
+        if verdict == DELIVERY_DOWNGRADED:
+            # Messages already re-sent it as SMS. Sending our own would be the
+            # duplicate this whole mechanism exists to avoid.
+            logger.info("late verify %s: %s", message_id, detail)
+            results.append({"id": message_id, "status": "sent", "transport": "sms",
+                            "verification": "late"})
+            resolved.append(message_id)
+            continue
+
+        if verdict == DELIVERY_FAILED and not record.get("sms_retried"):
+            if not messages_service_available("sms") or not SMS_FALLBACK_ENABLED:
+                logger.warning("late verify %s: %s", message_id, NO_SMS_SERVICE)
+                results.append({"id": message_id, "status": "failed",
+                                "error": f"iMessage not delivered; {NO_SMS_SERVICE}",
+                                "verification": "late"})
+                resolved.append(message_id)
+                continue
+            # Persist the one-shot flag BEFORE sending: if this process dies mid
+            # send the message is left unretried, never retried twice.
+            record["sms_retried"] = True
+            pending[message_id] = record
+            _write_pending(pending)
+
+            accepted, error = _applescript_send(phone, str(record.get("body") or ""), "sms")
+            if accepted:
+                logger.info("late verify %s: iMessage failed (%s) — re-sent as SMS",
+                            message_id, detail)
+                results.append({"id": message_id, "status": "sent", "transport": "sms",
+                                "verification": "late"})
+            else:
+                logger.warning("late verify %s: SMS retry rejected: %s", message_id, error)
+                results.append({"id": message_id, "status": "failed",
+                                "error": f"iMessage not delivered; SMS retry failed: {error}",
+                                "verification": "late"})
+            resolved.append(message_id)
+            continue
+
+        if age >= PENDING_MAX_AGE_SECONDS:
+            logger.warning(
+                "late verify %s: giving up after %.0f min with no delivery receipt "
+                "(%s) — send it by hand if it still matters",
+                message_id,
+                age / 60,
+                detail,
+            )
+            results.append({"id": message_id, "status": "failed",
+                            "error": f"no delivery confirmation after "
+                                     f"{age / 60:.0f} min ({detail})",
+                            "verification": "late"})
+            resolved.append(message_id)
+            continue
+
+        logger.info("late verify %s: still pending (%s)", message_id, detail)
+
+    for message_id in resolved:
+        pending.pop(message_id, None)
+    _write_pending(pending)
+    _post_send_results(base, key, results)
+    return len(resolved)
 
 
 # --------------------------------------------------------------------------
@@ -852,7 +1314,12 @@ def fetch_watchlist() -> set[str]:
 
 def run_outreach_pump() -> dict[str, int]:
     """One pump pass. Each stage isolated — a failure never blocks the rest."""
-    stats = {"texts_sent": 0, "texts_in": 0, "emails_in": 0}
+    stats = {"texts_resolved": 0, "texts_sent": 0, "texts_in": 0, "emails_in": 0}
+    try:
+        # First, so a message rescued by the SMS retry leaves on this tick.
+        stats["texts_resolved"] = resolve_pending_text_sends()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pending text re-check failed (non-fatal): %s", exc)
     try:
         stats["texts_sent"] = pump_imessage_queue()
     except Exception as exc:  # noqa: BLE001
@@ -873,8 +1340,10 @@ def main() -> int:
     load_worker_env()
     stats = run_outreach_pump()
     logger.info(
-        "outreach pump: %d text(s) sent · %d text repl(ies) in · %d email repl(ies) in",
+        "outreach pump: %d text(s) sent · %d late verif(ies) resolved · "
+        "%d text repl(ies) in · %d email repl(ies) in",
         stats["texts_sent"],
+        stats["texts_resolved"],
         stats["texts_in"],
         stats["emails_in"],
     )

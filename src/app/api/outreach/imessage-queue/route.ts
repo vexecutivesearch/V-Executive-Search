@@ -94,7 +94,19 @@ export async function POST(request: NextRequest) {
   if (!verifyWorkerAuth(request)) return unauthorized();
 
   let payload: {
-    results?: Array<{ id: string; status: "sent" | "failed"; error?: string }>;
+    results?: Array<{
+      id: string;
+      status: "sent" | "failed";
+      error?: string;
+      /** Transport that actually carried it — "iMessage", "SMS", or "RCS". */
+      transport?: string;
+      /**
+       * Set when the worker only learned the outcome on a later poll tick. An
+       * iMessage has no delivery receipt for a couple of minutes, and Messages
+       * can silently downgrade one to SMS, so the first status is provisional.
+       */
+      verification?: "late";
+    }>;
   };
   try {
     payload = await request.json();
@@ -112,7 +124,53 @@ export async function POST(request: NextRequest) {
       .from(outreachMessages)
       .where(eq(outreachMessages.id, result.id))
       .limit(1);
-    if (!message || message.status !== "queued") continue;
+    if (!message) continue;
+
+    // A late verdict on a message already recorded sent is a correction, not a
+    // new send: never re-queue it (that would text the contact twice) and never
+    // replay the flow-advance side effects below.
+    if (result.verification === "late" && message.status === "sent") {
+      if (result.status === "sent") {
+        await db
+          .update(outreachMessages)
+          .set({ error: null, updatedAt: now })
+          .where(eq(outreachMessages.id, message.id));
+        await logEnrollmentEvent({
+          enrollmentId: message.enrollmentId,
+          eventType: "delivery_verified",
+          payload: {
+            message_id: message.id,
+            channel: "imessage",
+            transport: result.transport ?? null,
+          },
+        });
+      } else {
+        await db
+          .update(outreachMessages)
+          .set({
+            status: "failed",
+            error: result.error ?? "text not delivered",
+            updatedAt: now,
+          })
+          .where(eq(outreachMessages.id, message.id));
+        await logEnrollmentEvent({
+          enrollmentId: message.enrollmentId,
+          eventType: "error",
+          payload: {
+            message_id: message.id,
+            channel: "imessage",
+            error: result.error,
+            late_verification: true,
+            manual_note:
+              "recorded sent, but Messages never delivered it — send by hand if still relevant",
+          },
+        });
+      }
+      updated += 1;
+      continue;
+    }
+
+    if (message.status !== "queued") continue;
 
     if (result.status === "sent") {
       await db
@@ -127,7 +185,12 @@ export async function POST(request: NextRequest) {
       await logEnrollmentEvent({
         enrollmentId: message.enrollmentId,
         eventType: "sent",
-        payload: { message_id: message.id, channel: "imessage", step: message.stepKind },
+        payload: {
+          message_id: message.id,
+          channel: "imessage",
+          step: message.stepKind,
+          transport: result.transport ?? null,
+        },
       });
       // Let the flow advance past this send node.
       await db
