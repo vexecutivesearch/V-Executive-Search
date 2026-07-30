@@ -25,6 +25,7 @@ import { isPersonalEmail, parsePhoneValue } from "@/lib/phone-utils";
 import { sectorFromIndustry } from "@/lib/industry-sectors";
 import { formatListingSalary, pickDisplayListing } from "@/lib/salary-format";
 import { parseJobLocation } from "@/lib/location-match";
+import { ensureNotesNewestFirst } from "@/lib/outreach/call-list-notes";
 
 function formatDate(value: Date | string | null | undefined): string {
   if (!value) return "—";
@@ -51,7 +52,9 @@ export function CallListRow({
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notes, setNotes] = useState(entry.notes ?? "");
+  const [notes, setNotes] = useState(() =>
+    ensureNotesNewestFirst(entry.notes),
+  );
   const [assignedTo, setAssignedTo] = useState(entry.assignedTo ?? "");
   const [finalResult, setFinalResult] = useState(entry.finalResult ?? "");
   const [outreachAngle, setOutreachAngle] = useState(
@@ -61,7 +64,7 @@ export function CallListRow({
   const followUpRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setNotes(entry.notes ?? "");
+    setNotes(ensureNotesNewestFirst(entry.notes));
   }, [entry.notes]);
 
   const locked = entry.callStatus === "do_not_contact";
@@ -504,7 +507,7 @@ export function CallListRow({
           <label className="block text-xs text-gray-500">
             Notes{" "}
             <span className="font-normal text-gray-400">
-              (sequence sends append here automatically)
+              (newest first — sequence sends land on top)
             </span>
             <textarea
               value={notes}

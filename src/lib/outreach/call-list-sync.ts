@@ -6,12 +6,15 @@ import {
   type CallStatus,
 } from "@/lib/db/schema";
 import { TERMINAL_STATUSES } from "@/lib/call-status";
+import { ensureNotesNewestFirst } from "@/lib/outreach/call-list-notes";
 
 /**
  * Keep the Call List in sync with the Outreach Sequencer: every automated
  * touch writes a timestamped line into call_list_entries.notes (visible on
  * the Call List row), updates call_status when appropriate, and a
  * companyActivities row (company dossier / history).
+ *
+ * Automated lines are prepended so newest notes appear at the top.
  */
 
 function stampLine(line: string): string {
@@ -47,7 +50,8 @@ export async function recordCallListOutreachEvent(options: {
       .where(eq(callListEntries.companyId, options.companyId))
       .limit(1);
     if (entry) {
-      const prev = entry.notes?.trim() ? `${entry.notes.trim()}\n` : "";
+      const prev = ensureNotesNewestFirst(entry.notes).trim();
+      const nextNotes = prev ? `${line}\n${prev}` : line;
       const terminal = TERMINAL_STATUSES.has(entry.callStatus);
       const nextStatus =
         options.callStatus && !terminal ? options.callStatus : entry.callStatus;
@@ -55,7 +59,7 @@ export async function recordCallListOutreachEvent(options: {
       await db
         .update(callListEntries)
         .set({
-          notes: `${prev}${line}`,
+          notes: nextNotes,
           attempts: options.bumpAttempt ? entry.attempts + 1 : entry.attempts,
           lastContactAt: options.bumpAttempt ? new Date() : entry.lastContactAt,
           callStatus: nextStatus,
@@ -67,7 +71,7 @@ export async function recordCallListOutreachEvent(options: {
         .where(eq(callListEntries.id, entry.id));
     }
   } catch (error) {
-    console.error("[outreach] call-list note append failed", error);
+    console.error("[outreach] call-list note prepend failed", error);
   }
 
   try {
