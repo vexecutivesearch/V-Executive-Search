@@ -18,7 +18,7 @@ import {
   sanitizeSubject,
 } from "@/lib/outreach/sanitizer";
 
-const DEFAULT_MODEL = "claude-3-5-haiku-20241022";
+const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 const MAX_DRAFT_ATTEMPTS = 3;
 
 export type DraftContext = {
