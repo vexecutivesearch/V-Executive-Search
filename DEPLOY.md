@@ -204,6 +204,44 @@ same-day iMessage when the contact is iMessage-capable; email goes out via
 Resend in the contact-local send window; SMS only leaves when the **Mac worker**
 is running and polling `/api/outreach/imessage-queue`.
 
+#### Text Message Forwarding (green-bubble SMS fallback)
+
+Most business mobiles are **not** iMessage accounts. Messages.app accepts an
+iMessage to one anyway and then shows a blue "Not Delivered" bubble, so the
+worker verifies every send against `chat.db` (`is_delivered` / `error`) instead
+of trusting the AppleScript return, and retries once over the **SMS** service
+when iMessage fails. It then remembers which transport worked for that number
+and skips the doomed iMessage attempt on later steps.
+
+That fallback needs an SMS service to exist on the Mac, which only happens with
+**Text Message Forwarding** enabled for this Mac on the paired iPhone (iPhone →
+Settings → Messages → Text Message Forwarding). Without it there is no green
+bubble to fall back to and non-iMessage numbers simply cannot be texted from
+here — the worker reports that explicitly rather than marking the send `sent`.
+Confirm from launchd (a terminal inherits the parent app's Automation grant and
+gives a false pass):
+
+```bash
+launchctl kickstart -k gui/$UID/com.vexecsearch.poll
+grep -E 'sent via|Text Message Forwarding' \
+  ~/Projects/V-Executive-Search-release/worker/logs/poll_stderr.log | tail -5
+```
+
+Set `OUTREACH_SMS_FALLBACK=0` in `~/.vsearch/worker.env` to disable the retry
+(iMessage-only sends); `OUTREACH_SEND_VERIFY_SECONDS` (default 45) bounds how
+long a send waits for its delivery verdict.
+
+#### Automation (Apple Events) permission
+
+Driving Messages.app also needs TCC **Automation**, granted per
+(client, target) pair. macOS prompts once for the worker interpreter → Messages
+and stores the grant keyed to the interpreter's absolute path **and** its exact
+code-signature hash. Because the interpreter is frozen at
+`~/.vsearch/python/…` (see [Full Disk Access](#full-disk-access-inbound-texts)),
+one Allow lasts across polls and reboots. Re-running
+`install_stable_python.sh --force`, or moving to a new interpreter such as
+Python 3.13, changes the hash or path and re-prompts.
+
 Setup checklist:
 
 1. `npm run db:push` — creates the outreach tables (templates, enrollments,

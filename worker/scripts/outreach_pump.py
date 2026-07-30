@@ -2,8 +2,9 @@
 """Outreach worker pump — runs each poll tick (every 5 min via launchd poll).
 
 Three jobs, all idempotent and independently non-fatal:
-  1. iMessage sends  — poll /api/outreach/imessage-queue, send via
-     Messages.app AppleScript with retry, post statuses back. (macOS only)
+  1. Text sends      — poll /api/outreach/imessage-queue, send via Messages.app
+     AppleScript, confirm delivery in chat.db, fall back to green-bubble SMS
+     when iMessage comes back Not Delivered, post statuses back. (macOS only)
   2. chat.db scan    — inbound texts from enrolled numbers since the last
      scanned ROWID, self-sent messages filtered (is_from_me), posted to
      /api/outreach/inbound. (macOS only)
@@ -58,6 +59,15 @@ STATE_FILE = Path(
 ).expanduser()
 CHAT_DB = Path.home() / "Library" / "Messages" / "chat.db"
 SEND_DELAY_SECONDS = float(os.environ.get("OUTREACH_IMESSAGE_DELAY", "4"))
+# How long to watch chat.db for a delivery verdict before giving up and calling
+# the send unconfirmed (never "failed" — see _await_delivery).
+SEND_VERIFY_SECONDS = float(os.environ.get("OUTREACH_SEND_VERIFY_SECONDS", "45"))
+SEND_VERIFY_POLL_SECONDS = float(os.environ.get("OUTREACH_SEND_VERIFY_POLL", "3"))
+SMS_FALLBACK_ENABLED = (os.environ.get("OUTREACH_SMS_FALLBACK", "1") or "").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
 
 
 def _crm() -> tuple[str, str] | None:
@@ -93,25 +103,78 @@ def _save_state(state: dict[str, Any]) -> None:
 # 1. iMessage sends
 # --------------------------------------------------------------------------
 
-def send_imessage(phone: str, body: str) -> tuple[bool, str | None]:
-    """Send one text via Messages.app. Returns (ok, error)."""
-    escaped_body = body.replace("\\", "\\\\").replace('"', '\\"')
-    # Prefer E.164; also try digits-only buddy form if + fails.
+# Messages.app exposes one service per transport. "iMessage" is Apple's own
+# blue-bubble network; "SMS" is the green-bubble relay through the paired
+# iPhone and only exists when Text Message Forwarding is enabled on that phone.
+_SERVICE_APPLESCRIPT = {"imessage": "iMessage", "sms": "SMS"}
+# Messages records RCS under its own service name but it is reached through the
+# same SMS relay, so both map back to the "sms" plan step.
+_SMS_LIKE_SERVICES = {"sms", "rcs"}
+
+DELIVERY_CONFIRMED = "delivered"
+DELIVERY_FAILED = "failed"
+DELIVERY_PENDING = "pending"
+
+
+def _phone_candidates(phone: str) -> list[str]:
+    """E.164 first, then the digits-only buddy forms Messages also accepts."""
     raw = "".join(ch for ch in phone if ch.isdigit() or ch == "+")
     digits = "".join(ch for ch in phone if ch.isdigit())
-    candidates = []
-    for candidate in (raw, digits, f"+{digits}" if digits and not digits.startswith("+") else None):
+    candidates: list[str] = []
+    for candidate in (raw, digits, f"+{digits}" if digits else None):
         if candidate and candidate not in candidates:
             candidates.append(candidate)
+    return candidates
 
+
+def _run_osascript(script: str, timeout: int = 30) -> tuple[str, str]:
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return (result.stdout or "").strip(), (result.stderr or "").strip()
+    except (subprocess.SubprocessError, OSError) as exc:
+        return "", str(exc)
+
+
+def messages_service_available(service: str) -> bool:
+    """Is this transport usable right now?
+
+    A missing SMS service means Text Message Forwarding is off on the paired
+    iPhone; no amount of AppleScript can green-bubble a message without it.
+    """
+    term = _SERVICE_APPLESCRIPT[service]
+    out, _ = _run_osascript(
+        f'tell application "Messages" to return '
+        f'(count of (every service whose service type = {term})) as text'
+    )
+    try:
+        return int(out) > 0
+    except ValueError:
+        return False
+
+
+def _applescript_send(phone: str, body: str, service: str) -> tuple[bool, str | None]:
+    """Hand one message to Messages.app over ``service``.
+
+    Success here only means Messages *accepted* the message. It is not delivery:
+    an iMessage to a non-iMessage number is accepted and then quietly turns into
+    a "Not Delivered" bubble, which is what ``_await_delivery`` exists to catch.
+    """
+    escaped_body = body.replace("\\", "\\\\").replace('"', '\\"')
+    term = _SERVICE_APPLESCRIPT[service]
     last_error = "unknown osascript failure"
-    for escaped_phone in candidates:
-        escaped_phone = escaped_phone.replace("\\", "\\\\").replace('"', '\\"')
+    for candidate in _phone_candidates(phone):
+        escaped_phone = candidate.replace("\\", "\\\\").replace('"', '\\"')
         script = f'''
         tell application "Messages"
-            set imessageServices to (every service whose service type is iMessage)
-            if (count of imessageServices) is 0 then return "error: no iMessage service (signed out?)"
-            set targetService to item 1 of imessageServices
+            set svcList to (every service whose service type = {term})
+            if (count of svcList) is 0 then return "error: no {term} service"
+            set targetService to item 1 of svcList
             try
                 set targetBuddy to buddy "{escaped_phone}" of targetService
                 send "{escaped_body}" to targetBuddy
@@ -121,21 +184,188 @@ def send_imessage(phone: str, body: str) -> tuple[bool, str | None]:
             end try
         end tell
         '''
-        try:
-            result = subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            out = (result.stdout or "").strip()
-            if out == "sent":
-                return True, None
-            last_error = out or (result.stderr or "").strip() or "unknown osascript failure"
-        except (subprocess.SubprocessError, OSError) as exc:
-            last_error = str(exc)
+        out, err = _run_osascript(script)
+        if out == "sent":
+            return True, None
+        last_error = out or err or "unknown osascript failure"
     return False, last_error
+
+
+# --- delivery verification ------------------------------------------------
+
+def _chat_db_connect() -> sqlite3.Connection | None:
+    if sys.platform != "darwin" or not CHAT_DB.exists():
+        return None
+    try:
+        return sqlite3.connect(f"file:{CHAT_DB}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+
+
+def _chat_db_max_rowid() -> int | None:
+    """Watermark taken before a send so we only inspect rows we created."""
+    conn = _chat_db_connect()
+    if conn is None:
+        return None
+    try:
+        row = conn.execute("SELECT COALESCE(MAX(ROWID), 0) FROM message").fetchone()
+        return int(row[0]) if row else 0
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+
+
+def _find_outbound_row(
+    conn: sqlite3.Connection, phone_key: str, after_rowid: int
+) -> tuple[str, int, int, int] | None:
+    """Newest outbound row to ``phone_key`` past the watermark."""
+    cursor = conn.execute(
+        """
+        SELECT m.service, m.is_sent, m.is_delivered, m.error, h.id
+        FROM message m
+        JOIN handle h ON h.ROWID = m.handle_id
+        WHERE m.is_from_me = 1 AND m.ROWID > ?
+        ORDER BY m.ROWID DESC
+        LIMIT 50
+        """,
+        (after_rowid,),
+    )
+    for service, is_sent, is_delivered, error, handle in cursor:
+        if _normalize_phone(str(handle or "")) == phone_key:
+            return (
+                str(service or ""),
+                int(is_sent or 0),
+                int(is_delivered or 0),
+                int(error or 0),
+            )
+    return None
+
+
+def _await_delivery(
+    phone: str,
+    after_rowid: int | None,
+    timeout: float = SEND_VERIFY_SECONDS,
+    poll: float = SEND_VERIFY_POLL_SECONDS,
+) -> tuple[str, str | None, str | None]:
+    """Watch chat.db for the verdict on the row we just created.
+
+    Returns (state, detail, service). Only a non-zero ``error`` column is
+    treated as failure: iMessage delivery receipts can lag, and SMS never sets
+    ``is_delivered`` at all, so a quiet row at timeout is PENDING rather than
+    failed. That asymmetry keeps a slow-but-fine send from being re-sent.
+    """
+    phone_key = _normalize_phone(phone)
+    if not phone_key or after_rowid is None:
+        return DELIVERY_PENDING, "delivery unverified (chat.db unavailable)", None
+
+    deadline = time.monotonic() + timeout
+    seen_service: str | None = None
+    while True:
+        conn = _chat_db_connect()
+        if conn is None:
+            return DELIVERY_PENDING, "delivery unverified (chat.db unreadable)", None
+        try:
+            found = _find_outbound_row(conn, phone_key, after_rowid)
+        except sqlite3.Error as exc:
+            return DELIVERY_PENDING, f"delivery unverified ({exc})", None
+        finally:
+            conn.close()
+
+        if found:
+            service, is_sent, is_delivered, error = found
+            seen_service = service or seen_service
+            if error:
+                return DELIVERY_FAILED, f"{service or 'unknown'} error={error}", service
+            if service.lower() in _SMS_LIKE_SERVICES and is_sent:
+                return DELIVERY_CONFIRMED, None, service
+            if is_delivered:
+                return DELIVERY_CONFIRMED, None, service
+
+        if time.monotonic() >= deadline:
+            return DELIVERY_PENDING, None, seen_service
+        time.sleep(poll)
+
+
+def _preferred_service(phone: str) -> str | None:
+    """Transport that last worked for this number, learned from chat.db.
+
+    Lets a known SMS-only number skip the doomed iMessage attempt (and its
+    ~45s verification wait) on every later step of the sequence.
+    """
+    phone_key = _normalize_phone(phone)
+    conn = _chat_db_connect()
+    if not phone_key or conn is None:
+        return None
+    try:
+        cursor = conn.execute(
+            """
+            SELECT m.service, h.id
+            FROM message m
+            JOIN handle h ON h.ROWID = m.handle_id
+            WHERE m.is_from_me = 1 AND m.is_sent = 1 AND m.error = 0
+            ORDER BY m.ROWID DESC
+            LIMIT 400
+            """
+        )
+        for service, handle in cursor:
+            if _normalize_phone(str(handle or "")) == phone_key:
+                name = str(service or "").lower()
+                if name in _SMS_LIKE_SERVICES:
+                    return "sms"
+                if name == "imessage":
+                    return "imessage"
+        return None
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+
+
+def send_text(phone: str, body: str) -> tuple[bool, str | None, str | None]:
+    """Send one outreach text and confirm it actually left. Returns (ok, error, service).
+
+    Tries at most two transports — the one history says works for this number
+    (default iMessage), then SMS if iMessage came back Not Delivered — so a
+    single queue item can never loop.
+    """
+    preferred = _preferred_service(phone) or "imessage"
+    plan = [preferred]
+    if preferred == "imessage" and SMS_FALLBACK_ENABLED:
+        plan.append("sms")
+
+    problems: list[str] = []
+    for service in plan:
+        if service == "sms" and not messages_service_available("sms"):
+            problems.append(
+                "no SMS service — enable Text Message Forwarding for this Mac on "
+                "the paired iPhone (Settings → Messages → Text Message Forwarding)"
+            )
+            break
+
+        watermark = _chat_db_max_rowid()
+        accepted, error = _applescript_send(phone, body, service)
+        if not accepted:
+            problems.append(f"{service}: {error}")
+            continue
+
+        state, detail, actual = _await_delivery(phone, watermark)
+        if state == DELIVERY_FAILED:
+            problems.append(f"{service}: not delivered ({detail})")
+            continue
+        if state == DELIVERY_PENDING and detail:
+            # Verification unavailable (usually chat.db/TCC). Trust the accept
+            # rather than re-sending blind and double-texting the contact.
+            logger.warning("send to %s: %s", phone, detail)
+        return True, None, (actual or service)
+
+    return False, "; ".join(problems) or "unknown send failure", None
+
+
+def send_imessage(phone: str, body: str) -> tuple[bool, str | None]:
+    """Back-compat shim for callers that predate the SMS fallback."""
+    ok, error, _service = send_text(phone, body)
+    return ok, error
 
 
 def pump_imessage_queue() -> int:
@@ -162,7 +392,7 @@ def pump_imessage_queue() -> int:
 
     results = []
     for message in messages:
-        ok, error = send_imessage(str(message["phone"]), str(message["body"]))
+        ok, error, service = send_text(str(message["phone"]), str(message["body"]))
         results.append(
             {
                 "id": message["id"],
@@ -173,7 +403,7 @@ def pump_imessage_queue() -> int:
         logger.info(
             "outreach text %s → %s%s",
             message["id"],
-            "sent" if ok else "FAILED",
+            f"sent via {service}" if ok else "FAILED",
             f" ({error})" if error else "",
         )
         time.sleep(SEND_DELAY_SECONDS)

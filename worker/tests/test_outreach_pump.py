@@ -278,3 +278,214 @@ def test_chat_scan_does_not_advance_state_on_post_failure(tmp_path, monkeypatch)
     )
     assert pump.scan_chat_db({"5615550100"}) == 1
     assert posted["m"][0]["external_id"] == "chatdb:g1"
+
+
+# --- send path: delivery verification + SMS fallback ----------------------
+
+
+def _make_send_db(path: Path, rows=()):
+    """Empty chat.db carrying the outbound status columns, plus optional history.
+
+    Rows are (handle, service, is_sent, is_delivered, error).
+    """
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT)")
+    conn.execute(
+        "CREATE TABLE message (ROWID INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " service TEXT, is_from_me INTEGER, is_sent INTEGER,"
+        " is_delivered INTEGER, error INTEGER, handle_id INTEGER)"
+    )
+    conn.commit()
+    conn.close()
+    for row in rows:
+        _append_send_row(path, *row)
+
+
+def _append_send_row(path: Path, handle, service, is_sent, is_delivered, error):
+    """Append one outbound row, the way Messages.app would after a send."""
+    conn = sqlite3.connect(path)
+    found = conn.execute(
+        "SELECT ROWID FROM handle WHERE id = ?", (handle,)
+    ).fetchone()
+    if found:
+        handle_id = found[0]
+    else:
+        handle_id = conn.execute(
+            "INSERT INTO handle (id) VALUES (?)", (handle,)
+        ).lastrowid
+    conn.execute(
+        "INSERT INTO message (service, is_from_me, is_sent, is_delivered, error,"
+        " handle_id) VALUES (?, 1, ?, ?, ?, ?)",
+        (service, is_sent, is_delivered, error, handle_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _stub_sends(pump, monkeypatch, *, sms_available=True):
+    """Record every AppleScript send instead of touching Messages.app."""
+    calls = []
+    monkeypatch.setattr(pump.sys, "platform", "darwin")
+    monkeypatch.setattr(pump, "SEND_VERIFY_POLL_SECONDS", 0)
+    monkeypatch.setattr(pump, "SEND_VERIFY_SECONDS", 0)
+    monkeypatch.setattr(
+        pump, "messages_service_available", lambda service: sms_available
+    )
+
+    def fake_send(phone, body, service):
+        calls.append((phone, body, service))
+        return True, None
+
+    monkeypatch.setattr(pump, "_applescript_send", fake_send)
+    return calls
+
+
+def test_send_falls_back_to_sms_when_imessage_not_delivered(tmp_path, monkeypatch):
+    """The Proven Theory v5 bug: a non-iMessage number silently stayed 'sent'."""
+    pump = _load_pump()
+    db_path = tmp_path / "chat.db"
+    _make_send_db(db_path)
+    monkeypatch.setattr(pump, "CHAT_DB", db_path)
+    calls = _stub_sends(pump, monkeypatch)
+
+    # iMessage attempt lands a Not Delivered row (error != 0); the SMS retry
+    # lands a clean row — the same sequence Messages.app writes.
+    outcomes = iter([("iMessage", 0, 0, 1), ("SMS", 1, 0, 0)])
+    real_send = pump._applescript_send
+
+    def send_then_advance(phone, body, service):
+        result = real_send(phone, body, service)
+        _append_send_row(db_path, "+17864083193", *next(outcomes))
+        return result
+
+    monkeypatch.setattr(pump, "_applescript_send", send_then_advance)
+
+    ok, error, service = pump.send_text("+17864083193", "hi")
+    assert ok is True
+    assert error is None
+    assert service == "SMS"
+    assert [c[2] for c in calls] == ["imessage", "sms"]
+
+
+def test_send_reports_failure_when_no_sms_service(tmp_path, monkeypatch):
+    """Without Text Message Forwarding there is no fallback — say so, don't lie."""
+    pump = _load_pump()
+    db_path = tmp_path / "chat.db"
+    _make_send_db(db_path)
+    monkeypatch.setattr(pump, "CHAT_DB", db_path)
+    _stub_sends(pump, monkeypatch, sms_available=False)
+    real_send = pump._applescript_send
+
+    def send_then_fail(phone, body, service):
+        result = real_send(phone, body, service)
+        _append_send_row(db_path, "+17864083193", "iMessage", 0, 0, 1)
+        return result
+
+    monkeypatch.setattr(pump, "_applescript_send", send_then_fail)
+
+    ok, error, service = pump.send_text("+17864083193", "hi")
+    assert ok is False
+    assert service is None
+    assert "not delivered" in error
+    assert "Text Message Forwarding" in error
+
+
+def test_send_confirms_delivered_imessage_without_fallback(tmp_path, monkeypatch):
+    pump = _load_pump()
+    db_path = tmp_path / "chat.db"
+    _make_send_db(db_path)
+    monkeypatch.setattr(pump, "CHAT_DB", db_path)
+    calls = _stub_sends(pump, monkeypatch)
+    real_send = pump._applescript_send
+
+    def send_then_deliver(phone, body, service):
+        result = real_send(phone, body, service)
+        _append_send_row(db_path, "+15615550100", "iMessage", 1, 1, 0)
+        return result
+
+    monkeypatch.setattr(pump, "_applescript_send", send_then_deliver)
+
+    ok, error, service = pump.send_text("+15615550100", "hi")
+    assert (ok, error, service) == (True, None, "iMessage")
+    assert [c[2] for c in calls] == ["imessage"]
+
+
+def test_send_prefers_sms_for_a_known_sms_only_number(tmp_path, monkeypatch):
+    """History says SMS worked here, so skip the doomed iMessage attempt."""
+    pump = _load_pump()
+    db_path = tmp_path / "chat.db"
+    _make_send_db(db_path, [("+17864083193", "SMS", 1, 0, 0)])
+    monkeypatch.setattr(pump, "CHAT_DB", db_path)
+    calls = _stub_sends(pump, monkeypatch)
+
+    ok, _error, _service = pump.send_text("+17864083193", "hi")
+    assert ok is True
+    assert [c[2] for c in calls] == ["sms"]
+
+
+def test_send_treats_unverifiable_delivery_as_sent(tmp_path, monkeypatch):
+    """No chat.db (TCC denied) must not turn every send into a double-text."""
+    pump = _load_pump()
+    monkeypatch.setattr(pump, "CHAT_DB", tmp_path / "missing.db")
+    calls = _stub_sends(pump, monkeypatch)
+
+    ok, error, service = pump.send_text("+15615550100", "hi")
+    assert (ok, error) == (True, None)
+    assert service == "imessage"
+    assert [c[2] for c in calls] == ["imessage"]
+
+
+def test_send_never_tries_more_than_two_transports(tmp_path, monkeypatch):
+    """Both transports failing must terminate, not loop."""
+    pump = _load_pump()
+    db_path = tmp_path / "chat.db"
+    _make_send_db(db_path)
+    monkeypatch.setattr(pump, "CHAT_DB", db_path)
+    calls = _stub_sends(pump, monkeypatch)
+    real_send = pump._applescript_send
+
+    def always_fail(phone, body, service):
+        result = real_send(phone, body, service)
+        _append_send_row(db_path, "+17864083193", service, 0, 0, 22)
+        return result
+
+    monkeypatch.setattr(pump, "_applescript_send", always_fail)
+
+    ok, error, _service = pump.send_text("+17864083193", "hi")
+    assert ok is False
+    assert len(calls) == 2
+    assert error.count("not delivered") == 2
+
+
+def test_pump_marks_failed_send_failed_not_sent(monkeypatch):
+    """The CRM must hear 'failed' when Messages could not deliver."""
+    pump = _load_pump()
+    monkeypatch.setattr(pump.sys, "platform", "darwin")
+    monkeypatch.setattr(pump, "SEND_DELAY_SECONDS", 0)
+    monkeypatch.setenv("CRM_API_URL", "https://crm.example")
+    monkeypatch.setenv("CRM_API_KEY", "test")
+    monkeypatch.setattr(
+        pump, "send_text", lambda phone, body: (False, "imessage: not delivered", None)
+    )
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"messages": [{"id": "m1", "phone": "+17864083193", "body": "hi"}]}
+
+    posted = {}
+    monkeypatch.setattr(pump.requests, "get", lambda *a, **k: FakeResponse())
+    monkeypatch.setattr(
+        pump.requests,
+        "post",
+        lambda url, headers=None, json=None, timeout=None: posted.update(
+            results=json["results"]
+        )
+        or FakeResponse(),
+    )
+
+    assert pump.pump_imessage_queue() == 1
+    assert posted["results"][0]["status"] == "failed"
+    assert "not delivered" in posted["results"][0]["error"]

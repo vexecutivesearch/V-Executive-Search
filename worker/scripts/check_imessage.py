@@ -27,7 +27,20 @@ logger = logging.getLogger(__name__)
 
 
 def check_imessage(address: str) -> bool | None:
-    """Return True if address resolves as iMessage, False if SMS-only, None if unknown."""
+    """Return True if the address is textable at all, False if not, None if unknown.
+
+    NOT a real iMessage-capability test, despite the name. ``buddy "x" of
+    service`` is an AppleScript reference specifier, not a lookup: it resolves
+    for any well-formed address, so this returns True even for numbers with no
+    Apple account (verified on the release Mac against an unassigned number).
+    Messages resolves capability asynchronously through IDS and exposes no
+    synchronous AppleScript equivalent.
+
+    So treat True as "presumed textable" — the gate that keeps text steps off
+    contacts with no usable phone at all. Which transport actually carries the
+    message is decided at send time by outreach_pump.send_text(), which
+    verifies delivery in chat.db and falls back to SMS.
+    """
     escaped = address.replace("\\", "\\\\").replace('"', '\\"')
     script = f'''
     tell application "Messages"
@@ -137,9 +150,9 @@ def run_imessage_checks(*, limit: int = 50, delay: float = 2.0) -> int:
             if capable is None:
                 continue
             patch_imessage(base_url, api_key, contact["id"], capable)
-            label = "iMessage" if capable else "SMS only"
+            label = "textable (transport decided at send)" if capable else "not textable"
             logger.info(
-                "iMessage: %s — %s (%s)",
+                "text check: %s — %s (%s)",
                 contact.get("name"),
                 label,
                 address,
