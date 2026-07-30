@@ -9,6 +9,10 @@ import { parseJobLocation } from "@/lib/location-match";
 
 export const DEFAULT_TIMEZONE = "America/New_York";
 
+/** Backdate for "send now" schedules so `scheduled_for <= now` holds for the
+ * dispatch pass that runs immediately after queuing. */
+const DUE_NOW_BACKDATE_MS = 1_000;
+
 /** US state/territory → primary IANA timezone (majority-population zone). */
 const STATE_TIMEZONES: Record<string, string> = {
   AL: "America/Chicago",
@@ -239,9 +243,9 @@ export function scheduleSendAt(options: {
   const jitter = Math.floor(random() * windowMinutes);
   const hour = windowStartHour + Math.floor(jitter / 60);
   const minute = jitter % 60;
-  let scheduled = dateInTimezone(wc.year, wc.month, wc.day, hour, minute, timeZone);
+  const scheduled = dateInTimezone(wc.year, wc.month, wc.day, hour, minute, timeZone);
 
-  // Day-0: if we're already inside today's send window, send almost immediately
+  // Day-0: if we're already inside today's send window, send immediately
   // (not a random later slot 15–60 minutes out). Outside the window → next weekday.
   if (offsetDays === 0) {
     const nowWc = wallClock(base, timeZone);
@@ -251,9 +255,11 @@ export function scheduleSendAt(options: {
       nowWc.hour >= windowStartHour &&
       nowWc.hour < windowEndHour;
     if (inWindow) {
-      // 5–45 seconds ahead so dispatch/worker can pick it up without looking deferred.
-      const secondsAhead = 5 + Math.floor(random() * 40);
-      return new Date(base.getTime() + secondsAhead * 1000);
+      // Must be already due, not seconds ahead: every consumer selects on
+      // `scheduled_for <= now`, and enrollFlow runs its dispatch pass
+      // milliseconds after queuing. Any positive lead makes that pass a no-op
+      // and costs a whole cron window (email) or worker poll (iMessage).
+      return new Date(base.getTime() - DUE_NOW_BACKDATE_MS);
     }
     if (scheduled <= base) {
       return scheduleSendAt({ ...options, offsetDays: 1 });

@@ -106,7 +106,7 @@ describe("scheduleSendAt (weekday sends, contact-local hours, jitter)", () => {
     expect(wc.hour).toBeLessThan(19);
   });
 
-  it("day-0 mid-window sends within about a minute, not a later random slot", () => {
+  it("day-0 mid-window is already due so the enroll dispatch pass sends it", () => {
     const midWindow = new Date("2026-07-15T20:00:00Z"); // 3 PM CT Wednesday
     const scheduled = scheduleSendAt({
       base: midWindow,
@@ -116,8 +116,60 @@ describe("scheduleSendAt (weekday sends, contact-local hours, jitter)", () => {
       windowEndHour: 19,
       random: () => 0.5,
     });
-    expect(scheduled.getTime()).toBeGreaterThan(midWindow.getTime());
-    expect(scheduled.getTime() - midWindow.getTime()).toBeLessThan(60_000);
+    // enrollFlow queues the step, then runs runOutreachDispatch(new Date())
+    // milliseconds later. Both that pass and the Mac worker's iMessage poll
+    // select on `scheduled_for <= now`, so a future scheduled_for silently
+    // costs a full 15-min cron window / 5-min poll.
+    expect(scheduled.getTime()).toBeLessThanOrEqual(midWindow.getTime());
+    expect(midWindow.getTime() - scheduled.getTime()).toBeLessThan(60_000);
+  });
+
+  it("day-0 in-window is due regardless of the jitter draw", () => {
+    // Regression: the 5–45s random lead made the enroll dispatch a guaranteed
+    // no-op for every possible draw (Proven Theory LLC v4, 2026-07-30).
+    const enrolledAt = new Date("2026-07-30T21:24:50.534Z"); // 5:24:50 PM ET Thu
+    for (const draw of [0, 0.425, 0.5, 0.999]) {
+      const scheduled = scheduleSendAt({
+        base: enrolledAt,
+        offsetDays: 0,
+        timeZone: "America/New_York",
+        windowStartHour: 9,
+        windowEndHour: 19,
+        random: () => draw,
+      });
+      expect(scheduled.getTime()).toBeLessThanOrEqual(enrolledAt.getTime());
+    }
+  });
+
+  it("day-0 late in the extended window (6 PM ET) still sends same day", () => {
+    // Boundary check for the 17→19 window change: 6 PM ET is in window.
+    const sixPmEt = new Date("2026-07-30T22:00:00Z"); // 6 PM ET Thursday
+    const scheduled = scheduleSendAt({
+      base: sixPmEt,
+      offsetDays: 0,
+      timeZone: "America/New_York",
+      windowStartHour: 9,
+      windowEndHour: 19,
+      random: () => 0.5,
+    });
+    expect(scheduled.getTime()).toBeLessThanOrEqual(sixPmEt.getTime());
+  });
+
+  it("day-0 past the window end (7 PM ET) defers to the next weekday", () => {
+    const sevenPmEt = new Date("2026-07-30T23:00:00Z"); // 7 PM ET Thursday
+    const scheduled = scheduleSendAt({
+      base: sevenPmEt,
+      offsetDays: 0,
+      timeZone: "America/New_York",
+      windowStartHour: 9,
+      windowEndHour: 19,
+      random: () => 0.5,
+    });
+    expect(scheduled.getTime()).toBeGreaterThan(sevenPmEt.getTime());
+    const wc = wallClock(scheduled, "America/New_York");
+    expect(wc.weekday).toBe(5); // Friday
+    expect(wc.hour).toBeGreaterThanOrEqual(9);
+    expect(wc.hour).toBeLessThan(19);
   });
 });
 

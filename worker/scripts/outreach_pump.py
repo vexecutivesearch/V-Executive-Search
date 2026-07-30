@@ -243,7 +243,19 @@ def scan_chat_db(watch_phones: set[str]) -> int:
         rows = cursor.fetchall()
         conn.close()
     except sqlite3.Error as exc:
-        logger.warning("chat.db scan failed: %s", exc)
+        # "unable to open database file" here is almost always macOS TCC, not a
+        # corrupt db: stat() succeeds so CHAT_DB.exists() passed, but the read is
+        # denied. It silently disables ALL inbound-text ingestion, so say so.
+        if "unable to open database file" in str(exc).lower():
+            logger.error(
+                "chat.db unreadable — inbound texts are NOT being ingested. Grant "
+                "Full Disk Access to the worker Python (%s) in System Settings → "
+                "Privacy & Security → Full Disk Access, then: launchctl kickstart "
+                "-k gui/$UID/com.vexecsearch.poll",
+                Path(sys.executable).resolve(),
+            )
+        else:
+            logger.warning("chat.db scan failed: %s", exc)
         return 0
 
     if not rows:
