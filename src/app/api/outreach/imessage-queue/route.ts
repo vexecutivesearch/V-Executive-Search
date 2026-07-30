@@ -40,7 +40,14 @@ export async function GET(request: NextRequest) {
         eq(outreachMessages.status, "queued"),
         eq(outreachMessages.channel, "imessage"),
         lte(outreachMessages.scheduledFor, now),
-        eq(sequenceEnrollments.status, "active"),
+        // Include post-reply statuses so SMS auto-replies queued in the same
+        // tick as a status flip still leave the Mac worker.
+        inArray(sequenceEnrollments.status, [
+          "active",
+          "replied_positive",
+          "waiting_on_manual",
+          "replied_negative",
+        ]),
         isNotNull(sequenceEnrollments.phoneNumber),
       ),
     )

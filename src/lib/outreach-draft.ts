@@ -362,7 +362,11 @@ export async function draftEnrollmentReply(options: {
   inboundSnippet: string;
   availabilityLines?: string[];
   includeSchedulingLink?: string | null;
+  /** Match the inbound channel — SMS replies must stay short. */
+  channel?: "email" | "imessage";
 }): Promise<string | null> {
+  const channel = options.channel ?? "email";
+  const isSms = channel === "imessage";
   const exemplars = await activeTemplatesForKind(options.replyKind);
   const exemplarBlock = exemplars[0]
     ? sanitizeExemplarForPrompt(exemplars[0].exampleBody)
@@ -371,23 +375,29 @@ export async function draftEnrollmentReply(options: {
   let situation: string;
   let extraRules: string;
   if (options.replyKind === "reply_positive") {
-    situation =
-      "You are replying to a POSITIVE response to a recruiter's outreach email. Keep the thread going naturally.";
+    situation = isSms
+      ? "You are replying by SMS / iMessage to a POSITIVE text. Keep it to 1 to 3 short sentences."
+      : "You are replying to a POSITIVE response to a recruiter's outreach email. Keep the thread going naturally.";
     extraRules = options.includeSchedulingLink
       ? `Include this scheduling link on its own line so they can book a 30 min call (do not invent other URLs):\n${options.includeSchedulingLink}`
-      : `Offer EXACTLY these availability windows, as a short plain-text list, verbatim:\n${(options.availabilityLines ?? []).join("\n")}`;
+      : isSms
+        ? `Offer one clear next step. Availability windows if given:\n${(options.availabilityLines ?? []).slice(0, 3).join("\n") || "(none — ask when works)"}`
+        : `Offer EXACTLY these availability windows, as a short plain-text list, verbatim:\n${(options.availabilityLines ?? []).join("\n")}`;
   } else if (options.replyKind === "reply_info_request") {
-    situation =
-      "You are acknowledging an INFO REQUEST reply. Thank them, confirm you will answer their question properly, and offer a quick call if easier. Do NOT invent fees, timelines, candidate names, or process details.";
+    situation = isSms
+      ? "You are acknowledging an INFO REQUEST by SMS. One or two short sentences."
+      : "You are acknowledging an INFO REQUEST reply. Thank them, confirm you will answer their question properly, and offer a quick call if easier. Do NOT invent fees, timelines, candidate names, or process details.";
     extraRules =
       "Do not answer the substantive question yet. Promise a proper follow up. Keep it short.";
   } else {
-    situation =
-      "You are closing a thread after a DECLINE / not interested reply. Be brief and gracious.";
+    situation = isSms
+      ? "You are closing a text thread after a DECLINE. One short gracious sentence."
+      : "You are closing a thread after a DECLINE / not interested reply. Be brief and gracious.";
     extraRules =
-      "No calendar ask. No hard push. One light door open is fine. Under 500 characters.";
+      "No calendar ask. No hard push. One light door open is fine.";
   }
 
+  const maxChars = isSms ? 280 : 900;
   const prompt = `${situation}
 
 FACTS:
@@ -402,11 +412,12 @@ STYLE EXEMPLAR (voice reference only — write a NEW reply for THIS contact):
 ${exemplarBlock}
 
 HARD RULES:
-- Plain text. Short (under 900 characters). Warm, professional, human.
+- Plain text. ${isSms ? `SMS length: under ${maxChars} characters.` : `Short (under ${maxChars} characters).`} Warm, professional, human.
 - No placeholders like [Name] or {{company}}.
-- NEVER use dashes or hyphens of any kind. Write "follow up", "hands on", "long term" instead.
+- NEVER use dashes or hyphens of any kind in words. Write "follow up", "hands on", "long term" instead. URLs may keep their hyphens.
 - No links unless a scheduling link was explicitly provided above.
 - Do not repeat their message back to them.
+${isSms ? "- No email signature. No subject line. Text like a person texting from a phone." : ""}
 
 Respond with ONLY the reply body (no subject, no signature).`;
 
@@ -414,7 +425,7 @@ Respond with ONLY the reply body (no subject, no signature).`;
     const raw = await anthropic(prompt);
     if (!raw) return null;
     const check = sanitizeOutreachBody(raw, {
-      channel: "email",
+      channel: isSms ? "imessage" : "email",
       allowLinks: Boolean(options.includeSchedulingLink),
     });
     if (check.ok) return check.cleaned;

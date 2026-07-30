@@ -131,13 +131,24 @@ async function sendThreadedAutoReply(options: {
   inbound: InboundMessage;
   replyKind: ReplyTemplateKind;
   includeSchedulingLink?: boolean;
-}): Promise<{ sent: boolean; usedCalendar: boolean }> {
+}): Promise<{ sent: boolean; queued: boolean; usedCalendar: boolean; channel: "email" | "imessage" }> {
   const { enrollment, inbound, replyKind } = options;
   const settings = await getOrCreateOutreachSettings();
   const context = await contextForEnrollment(enrollment);
-  if (!context || !enrollment.emailAddress) return { sent: false, usedCalendar: false };
+  if (!context) {
+    return { sent: false, queued: false, usedCalendar: false, channel: "email" };
+  }
 
-  const needsAvailability = replyKind === "reply_positive" && !options.includeSchedulingLink;
+  // Reply on the same channel they used.
+  const preferSms =
+    inbound.channel === "imessage" && Boolean(enrollment.phoneNumber);
+  const channel: "email" | "imessage" = preferSms ? "imessage" : "email";
+  if (channel === "email" && !enrollment.emailAddress) {
+    return { sent: false, queued: false, usedCalendar: false, channel };
+  }
+
+  const needsAvailability =
+    replyKind === "reply_positive" && !options.includeSchedulingLink;
   const availability = needsAvailability
     ? await suggestAvailability()
     : { lines: [] as string[], fromCalendar: false };
@@ -151,13 +162,64 @@ async function sendThreadedAutoReply(options: {
     inboundSnippet: inbound.rawBody.slice(0, 800),
     availabilityLines: availability.lines,
     includeSchedulingLink: schedulingLink,
+    channel,
   });
-  if (!body) return { sent: false, usedCalendar: availability.fromCalendar };
+  if (!body) {
+    return {
+      sent: false,
+      queued: false,
+      usedCalendar: availability.fromCalendar,
+      channel,
+    };
+  }
+
+  if (channel === "imessage") {
+    // Queue for the Mac mini Messages.app worker (cannot send from Vercel).
+    const [queued] = await db
+      .insert(outreachMessages)
+      .values({
+        enrollmentId: enrollment.id,
+        stepKind: replyKind,
+        channel: "imessage",
+        status: "queued",
+        body,
+        approvedAt: new Date(),
+        scheduledFor: new Date(Date.now() - 1_000),
+      })
+      .returning({ id: outreachMessages.id });
+    await logEnrollmentEvent({
+      enrollmentId: enrollment.id,
+      eventType: "rule_action",
+      actor: `rule:${replyKind}`,
+      payload: {
+        auto_reply: true,
+        reply_kind: replyKind,
+        channel: "imessage",
+        queued_message_id: queued?.id ?? null,
+        scheduling_link: Boolean(schedulingLink),
+      },
+    });
+    return {
+      sent: false,
+      queued: true,
+      usedCalendar: availability.fromCalendar,
+      channel: "imessage",
+    };
+  }
 
   const previous = await lastSentEmail(enrollment.id);
-  const apiKey = resolveProfileApiKey(null);
-  const from = defaultFromAddress();
-  if (!apiKey || !from) return { sent: false, usedCalendar: availability.fromCalendar };
+  const { pickSendingProfile } = await import("@/lib/outreach/profiles");
+  const pick = await pickSendingProfile("email_domain");
+  const sendFrom = pick?.profile?.fromAddress ?? defaultFromAddress();
+  const sendKey = resolveProfileApiKey(pick?.profile ?? null);
+  if (!sendKey || !sendFrom) {
+    return {
+      sent: false,
+      queued: false,
+      usedCalendar: availability.fromCalendar,
+      channel: "email",
+    };
+  }
 
   const footer = emailFooter({
     senderName: process.env.OUTREACH_SENDER_NAME ?? "Alejandro O Delgado",
@@ -168,11 +230,13 @@ async function sendThreadedAutoReply(options: {
   });
 
   const result = await sendOutreachEmail({
-    apiKey,
-    from,
-    to: enrollment.emailAddress,
+    apiKey: sendKey,
+    from: sendFrom,
+    to: enrollment.emailAddress!,
     replyTo: settings.replyToAddress,
-    subject: previous?.subject ? `Re: ${previous.subject.replace(/^re:\s*/i, "")}` : "Re: your reply",
+    subject: previous?.subject
+      ? `Re: ${previous.subject.replace(/^re:\s*/i, "")}`
+      : "Re: your reply",
     textBody: `${body}\n${footer}`,
     inReplyTo: previous?.messageId ?? null,
   });
@@ -196,13 +260,19 @@ async function sendThreadedAutoReply(options: {
       payload: {
         auto_reply: true,
         reply_kind: replyKind,
+        channel: "email",
         threaded_to: previous?.messageId ?? null,
         from_calendar: availability.fromCalendar,
         scheduling_link: Boolean(schedulingLink),
       },
     });
   }
-  return { sent: result.ok, usedCalendar: availability.fromCalendar };
+  return {
+    sent: result.ok,
+    queued: false,
+    usedCalendar: availability.fromCalendar,
+    channel: "email",
+  };
 }
 
 /** Data-deletion purge: drafts + inbound bodies, full suppression, audit. */
@@ -308,14 +378,16 @@ export async function applyReplyRules(
     case "positive":
     case "positive_link_request": {
       await stopPendingSteps(enrollment.id, actor);
-      await setEnrollmentStatus(enrollment, "replied_positive", actor, "positive reply");
       const replyKind = replyKindForIntent(intent) ?? "reply_positive";
+      // Queue/send the channel-matched reply BEFORE flipping enrollment
+      // status — iMessage worker only dequeues active-ish enrollments.
       const reply = await sendThreadedAutoReply({
         enrollment,
         inbound,
         replyKind,
         includeSchedulingLink: true,
       });
+      await setEnrollmentStatus(enrollment, "replied_positive", actor, "positive reply");
       // Company → meeting track.
       await db
         .update(companies)
@@ -333,15 +405,22 @@ export async function applyReplyRules(
         actor,
         payload: {
           auto_reply_sent: reply.sent,
+          auto_reply_queued: reply.queued,
+          reply_channel: reply.channel,
           reply_kind: replyKind,
           used_calendar: reply.usedCalendar,
           siblings_cancelled: cancelled,
           company_status: "meeting",
         },
       });
+      const replyState = reply.sent
+        ? "sent"
+        : reply.queued
+          ? "queued SMS"
+          : "FAILED — manual";
       return {
         intent,
-        actionTaken: `stopped; ${replyKind} (${reply.sent ? "sent" : "FAILED — manual"}); ${cancelled} sibling(s) cancelled; company → meeting`,
+        actionTaken: `stopped; ${replyKind} via ${reply.channel} (${replyState}); ${cancelled} sibling(s) cancelled; company → meeting`,
       };
     }
 
@@ -367,13 +446,20 @@ export async function applyReplyRules(
         payload: {
           hand_off: true,
           auto_reply_sent: reply.sent,
+          auto_reply_queued: reply.queued,
+          reply_channel: reply.channel,
           reply_kind: replyKind,
           quoted_ask: snippet,
         },
       });
+      const replyState = reply.sent
+        ? "sent"
+        : reply.queued
+          ? "queued SMS"
+          : "FAILED";
       return {
         intent,
-        actionTaken: `${replyKind} (${reply.sent ? "sent" : "FAILED"}); stopped automation; handed off with quoted ask`,
+        actionTaken: `${replyKind} via ${reply.channel} (${replyState}); stopped automation; handed off with quoted ask`,
       };
     }
 
@@ -401,14 +487,21 @@ export async function applyReplyRules(
         actor,
         payload: {
           auto_reply_sent: reply.sent,
+          auto_reply_queued: reply.queued,
+          reply_channel: reply.channel,
           reply_kind: replyKind,
           suppressed_contact: enrollment.contactId,
           colleagues_unaffected: true,
         },
       });
+      const replyState = reply.sent
+        ? "sent"
+        : reply.queued
+          ? "queued SMS"
+          : "FAILED";
       return {
         intent,
-        actionTaken: `${replyKind} (${reply.sent ? "sent" : "FAILED"}); contact suppressed (colleagues continue)`,
+        actionTaken: `${replyKind} via ${reply.channel} (${replyState}); contact suppressed (colleagues continue)`,
       };
     }
 
