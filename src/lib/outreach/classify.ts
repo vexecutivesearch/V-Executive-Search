@@ -162,8 +162,8 @@ unknown — cannot tell → pause for human review
 Rules:
 - A positive that mentions a calendar/scheduling link is positive_link_request, NOT info_request.
 - Auto replies are always ooo.
-- If they ask a real question AND also want a call, prefer positive (the call answers the question).
-- Prefer info_request over courtesy when there is a concrete ask.
+- If they ask a real question AND also want a call / say they are interested, prefer positive (the call answers the question).
+- Prefer info_request over courtesy when there is a concrete ask with no interest signal.
 - Prefer negative over courtesy when they decline interest.
 - The playbook exemplars are OUR outbound style for each intent. Use them to decide which bucket the inbound belongs in.
 

@@ -96,35 +96,46 @@ def _save_state(state: dict[str, Any]) -> None:
 def send_imessage(phone: str, body: str) -> tuple[bool, str | None]:
     """Send one text via Messages.app. Returns (ok, error)."""
     escaped_body = body.replace("\\", "\\\\").replace('"', '\\"')
-    escaped_phone = phone.replace("\\", "\\\\").replace('"', '\\"')
-    script = f'''
-    tell application "Messages"
-        set imessageServices to (every service whose service type is iMessage)
-        if (count of imessageServices) is 0 then return "error: no iMessage service (signed out?)"
-        set targetService to item 1 of imessageServices
-        try
-            set targetBuddy to buddy "{escaped_phone}" of targetService
-            send "{escaped_body}" to targetBuddy
-            return "sent"
-        on error errMsg
-            return "error: " & errMsg
-        end try
-    end tell
-    '''
-    try:
-        result = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        out = (result.stdout or "").strip()
-        if out == "sent":
-            return True, None
-        return False, out or (result.stderr or "").strip() or "unknown osascript failure"
-    except (subprocess.SubprocessError, OSError) as exc:
-        return False, str(exc)
+    # Prefer E.164; also try digits-only buddy form if + fails.
+    raw = "".join(ch for ch in phone if ch.isdigit() or ch == "+")
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    candidates = []
+    for candidate in (raw, digits, f"+{digits}" if digits and not digits.startswith("+") else None):
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    last_error = "unknown osascript failure"
+    for escaped_phone in candidates:
+        escaped_phone = escaped_phone.replace("\\", "\\\\").replace('"', '\\"')
+        script = f'''
+        tell application "Messages"
+            set imessageServices to (every service whose service type is iMessage)
+            if (count of imessageServices) is 0 then return "error: no iMessage service (signed out?)"
+            set targetService to item 1 of imessageServices
+            try
+                set targetBuddy to buddy "{escaped_phone}" of targetService
+                send "{escaped_body}" to targetBuddy
+                return "sent"
+            on error errMsg
+                return "error: " & errMsg
+            end try
+        end tell
+        '''
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            out = (result.stdout or "").strip()
+            if out == "sent":
+                return True, None
+            last_error = out or (result.stderr or "").strip() or "unknown osascript failure"
+        except (subprocess.SubprocessError, OSError) as exc:
+            last_error = str(exc)
+    return False, last_error
 
 
 def pump_imessage_queue() -> int:
@@ -337,7 +348,12 @@ def _imap_connect(host: str, port: int, user: str):
 
 
 def poll_imap() -> int:
-    """Poll the Reply-To mailbox for new mail; post to the CRM. Returns count."""
+    """Poll the Reply-To mailbox for new mail; post to the CRM. Returns count.
+
+    Posts one message at a time and advances imap_last_uid after each success.
+    Bulk posts of ~100 timed out on the CRM (each inbound may LLM-classify),
+    so the UID cursor never moved and real replies sat invisible in IMAP.
+    """
     host = os.environ.get("OUTREACH_IMAP_HOST", "")
     user = os.environ.get("OUTREACH_IMAP_USER", "")
     password = (os.environ.get("OUTREACH_IMAP_PASSWORD") or "").strip()
@@ -352,6 +368,8 @@ def poll_imap() -> int:
 
     folder = os.environ.get("OUTREACH_IMAP_FOLDER", "INBOX")
     port = int(os.environ.get("OUTREACH_IMAP_PORT", "993"))
+    post_timeout = max(30, int(os.environ.get("OUTREACH_IMAP_POST_TIMEOUT", "120")))
+    max_per_tick = max(1, int(os.environ.get("OUTREACH_IMAP_MAX_PER_TICK", "15")))
     state = _load_state()
     last_uid = int(state.get("imap_last_uid") or 0)
 
@@ -367,9 +385,8 @@ def poll_imap() -> int:
         logger.warning("IMAP poll failed: %s", exc)
         return 0
 
-    inbound = []
-    max_uid = last_uid
-    for uid in uids[:100]:
+    posted_total = 0
+    for uid in uids[:max_per_tick]:
         try:
             status, msg_data = client.uid("fetch", str(uid), "(RFC822)")
             if status != "OK" or not msg_data or msg_data[0] is None:
@@ -379,17 +396,22 @@ def poll_imap() -> int:
         except (imaplib.IMAP4.error, OSError, TypeError) as exc:
             logger.warning("IMAP fetch uid=%s failed: %s", uid, exc)
             continue
-        max_uid = max(max_uid, uid)
 
         from_header = _decode_header(message.get("From"))
         from_addr = email.utils.parseaddr(from_header)[1]
-        # Skip our own sends landing in the mailbox.
+        # Skip our own sends landing in the mailbox — still advance cursor.
         if from_addr.lower() == user.lower():
+            last_uid = max(last_uid, uid)
+            state["imap_last_uid"] = last_uid
+            _save_state(state)
             continue
         message_id = (message.get("Message-ID") or "").strip()
         in_reply_to = (message.get("In-Reply-To") or "").strip() or None
         body = _plain_body(message).strip()
         if not body:
+            last_uid = max(last_uid, uid)
+            state["imap_last_uid"] = last_uid
+            _save_state(state)
             continue
         date_header = message.get("Date")
         received_at = None
@@ -399,40 +421,47 @@ def poll_imap() -> int:
             except (TypeError, ValueError):
                 received_at = None
 
-        inbound.append(
-            {
-                "channel": "email",
-                "from": from_addr,
-                "subject": _decode_header(message.get("Subject")),
-                "body": body[:20000],
-                "external_id": f"imap:{message_id or uid}",
-                **({"in_reply_to": in_reply_to} if in_reply_to else {}),
-                **({"received_at": received_at} if received_at else {}),
-            }
-        )
+        item = {
+            "channel": "email",
+            "from": from_addr,
+            "subject": _decode_header(message.get("Subject")),
+            "body": body[:20000],
+            "external_id": f"imap:{message_id or uid}",
+            **({"in_reply_to": in_reply_to} if in_reply_to else {}),
+            **({"received_at": received_at} if received_at else {}),
+        }
+
+        try:
+            requests.post(
+                f"{base}/api/outreach/inbound",
+                headers=_headers(key),
+                json={"messages": [item]},
+                timeout=post_timeout,
+            ).raise_for_status()
+            posted_total += 1
+            last_uid = max(last_uid, uid)
+            state["imap_last_uid"] = last_uid
+            _save_state(state)
+        except requests.RequestException as exc:
+            logger.warning(
+                "inbound email post failed (uid=%s); will retry next tick: %s",
+                uid,
+                exc,
+            )
+            break
 
     try:
         client.logout()
     except (imaplib.IMAP4.error, OSError):
         pass
 
-    if inbound:
-        try:
-            requests.post(
-                f"{base}/api/outreach/inbound",
-                headers=_headers(key),
-                json={"messages": inbound},
-                timeout=60,
-            ).raise_for_status()
-            logger.info("posted %d inbound email(s) from IMAP", len(inbound))
-        except requests.RequestException as exc:
-            logger.warning("inbound email post failed: %s", exc)
-            return 0  # don't advance uid — retry next tick
-
-    if max_uid > last_uid:
-        state["imap_last_uid"] = max_uid
-        _save_state(state)
-    return len(inbound)
+    if posted_total:
+        logger.info(
+            "posted %d inbound email(s) from IMAP (last_uid=%s)",
+            posted_total,
+            last_uid,
+        )
+    return posted_total
 
 
 # --------------------------------------------------------------------------
