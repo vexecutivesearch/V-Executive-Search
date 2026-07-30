@@ -62,7 +62,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   let body: {
-    action?: "create" | "save_version" | "activate" | "archive" | "simulate" | "migrate";
+    action?:
+      | "create"
+      | "save_version"
+      | "activate"
+      | "archive"
+      | "delete"
+      | "simulate"
+      | "migrate";
     flowId?: string;
     name?: string;
     graph?: FlowGraph;
@@ -147,6 +154,62 @@ export async function POST(request: NextRequest) {
       payload: { action: `flow_${body.action}`, flow_id: body.flowId },
     });
     return NextResponse.json({ flow: updated });
+  }
+
+  if (body.action === "delete") {
+    if (!body.flowId) return NextResponse.json({ error: "flowId required" }, { status: 400 });
+    const [flow] = await db
+      .select()
+      .from(outreachFlows)
+      .where(eq(outreachFlows.id, body.flowId))
+      .limit(1);
+    if (!flow) return NextResponse.json({ error: "flow not found" }, { status: 404 });
+    if (flow.isLocked) {
+      return NextResponse.json(
+        { error: "locked flows cannot be deleted" },
+        { status: 422 },
+      );
+    }
+    if (flow.status !== "draft") {
+      return NextResponse.json(
+        {
+          error:
+            "only draft flows can be deleted — archive an active flow instead",
+        },
+        { status: 422 },
+      );
+    }
+    const versions = await db
+      .select({ id: outreachFlowVersions.id })
+      .from(outreachFlowVersions)
+      .where(eq(outreachFlowVersions.flowId, flow.id));
+    if (versions.length) {
+      const [enrolled] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(sequenceEnrollments)
+        .where(
+          inArray(
+            sequenceEnrollments.flowVersionId,
+            versions.map((v) => v.id),
+          ),
+        );
+      if (Number(enrolled?.count ?? 0) > 0) {
+        return NextResponse.json(
+          {
+            error:
+              "this draft has enrollments pinned to a saved version — archive it instead of deleting",
+          },
+          { status: 422 },
+        );
+      }
+    }
+    await db.delete(outreachFlows).where(eq(outreachFlows.id, flow.id));
+    await logEnrollmentEvent({
+      eventType: "manual_intervention",
+      actor: "user",
+      payload: { action: "flow_delete", flow_id: flow.id, name: flow.name },
+    });
+    return NextResponse.json({ ok: true, deletedId: flow.id });
   }
 
   if (body.action === "simulate") {

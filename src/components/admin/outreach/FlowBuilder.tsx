@@ -14,9 +14,9 @@ import {
   type Node,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type { OutreachFlow } from "@/lib/db/schema";
+import type { OutreachFlow, OutreachTemplate } from "@/lib/db/schema";
 import type { FlowEdge, FlowGraph, FlowNode, FlowNodeType } from "@/lib/outreach/flow-types";
-import { api, Badge, btn, btnPrimary, input, label as labelCls, statusTone } from "./shared";
+import { api, Badge, btn, btnDanger, btnPrimary, input, label as labelCls, statusTone } from "./shared";
 
 type VersionRow = {
   id: string;
@@ -113,9 +113,12 @@ export function FlowBuilder() {
   const [message, setMessage] = useState<string | null>(null);
   const [simulation, setSimulation] = useState<SimulationStep[] | null>(null);
   const [simulating, setSimulating] = useState(false);
-  const [simDraft, setSimDraft] = useState(false);
+  /** Simulate send nodes with a live Claude draft by default. */
+  const [simDraft, setSimDraft] = useState(true);
   const [simIntent, setSimIntent] = useState("");
   const [newFlowName, setNewFlowName] = useState("");
+  const [templates, setTemplates] = useState<OutreachTemplate[]>([]);
+  const [deletingFlow, setDeletingFlow] = useState(false);
   const nodeSeq = useRef(1);
 
   const loadFlows = useCallback(async () => {
@@ -126,6 +129,11 @@ export function FlowBuilder() {
 
   useEffect(() => {
     loadFlows().catch((e) => setMessage(String(e)));
+    api<{ templates: OutreachTemplate[] }>("/api/admin/outreach/templates")
+      .then((data) => setTemplates(data.templates ?? []))
+      .catch(() => {
+        /* non-fatal — preview falls back to empty */
+      });
   }, [loadFlows]);
 
   const openFlow = async (flow: OutreachFlow) => {
@@ -268,8 +276,45 @@ export function FlowBuilder() {
     await openFlow(result.flow);
   };
 
+  const deleteDraftFlow = async (flow: OutreachFlow) => {
+    if (flow.status !== "draft" || flow.isLocked) return;
+    const ok = window.confirm(
+      `Delete draft flow “${flow.name}”? This cannot be undone.`,
+    );
+    if (!ok) return;
+    setDeletingFlow(true);
+    setMessage(null);
+    try {
+      await api("/api/admin/outreach/flows", {
+        method: "POST",
+        body: JSON.stringify({ action: "delete", flowId: flow.id }),
+      });
+      if (selectedFlow?.id === flow.id) {
+        setSelectedFlow(null);
+        setNodes([]);
+        setEdges([]);
+        setVersions([]);
+        setSelectedNodeId(null);
+        setSimulation(null);
+      }
+      setMessage(`Deleted draft “${flow.name}”.`);
+      await loadFlows();
+    } catch (e) {
+      setMessage(String(e));
+    } finally {
+      setDeletingFlow(false);
+    }
+  };
+
   const config = (selectedNode?.data as { config?: Record<string, unknown> })?.config ?? {};
   const flowType = (selectedNode?.data as { flowType?: string })?.flowType;
+  const selectedStepKind = String(config.stepKind ?? "intro");
+  const templatePreviews = useMemo(() => {
+    if (flowType !== "send") return [];
+    return templates.filter(
+      (t) => t.kind === selectedStepKind && t.isActive !== false,
+    );
+  }, [flowType, selectedStepKind, templates]);
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6">
@@ -289,18 +334,31 @@ export function FlowBuilder() {
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
         {flows.map((flow) => (
-          <button
-            key={flow.id}
-            onClick={() => openFlow(flow)}
-            className={`px-3 py-1.5 rounded-full text-xs font-medium border ${
-              selectedFlow?.id === flow.id
-                ? "bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900 border-transparent"
-                : "border-gray-300 dark:border-gray-700"
-            }`}
-          >
-            {flow.name} {flow.isLocked && "🔒"}{" "}
-            <Badge tone={statusTone(flow.status)}>{flow.status}</Badge>
-          </button>
+          <div key={flow.id} className="inline-flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => openFlow(flow)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border ${
+                selectedFlow?.id === flow.id
+                  ? "bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900 border-transparent"
+                  : "border-gray-300 dark:border-gray-700"
+              }`}
+            >
+              {flow.name} {flow.isLocked && "🔒"}{" "}
+              <Badge tone={statusTone(flow.status)}>{flow.status}</Badge>
+            </button>
+            {flow.status === "draft" && !flow.isLocked && (
+              <button
+                type="button"
+                className={btnDanger}
+                disabled={deletingFlow}
+                title="Delete this draft flow"
+                onClick={() => deleteDraftFlow(flow)}
+              >
+                Delete
+              </button>
+            )}
+          </div>
         ))}
         <div className="flex gap-1">
           <input
@@ -347,7 +405,16 @@ export function FlowBuilder() {
                 Activate
               </button>
             )}
-            <label className="text-xs flex items-center gap-1">
+            {selectedFlow.status === "draft" && !selectedFlow.isLocked && (
+              <button
+                className={btnDanger}
+                disabled={deletingFlow}
+                onClick={() => deleteDraftFlow(selectedFlow)}
+              >
+                Delete draft
+              </button>
+            )}
+            <label className="text-xs flex items-center gap-1" title="Simulate Send nodes with a live Claude draft (on by default)">
               <input
                 type="checkbox"
                 checked={simDraft}
@@ -444,7 +511,7 @@ export function FlowBuilder() {
                           <label className={labelCls}>Step kind (template binding)</label>
                           <select
                             className={input}
-                            value={String(config.stepKind ?? "intro")}
+                            value={selectedStepKind}
                             disabled={selectedFlow.isLocked}
                             onChange={(e) => updateSelectedNode({ config: { stepKind: e.target.value } })}
                           >
@@ -454,6 +521,43 @@ export function FlowBuilder() {
                               </option>
                             ))}
                           </select>
+                        </div>
+                        <div className="rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 p-3">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500 mb-2">
+                            Template preview ({selectedStepKind})
+                          </p>
+                          {templatePreviews.length === 0 ? (
+                            <p className="text-xs text-gray-400">
+                              No active templates for this step kind. Add some under
+                              Admin → Outreach → Templates — Claude uses them as
+                              few-shot style exemplars when drafting.
+                            </p>
+                          ) : (
+                            <div className="space-y-3 max-h-72 overflow-y-auto">
+                              {templatePreviews.map((t) => (
+                                <div
+                                  key={t.id}
+                                  className="text-xs border-b border-gray-200 dark:border-gray-800 last:border-0 pb-2 last:pb-0"
+                                >
+                                  <p className="font-medium text-gray-800 dark:text-gray-200">
+                                    {t.name}
+                                    <span className="ml-1 text-[10px] font-normal text-gray-400">
+                                      · {t.channel}
+                                    </span>
+                                  </p>
+                                  {t.exampleSubject && (
+                                    <p className="mt-1 text-gray-600 dark:text-gray-300">
+                                      <span className="text-gray-400">Subject: </span>
+                                      {t.exampleSubject}
+                                    </p>
+                                  )}
+                                  <pre className="mt-1 whitespace-pre-wrap font-sans text-gray-600 dark:text-gray-400">
+                                    {t.exampleBody}
+                                  </pre>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </>
                     )}
