@@ -215,9 +215,68 @@ def _is_substantive_imessage_text(text: str | None) -> bool:
     return bool(cleaned)
 
 
+# typedstream encodes an integer as one byte, or a marker byte followed by a
+# little-endian width: 0x81 → 2 bytes, 0x82 → 4, 0x83 → 8.
+_TYPEDSTREAM_INT_WIDTHS = {0x81: 2, 0x82: 4, 0x83: 8}
+
+
+def _decode_attributed_body(blob: object) -> str:
+    """Extract the plain body from a Messages ``attributedBody`` blob.
+
+    Current macOS leaves ``message.text`` NULL and archives the body only in
+    ``attributedBody`` (an NSArchiver "streamtyped" blob), so a NULL-text row is
+    a real message rather than an empty one. The layout is the ``NSString``
+    class name, a short type tag ending in ``+``, then a length-prefixed UTF-8
+    payload; anything unparseable yields "" and is skipped as non-substantive.
+    """
+    if not blob:
+        return ""
+    try:
+        data = bytes(blob)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return ""
+
+    marker = data.find(b"NSString")
+    if marker < 0:
+        return ""
+    # Scan a short window for the tag terminator so a tag tweak in a future
+    # macOS release degrades to "skipped", never to a crash.
+    tag = data.find(b"+", marker, marker + 16)
+    if tag < 0:
+        return ""
+
+    cursor = tag + 1
+    if cursor >= len(data):
+        return ""
+    length = data[cursor]
+    cursor += 1
+    width = _TYPEDSTREAM_INT_WIDTHS.get(length)
+    if width is not None:
+        length = int.from_bytes(data[cursor : cursor + width], "little")
+        cursor += width
+    if length <= 0 or cursor + length > len(data):
+        return ""
+    return data[cursor : cursor + length].decode("utf-8", errors="replace")
+
+
+def _chat_db_has_attributed_body(conn: sqlite3.Connection) -> bool:
+    try:
+        return any(
+            row[1] == "attributedBody"
+            for row in conn.execute("PRAGMA table_info(message)")
+        )
+    except sqlite3.Error:
+        return False
+
+
 def scan_chat_db(watch_phones: set[str]) -> int:
     """Post inbound texts from watched numbers. Returns count posted."""
-    if sys.platform != "darwin" or not CHAT_DB.exists() or not watch_phones:
+    if sys.platform != "darwin" or not CHAT_DB.exists():
+        return 0
+    if not watch_phones:
+        # An empty watchlist disables inbound texts wholesale, and the only way
+        # that happens legitimately is "nobody is enrolled with a phone".
+        logger.warning("chat.db scan skipped — watchlist is empty")
         return 0
     crm = _crm()
     if not crm:
@@ -229,12 +288,18 @@ def scan_chat_db(watch_phones: set[str]) -> int:
 
     try:
         conn = sqlite3.connect(f"file:{CHAT_DB}?mode=ro", uri=True)
+        if _chat_db_has_attributed_body(conn):
+            body_column = "m.attributedBody"
+            body_filter = "(m.text IS NOT NULL OR m.attributedBody IS NOT NULL)"
+        else:
+            body_column = "NULL"
+            body_filter = "m.text IS NOT NULL"
         cursor = conn.execute(
-            """
-            SELECT m.ROWID, m.guid, m.text, m.date, m.is_from_me, h.id
+            f"""
+            SELECT m.ROWID, m.guid, m.text, m.date, m.is_from_me, h.id, {body_column}
             FROM message m
             JOIN handle h ON h.ROWID = m.handle_id
-            WHERE m.ROWID > ? AND m.text IS NOT NULL
+            WHERE m.ROWID > ? AND {body_filter}
             ORDER BY m.ROWID ASC
             LIMIT 500
             """,
@@ -259,17 +324,23 @@ def scan_chat_db(watch_phones: set[str]) -> int:
         return 0
 
     if not rows:
+        logger.info(
+            "chat.db scan: no new rows past rowid=%d (%d number(s) watched)",
+            last_rowid,
+            len(watch_phones),
+        )
         return 0
 
     inbound = []
     max_rowid = last_rowid
-    for rowid, guid, text, apple_date, is_from_me, handle in rows:
+    for rowid, guid, text, apple_date, is_from_me, handle, attributed_body in rows:
         max_rowid = max(max_rowid, int(rowid))
         # Filter self-sent messages — otherwise our own outbound texts loop
         # back as "replies".
         if is_from_me:
             continue
-        if not _is_substantive_imessage_text(text):
+        body = str(text) if text else _decode_attributed_body(attributed_body)
+        if not _is_substantive_imessage_text(body):
             continue
         phone = _normalize_phone(str(handle or ""))
         if not phone or phone not in watch_phones:
@@ -285,11 +356,19 @@ def scan_chat_db(watch_phones: set[str]) -> int:
             {
                 "channel": "imessage",
                 "from": str(handle),
-                "body": str(text),
+                "body": body,
                 "external_id": f"chatdb:{guid}",
                 "received_at": received.isoformat(),
             }
         )
+
+    logger.info(
+        "chat.db scan: %d row(s) past rowid=%d, %d inbound from %d watched number(s)",
+        len(rows),
+        last_rowid,
+        len(inbound),
+        len(watch_phones),
+    )
 
     if inbound:
         try:
@@ -496,6 +575,12 @@ def poll_imap() -> int:
 def fetch_watchlist() -> set[str]:
     crm = _crm()
     if not crm:
+        # Without this the pump looks healthy while ingesting nothing: an empty
+        # watchlist makes scan_chat_db a no-op.
+        logger.warning(
+            "watchlist unavailable — CRM_API_URL/CRM_API_KEY unset "
+            "(load_worker_env() not called?)"
+        )
         return set()
     base, key = crm
     try:
