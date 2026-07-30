@@ -101,11 +101,29 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
 fi
 
 echo "→ Swapping release checkout"
+# The rollback copy only has to be runnable, not a live worktree, so a plain mv
+# is enough — git's registration for it is dropped by the prune below.
 rm -rf "$PREVIOUS_CHECKOUT"
 if [[ -d "$RELEASE_CHECKOUT" ]]; then
   mv "$RELEASE_CHECKOUT" "$PREVIOUS_CHECKOUT"
 fi
-mv "$TMP_CHECKOUT" "$RELEASE_CHECKOUT"
+# With the release path empty its old registration is finally prunable, which
+# frees the name for the incoming worktree.
+git -C "$SOURCE_REPO_ROOT" worktree prune
+# `git worktree move`, not mv: git has to know the checkout by its final path.
+# A plain mv leaves it registered under the temp name and therefore prunable, so
+# the prune above would delete its metadata on the *next* promotion. The checkout
+# keeps running either way — launchd only needs the files — while every
+# `git rev-parse` inside it reports a stale SHA. That is exactly the SHA the
+# worker sends to Admin, so the drift check goes blind precisely when it matters.
+git -C "$SOURCE_REPO_ROOT" worktree move "$TMP_CHECKOUT" "$RELEASE_CHECKOUT"
+
+reported="$(git -C "$RELEASE_CHECKOUT" rev-parse HEAD 2>/dev/null || true)"
+if [[ "$reported" != "$TARGET_SHA" ]]; then
+  echo "Release checkout reports SHA '${reported:-<none>}', expected $TARGET_SHA."
+  echo "Admin drift detection reads that value, so refusing to finish silently."
+  exit 1
+fi
 
 echo "→ Installing launchd from release checkout"
 WORKER_ENV_FILE="$RUNTIME_ENV_FILE" bash "$RELEASE_CHECKOUT/worker/scripts/install_launchd.sh"
