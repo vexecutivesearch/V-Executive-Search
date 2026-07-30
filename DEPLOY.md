@@ -191,6 +191,13 @@ Reply-aware sequencing lives at **/admin/outreach** (+ `/admin/outreach/flows`
 visual builder). It ships **OFF + dry-run + approval-gated** — nothing sends
 until the switches are flipped deliberately.
 
+**Live auto-send** (Call List add → draft + queue + send) requires all of:
+Master send **On**, Dry-run **Off**, Approval gate **Off** (or Call List
+auto-approve), and Auto-enroll **On**. Day 0 queues intro email **and** a
+same-day iMessage when the contact is iMessage-capable; email goes out via
+Resend in the contact-local send window; SMS only leaves when the **Mac worker**
+is running and polling `/api/outreach/imessage-queue`.
+
 Setup checklist:
 
 1. `npm run db:push` — creates the outreach tables (templates, enrollments,

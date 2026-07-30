@@ -85,11 +85,15 @@ I'll keep this short. If filling that role is still a priority, I'd welcome ten 
 If the timing isn't right, no problem at all. Happy to reconnect whenever hiring picks back up.`,
   },
   {
-    name: "Text 1, post email intro",
-    legacyNames: ["Text 1, post-email intro", "Text 1, post intro"],
+    name: "Text 1, same day intro",
+    legacyNames: [
+      "Text 1, post email intro",
+      "Text 1, post-email intro",
+      "Text 1, post intro",
+    ],
     kind: "text_1",
     channel: "imessage",
-    exampleBody: `Hey, my name is Alejandro with V Executive Search. I've sent you an email about your Senior SCADA Controls Systems Engineer opening in West Palm Beach. When is a good time to chat?`,
+    exampleBody: `Hey, my name is Alejandro with V Executive Search. I've just emailed you about your Senior SCADA Controls Systems Engineer opening in West Palm Beach. When is a good time to chat?`,
   },
   {
     name: "Text 2, value nudge",

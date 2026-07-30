@@ -63,26 +63,26 @@ export function OverviewTab() {
       key: "enabled",
       title: "Master send switch (kill switch)",
       description:
-        "OFF = nothing sends anywhere (email or text), no matter what flows say. This is the system-level override above all sequences.",
+        "OFF = nothing sends anywhere (email or text), no matter what flows say. Must be ON together with Dry-run Off for live Call List / enroll sends.",
       danger: true,
     },
     {
       key: "dryRun",
       title: "Dry-run mode",
       description:
-        "Drafts and schedules everything but never sends — use this to preview the pipeline end-to-end.",
+        "ON = draft and queue everything but never send. OFF = live sends when Master send is also On (email via Resend in the send window; SMS via the Mac worker iMessage queue).",
     },
     {
       key: "requireApproval",
       title: "Approval gate",
       description:
-        "Every drafted message must be approved in the Approvals tab before dispatch will send it.",
+        "ON = every drafted message must be approved in Approvals before send. OFF = enroll auto-approves, queues day-0 email + SMS, and dispatches when Master is On and Dry-run is Off.",
     },
     {
       key: "autoEnroll",
       title: "Auto-enroll on call list",
       description:
-        "When you add a company to the call list, the primary contact is enrolled with a personalized email + SMS sequence drafted from their job listings (also runs after enrich ingest). Manual enroll stays available either way.",
+        "When you add a company to the call list, the primary contact is enrolled with a personalized email + same-day SMS sequence drafted from their job listings (also runs after enrich ingest). Manual enroll stays available either way.",
     },
     {
       key: "workEmailPreferred",

@@ -27,6 +27,12 @@ export type SendNodeConfig = {
   stepKind: OutreachTemplateKind;
   /** Optional template binding; default picks active templates of the kind. */
   templateId?: string;
+  /**
+   * After queuing this step, continue to the next node in the same advance
+   * pass (do not wait for delivery). Used so day-0 email + SMS both queue
+   * together; each channel's dispatcher still sends independently.
+   */
+  advanceOnQueue?: boolean;
 };
 
 export type ConditionNodeConfig = {

@@ -135,11 +135,11 @@ const STEP_GUIDANCE: Record<string, string> = {
   intro:
     "First cold email about the PRIMARY job listing. Match the successful examples: short paragraphs, specific role + location, clear value (speed / hands on / fit), soft ask for a quick call. 3 to 5 short paragraphs. No signature (system appends it).",
   followup_1:
-    "Second email, same thread, about 2 days later. Brief nudge that references the earlier note and the same open role(s). One new proof point. Soft ask. 2 to 3 short paragraphs.",
+    "Second email, same thread, about 2 days after the day-0 intro (and same-day SMS if sent). Brief nudge that references the earlier note and the same open role(s). One new proof point. Soft ask. 2 to 3 short paragraphs.",
   followup_2:
     "Final email. Very short, graceful, low pressure, leaves the door open. 2 short paragraphs.",
   text_1:
-    "First SMS / iMessage after the intro email. Pattern: identify as Alejandro with V Executive Search (or Villatoro Executive Search), say you emailed about their open role(s), ask when a good time to chat is. 1 to 2 short sentences, under 280 characters. Example voice: \"Hey, my name is Alejandro with V Executive Search. I've sent you an email about your [role] opening. When is a good time to chat?\"",
+    "First SMS / iMessage same day as the intro email (may go out together or right after). Pattern: identify as Alejandro with V Executive Search (or Villatoro Executive Search), say you just emailed about their open role(s), ask when a good time to chat is. 1 to 2 short sentences, under 280 characters. Example voice: \"Hey, my name is Alejandro with V Executive Search. I've just emailed you about your [role] opening. When is a good time to chat?\"",
   text_2:
     "Second SMS. One concrete proof point (speed / similar fills) + soft ask for a brief call. Under 280 characters.",
   text_3:

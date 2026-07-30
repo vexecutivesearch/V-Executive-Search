@@ -24,7 +24,13 @@ import { isSuppressed } from "@/lib/outreach/suppression";
 import { resolveContactTimezone } from "@/lib/outreach/timezone-infer";
 
 export type EnrollmentResult =
-  | { enrolled: true; enrollmentId: string; channelPlan: "email_and_text" | "email_only" }
+  | {
+      enrolled: true;
+      enrollmentId: string;
+      channelPlan: "email_and_text" | "email_only";
+      /** True when a live dispatch pass ran after enroll (email may send in-window). */
+      dispatched?: boolean;
+    }
   | { enrolled: false; reason: string };
 
 function pickEmail(
@@ -85,6 +91,11 @@ async function ineligibilityReason(
  * Enroll a single contact: drafts ALL steps transactionally (any step failing
  * the sanitizer after retries → no enrollment). Claude personalizes off the
  * pinned job listing when `jobListingId` is provided.
+ *
+ * When requireApproval is off (or autoApprove is set), messages are marked
+ * approved. When advanceNow is set — or live settings allow (enabled, not
+ * dry-run, approval not required / auto-approved) — the flow advances so
+ * day-0 steps queue, and a dispatch pass runs for in-window email send.
  */
 export async function enrollContact(
   contactId: string,
@@ -93,7 +104,7 @@ export async function enrollContact(
     actor?: string;
     /** Skip the Approvals tab for this enrollment (call-list path). */
     autoApprove?: boolean;
-    /** Advance the flow immediately so the intro is queued for dispatch. */
+    /** Advance the flow immediately so day-0 steps are queued for dispatch. */
     advanceNow?: boolean;
     /** Job listing the user selected — Claude personalizes off this role. */
     jobListingId?: string | null;
@@ -101,6 +112,13 @@ export async function enrollContact(
 ): Promise<EnrollmentResult> {
   const settings = await getOrCreateOutreachSettings();
   await seedOutreachTemplates();
+
+  const autoApprove =
+    Boolean(options?.autoApprove) || !settings.requireApproval;
+  // Advance whenever messages are approved (approval off, or call-list
+  // auto-approve) so day-0 steps queue even in dry-run for preview.
+  const advanceNow = Boolean(options?.advanceNow) || autoApprove;
+  const shouldDispatch = settings.enabled && !settings.dryRun && autoApprove;
 
   const [contact] = await db
     .select()
@@ -247,7 +265,7 @@ export async function enrollContact(
     })
     .returning();
 
-  const approvedAt = options?.autoApprove ? new Date() : null;
+  const approvedAt = autoApprove ? new Date() : null;
   await db.insert(outreachMessages).values(
     drafted.map((step) => ({
       enrollmentId: enrollment.id,
@@ -275,7 +293,7 @@ export async function enrollContact(
       steps: drafted.map((s) => s.stepKind),
       stagger_days: options?.staggerDays ?? 0,
       job_titles: context.jobTitles,
-      auto_approve: Boolean(options?.autoApprove),
+      auto_approve: autoApprove,
     },
   });
   await logEnrollmentEvent({
@@ -288,12 +306,16 @@ export async function enrollContact(
       primary_job_title: context.primaryJobTitle,
     },
   });
-  if (options?.autoApprove) {
+  if (autoApprove) {
     await logEnrollmentEvent({
       enrollmentId: enrollment.id,
       eventType: "approved",
-      actor: options.actor ?? "system",
-      payload: { steps: drafted.length, source: options.actor ?? "system" },
+      actor: options?.actor ?? "system",
+      payload: {
+        steps: drafted.length,
+        source: options?.actor ?? "system",
+        require_approval: settings.requireApproval,
+      },
     });
   }
 
@@ -317,7 +339,7 @@ export async function enrollContact(
     console.error("[outreach] call-list enroll note failed", error);
   }
 
-  if (options?.advanceNow) {
+  if (advanceNow) {
     try {
       const { advanceEnrollment } = await import("@/lib/outreach/flow-engine");
       const [fresh] = await db
@@ -331,10 +353,22 @@ export async function enrollContact(
     }
   }
 
+  let dispatched = false;
+  if (shouldDispatch) {
+    try {
+      const { runOutreachDispatch } = await import("@/lib/outreach/dispatch");
+      await runOutreachDispatch(new Date());
+      dispatched = true;
+    } catch (error) {
+      console.error("[outreach] dispatch after enroll failed", error);
+    }
+  }
+
   return {
     enrolled: true,
     enrollmentId: enrollment.id,
     channelPlan: textEligible ? "email_and_text" : "email_only",
+    dispatched,
   };
 }
 

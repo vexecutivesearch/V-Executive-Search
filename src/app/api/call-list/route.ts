@@ -127,8 +127,9 @@ export async function POST(request: NextRequest) {
 
   // Outreach: adding to the call list is the intentional trigger — draft a
   // personalized email+SMS sequence off the selected job listing, auto-approve,
-  // and advance so the intro is queued. Actual send still respects kill switch /
-  // dry-run on the Outreach Overview tab.
+  // and advance so day-0 email + SMS are queued. Actual send still respects
+  // Master send + dry-run on the Outreach Overview tab (enroll runs dispatch
+  // when enabled && !dryRun).
   let outreach: {
     enrolled: boolean;
     enrollmentId?: string;
@@ -151,13 +152,6 @@ export async function POST(request: NextRequest) {
           jobListingId,
         });
         outreach = { ...result };
-        if (result.enrolled && settings.enabled && !settings.dryRun) {
-          const { runOutreachDispatch } = await import(
-            "@/lib/outreach/dispatch"
-          );
-          await runOutreachDispatch(new Date());
-          outreach.dispatched = true;
-        }
       } else {
         outreach = { enrolled: false, reason: "auto_enroll disabled" };
       }

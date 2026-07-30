@@ -11,7 +11,7 @@ describe("default flow (phase-1 cadence as a locked flow)", () => {
     expect(validateFlowGraph(defaultFlowGraph())).toEqual([]);
   });
 
-  it("walks day 0→2→4→6→8→10: intro, text1, fu1, text2, fu2, text3", () => {
+  it("walks day 0 email+SMS → day 2/4/6/8 follow-ups", () => {
     const graph = defaultFlowGraph();
     const order: string[] = [];
     let node: string | null = "trigger";
@@ -22,18 +22,26 @@ describe("default flow (phase-1 cadence as a locked flow)", () => {
     expect(order).toEqual([
       "trigger",
       "send_intro",
-      "wait_1",
       "send_text_1",
-      "wait_2",
+      "wait_1",
       "send_followup_1",
-      "wait_3",
+      "wait_2",
       "send_text_2",
-      "wait_4",
+      "wait_3",
       "send_followup_2",
-      "wait_5",
+      "wait_4",
       "send_text_3",
       "complete",
     ]);
+  });
+
+  it("intro email advances on queue so same-day SMS can queue next", () => {
+    const intro = defaultFlowGraph().nodes.find((n) => n.id === "send_intro");
+    expect(intro?.config).toMatchObject({
+      channel: "email",
+      stepKind: "intro",
+      advanceOnQueue: true,
+    });
   });
 });
 

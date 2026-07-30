@@ -207,6 +207,10 @@ async function handleSendNode(
   }
 
   if (message && message.status === "queued") {
+    if (config.advanceOnQueue) {
+      // Companion steps (e.g. day-0 SMS) already queued — move on.
+      return "advance";
+    }
     // Already scheduled — wait for dispatch to send it.
     await saveState(enrollment, { nextStepAt: message.scheduledFor ?? now });
     return "waiting";
@@ -233,9 +237,10 @@ async function handleSendNode(
         action: "queued",
         step: config.stepKind,
         scheduled_for: scheduledFor.toISOString(),
+        advance_on_queue: Boolean(config.advanceOnQueue),
       },
     });
-    return "waiting";
+    return config.advanceOnQueue ? "advance" : "waiting";
   }
 
   // No pre-drafted message (flow-built send): draft at node entry.
@@ -265,7 +270,7 @@ async function handleSendNode(
     });
     state.retry_count = 0;
     await saveState(enrollment, { nodeState: state, nextStepAt: scheduledFor });
-    return "waiting";
+    return config.advanceOnQueue ? "advance" : "waiting";
   } catch (error) {
     const nextRetries = retries + 1;
     if (nextRetries >= MAX_NODE_RETRIES) {

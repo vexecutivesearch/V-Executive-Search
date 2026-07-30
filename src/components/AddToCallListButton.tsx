@@ -96,7 +96,7 @@ export function AddToCallListButton({
         setOutreachNote(
           data.outreach.dispatched
             ? `Outreach ${plan}, send queued`
-            : `Outreach ${plan} (check Admin → Outreach; enable + turn dry-run off to send)`,
+            : `Outreach ${plan} (Admin → Outreach: turn Master send On, Dry-run Off, Approval Off to auto-send)`,
         );
       } else if (data.outreach?.reason) {
         setOutreachNote(`Outreach skipped: ${data.outreach.reason}`);
