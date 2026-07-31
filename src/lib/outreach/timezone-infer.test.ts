@@ -157,6 +157,62 @@ describe("scheduleSendAt (weekday sends, contact-local hours, jitter)", () => {
     expect(scheduled.getTime()).toBeLessThanOrEqual(ninePmEt.getTime());
   });
 
+  it("day-0 out of hours puts the email and its text on the same instant", () => {
+    // The Autism One enroll at 7:39 AM ET: each step drew its own slot inside
+    // the 9 to 22 window, so the text landed 1:17 PM and the email 6:57 PM,
+    // and the text announcing the email arrived five hours before it.
+    const beforeWindow = new Date("2026-07-31T11:39:49Z"); // 7:39 AM ET Friday
+    const draws = [0, 0.2, 0.5, 0.999].map((draw) =>
+      scheduleSendAt({
+        base: beforeWindow,
+        offsetDays: 0,
+        timeZone: "America/New_York",
+        windowStartHour: 9,
+        windowEndHour: 22,
+        random: () => draw,
+      }).getTime(),
+    );
+    expect(new Set(draws).size).toBe(1);
+
+    const wc = wallClock(new Date(draws[0]), "America/New_York");
+    expect(wc.weekday).toBe(5); // same Friday
+    expect(wc.hour).toBe(9);
+    expect(wc.minute).toBe(0);
+  });
+
+  it("a testing window that has already opened makes the same add immediate", () => {
+    // The override is the lever for sending before production hours: at 7:39 AM
+    // with a 7 to 23 window the add is in window, so both steps are already due
+    // and the inline dispatch pass carries the email out.
+    const scheduled = scheduleSendAt({
+      base: new Date("2026-07-31T11:39:49Z"),
+      offsetDays: 0,
+      timeZone: "America/New_York",
+      windowStartHour: 7,
+      windowEndHour: 23,
+      random: () => 0.5,
+    });
+    expect(scheduled.getTime()).toBeLessThanOrEqual(
+      new Date("2026-07-31T11:39:49Z").getTime(),
+    );
+  });
+
+  it("day-0 after the window closes waits for the next open, not a random slot", () => {
+    const lateFriday = new Date("2026-08-01T03:00:00Z"); // 11 PM ET Friday
+    const scheduled = scheduleSendAt({
+      base: lateFriday,
+      offsetDays: 0,
+      timeZone: "America/New_York",
+      windowStartHour: 9,
+      windowEndHour: 22,
+      random: () => 0.9,
+    });
+    const wc = wallClock(scheduled, "America/New_York");
+    expect(wc.weekday).toBe(1); // Monday, weekend rolled forward
+    expect(wc.hour).toBe(9);
+    expect(wc.minute).toBe(0);
+  });
+
   it("day-0 past the window end (10 PM ET) defers to the next weekday", () => {
     const tenPmEt = new Date("2026-07-31T02:00:00Z"); // 10 PM ET Thursday
     const scheduled = scheduleSendAt({
