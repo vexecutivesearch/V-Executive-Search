@@ -1262,3 +1262,72 @@ def test_pending_record_for_one_message_is_never_duplicated(tmp_path, monkeypatc
     pending = pump._load_state()[pump.PENDING_STATE_KEY]
     assert list(pending) == ["m1"]
     assert pending["m1"]["rowid"] == 42
+
+
+# ---------------------------------------------------------------------------
+# Same-tick reply pass: an auto-reply queued from an inbound ingested THIS
+# tick must leave this tick, not wait ~5 minutes for the next poll (the
+# structural cause of v12's 10-minute texted reply on Jul 30, 2026).
+
+
+def _stub_pump_stages(mod, monkeypatch, texts_in: int, emails_in: int):
+    calls = {"pump": 0, "slept": []}
+
+    monkeypatch.setattr(mod, "resolve_pending_text_sends", lambda: 0)
+    monkeypatch.setattr(mod, "scan_chat_db", lambda watchlist: texts_in)
+    monkeypatch.setattr(mod, "fetch_watchlist", lambda: set())
+    monkeypatch.setattr(mod, "poll_imap", lambda: emails_in)
+    monkeypatch.setattr(mod.time, "sleep", lambda s: calls["slept"].append(s))
+
+    def fake_pump():
+        calls["pump"] += 1
+        # First pass has nothing; the follow-up pass finds the queued reply.
+        return 0 if calls["pump"] == 1 else 1
+
+    monkeypatch.setattr(mod, "pump_imessage_queue", fake_pump)
+    return calls
+
+
+def test_pump_runs_second_send_pass_when_inbound_arrived(monkeypatch):
+    mod = _load_pump()
+    calls = _stub_pump_stages(mod, monkeypatch, texts_in=1, emails_in=0)
+
+    stats = mod.run_outreach_pump()
+
+    assert calls["pump"] == 2, "expected a follow-up send pass after ingest"
+    assert stats["texts_sent"] == 1
+    assert calls["slept"], "follow-up pass should give the CRM a beat first"
+
+
+def test_pump_skips_second_pass_when_nothing_came_in(monkeypatch):
+    mod = _load_pump()
+    calls = _stub_pump_stages(mod, monkeypatch, texts_in=0, emails_in=0)
+
+    stats = mod.run_outreach_pump()
+
+    assert calls["pump"] == 1, "no inbound → no follow-up pass"
+    assert stats["texts_sent"] == 0
+    assert not calls["slept"]
+
+
+def test_pump_second_pass_failure_is_non_fatal(monkeypatch):
+    mod = _load_pump()
+    calls = {"pump": 0}
+
+    monkeypatch.setattr(mod, "resolve_pending_text_sends", lambda: 0)
+    monkeypatch.setattr(mod, "scan_chat_db", lambda watchlist: 0)
+    monkeypatch.setattr(mod, "fetch_watchlist", lambda: set())
+    monkeypatch.setattr(mod, "poll_imap", lambda: 2)
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    def flaky_pump():
+        calls["pump"] += 1
+        if calls["pump"] == 2:
+            raise RuntimeError("CRM hiccup")
+        return 0
+
+    monkeypatch.setattr(mod, "pump_imessage_queue", flaky_pump)
+
+    stats = mod.run_outreach_pump()  # must not raise
+    assert calls["pump"] == 2
+    assert stats["emails_in"] == 2

@@ -73,6 +73,11 @@ export async function sendOutreachEmail(options: {
   textBody: string;
   /** For threaded replies: Message-ID being replied to. */
   inReplyTo?: string | null;
+  /**
+   * RFC 8058 one-click unsubscribe URL. Gmail/Yahoo treat a missing
+   * List-Unsubscribe as a junk signal on cold sends.
+   */
+  unsubscribeUrl?: string | null;
 }): Promise<OutreachSendResult> {
   const messageId = buildMessageId(options.from);
   const headers: Record<string, string> = {
@@ -83,6 +88,13 @@ export async function sendOutreachEmail(options: {
   if (options.inReplyTo) {
     headers["In-Reply-To"] = options.inReplyTo;
     headers["References"] = options.inReplyTo;
+  }
+  if (options.unsubscribeUrl) {
+    const mailto = options.replyTo
+      ? `<mailto:${options.replyTo}?subject=unsubscribe>, `
+      : "";
+    headers["List-Unsubscribe"] = `${mailto}<${options.unsubscribeUrl}>`;
+    headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
   }
 
   try {

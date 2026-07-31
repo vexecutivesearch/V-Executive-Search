@@ -315,14 +315,36 @@ Setup checklist:
    for `email.delivered`, `email.bounced`, `email.complained`. The handler
    matches `resend_id` against outreach messages and ignores transactional app
    emails (a bounced daily report never dings a profile or suppresses anyone).
-4. Calendly → CRM Call Booked: create a webhook subscription for
+   **Verify it is live**: Admin → Outreach → Analytics profile counters —
+   `delivered` stuck at 0 while `sent` grows means the webhook is not
+   configured or the token mismatches, and bounces/complaints are invisible
+   (this was the case as of Jul 30, 2026 — 12 sends, 0 delivered events).
+   - Deliverability headers: outreach sends carry RFC 8058
+     `List-Unsubscribe` / `List-Unsubscribe-Post` (one-click) pointing at
+     `/api/unsubscribe`. Tokens are HMAC-signed with
+     `OUTREACH_UNSUBSCRIBE_SECRET` (falls back to `WORKER_API_KEY`); the URL
+     uses `NEXT_PUBLIC_APP_URL`. Both must be set on Vercel or the header is
+     omitted. GET shows a confirm page (mail scanners follow GETs); only POST
+     suppresses.
+   - Known junk signal, config not code: the From domain (`vexecsearch.com`
+     profiles) differs from the Reply-To domain (`vexecutivesearch.com`
+     watched mailbox). Fix by either watching a mailbox on the sending root
+     domain or sending from the watched domain — do NOT just drop Reply-To,
+     or replies stop reaching the IMAP poll and the whole reply loop dies.
+4. Call List statuses are funnel-ordered and automated writes only move
+   forward: a positive reply lands on **Replied — Interested**
+   (`replied_interested`); **Call Booked** (`meeting_scheduled`) is written
+   only by a real Calendly booking, and once booked no later reply intent can
+   demote the row (only a Calendly cancellation, or a terminal status like
+   opt-out). Manual edits in the UI can still set anything.
+5. Calendly → CRM Call Booked: create a webhook subscription for
    `invitee.created` + `invitee.canceled` →
    `https://v-executive-search-delta.vercel.app/api/webhooks/calendly?token=<CALENDLY_WEBHOOK_SECRET>`.
    Vercel env: `CALENDLY_WEBHOOK_SECRET` (required for `?token=`), optional
    `CALENDLY_WEBHOOK_SIGNING_KEY` (HMAC header verify), optional
    `CALENDLY_API_TOKEN` (hydrate start/end when the payload is URI-only).
    Outlook invites come from Calendly’s connected calendar for `odv@vexecutivesearch.com` (already set up) — the CRM does not push to Outlook.
-5. Worker env (`~/.vsearch/worker.env`) for the Reply-To mailbox:
+6. Worker env (`~/.vsearch/worker.env`) for the Reply-To mailbox:
    - `OUTREACH_IMAP_HOST=outlook.office365.com`
    - `OUTREACH_IMAP_USER=…`
    - **Preferred (M365 / GoDaddy):** `OUTREACH_MS_CLIENT_ID` (+ optional
@@ -335,11 +357,11 @@ Setup checklist:
    The existing 5-min poll agent pumps iMessage sends, chat.db inbound scans,
    and IMAP replies (`worker/scripts/outreach_pump.py`). Inbound texts also
    need [Full Disk Access](#full-disk-access-inbound-texts).
-6. Domain rotation: Admin → Outreach → Domains → add a sending subdomain →
+7. Domain rotation: Admin → Outreach → Domains → add a sending subdomain →
    create the shown SPF/DKIM/DMARC records → Verify DNS. Unverified profiles
    cannot send; verified ones warm up 5/day → +5 per clean week → ~50/day with
    automatic rollback on bounce >2% / complaint >0.1%.
-7. Crons are already in `vercel.json` (`/api/cron/outreach-dispatch` every
+8. Crons are already in `vercel.json` (`/api/cron/outreach-dispatch` every
    15 min). Contact-local send window defaults to **9–22** (9 AM–10 PM).
    Vercel cron is UTC: `*/15 12-23 * * 1-5` plus `*/15 0-6 * * 2-6` so
    dispatch keeps running through 10 PM Pacific year-round (and later ET).

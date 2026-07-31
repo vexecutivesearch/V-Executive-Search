@@ -1387,6 +1387,26 @@ def run_outreach_pump() -> dict[str, int]:
         stats["emails_in"] = poll_imap()
     except Exception as exc:  # noqa: BLE001
         logger.warning("IMAP pump failed (non-fatal): %s", exc)
+
+    # An inbound posted above is classified inline by the CRM, so its
+    # auto-reply text is usually queued within seconds. Without a second send
+    # pass that reply would sit until the NEXT tick, making the floor for a
+    # texted reply one full poll interval (~5 min) and the ceiling two
+    # (~10 min — exactly what v12 measured). Re-pump once so a reply earned
+    # this tick leaves this tick.
+    if stats["texts_in"] or stats["emails_in"]:
+        time.sleep(5)  # give the CRM a beat to finish classify + queue
+        try:
+            followup = pump_imessage_queue()
+            if followup:
+                logger.info(
+                    "same-tick reply pass sent %d text(s) for inbound(s) "
+                    "ingested this tick",
+                    followup,
+                )
+            stats["texts_sent"] += followup
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("same-tick reply pump failed (non-fatal): %s", exc)
     return stats
 
 

@@ -449,6 +449,7 @@ function scoreNameCandidate(options: {
   if (enrollment?.status === "replied_positive") score += 60;
   if (options.onCallList) score += 40;
   if (options.callStatus === "meeting_scheduled") score += 50;
+  if (options.callStatus === "replied_interested") score += 45;
   if (options.companyStatus === "meeting") score += 30;
   if (options.recentPositive) score += 70;
   if (options.calendlyLinkSent) score += 50;
@@ -658,7 +659,8 @@ export async function matchByInviteeName(
   }
   for (const entry of callListRows) {
     if (
-      entry.callStatus === "meeting_scheduled" &&
+      (entry.callStatus === "meeting_scheduled" ||
+        entry.callStatus === "replied_interested") &&
       (entry.callStatusUpdatedAt ?? entry.updatedAt) >= since
     ) {
       for (const c of poolContacts) {
@@ -1120,20 +1122,22 @@ export async function applyCalendlyBooking(
   }
 
   if (isCanceled) {
-    // Append cancel note; only revert meeting_scheduled → spoke_follow_up.
+    // Append cancel note; only revert meeting_scheduled. The contact had
+    // replied positively before booking, so a cancellation lands them back at
+    // Replied — Interested (needs a rebook), not merely follow-up.
     const [entry] = await db
       .select()
       .from(callListEntries)
       .where(eq(callListEntries.companyId, companyId))
       .limit(1);
 
-    let nextStatus: "spoke_follow_up" | undefined;
+    let nextStatus: "replied_interested" | undefined;
     if (
       entry &&
       entry.callStatus === "meeting_scheduled" &&
       !TERMINAL_STATUSES.has(entry.callStatus)
     ) {
-      nextStatus = "spoke_follow_up";
+      nextStatus = "replied_interested";
     }
 
     await recordCallListOutreachEvent({
@@ -1142,6 +1146,7 @@ export async function applyCalendlyBooking(
       summary: note,
       activityType: "note",
       callStatus: nextStatus,
+      allowRegression: true,
     });
 
     if (enrollment) {

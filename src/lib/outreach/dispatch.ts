@@ -26,6 +26,7 @@ import {
 } from "@/lib/outreach/resend-send";
 import { getOrCreateOutreachSettings } from "@/lib/outreach/settings";
 import { isSuppressed } from "@/lib/outreach/suppression";
+import { buildUnsubscribeUrl } from "@/lib/outreach/unsubscribe";
 
 /**
  * Dispatch pass (Vercel cron, every 15 min in window):
@@ -262,6 +263,7 @@ export async function runOutreachDispatch(now = new Date()): Promise<DispatchSum
       replyTo: profile?.replyToAddress ?? settings.replyToAddress,
       subject: message.subject ?? "Quick question",
       textBody: `${message.body}\n${footer}`,
+      unsubscribeUrl: buildUnsubscribeUrl(enrollment.emailAddress!),
     });
 
     if (result.ok) {

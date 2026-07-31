@@ -61,6 +61,7 @@ export const callStatusEnum = pgEnum("call_status", [
   "voicemail_left",
   "spoke_follow_up",
   "email_sent",
+  "replied_interested",
   "meeting_scheduled",
   "proposal_sent",
   "client_won",

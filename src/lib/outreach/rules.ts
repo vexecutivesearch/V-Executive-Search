@@ -533,11 +533,18 @@ export async function applyReplyRules(
         includeSchedulingLink: true,
       });
       await setEnrollmentStatus(enrollment, "replied_positive", actor, "positive reply");
-      // Company → meeting track.
+      // A positive reply means contacted-and-interested — the meeting track
+      // is reserved for an actual Calendly booking (applyCalendlyBooking).
+      // Only lift a company out of "new"; never demote meeting/client.
       await db
         .update(companies)
-        .set({ status: "meeting", updatedAt: new Date() })
-        .where(eq(companies.id, enrollment.companyId));
+        .set({ status: "contacted", updatedAt: new Date() })
+        .where(
+          and(
+            eq(companies.id, enrollment.companyId),
+            eq(companies.status, "new"),
+          ),
+        );
       const cancelled = await cancelSiblingEnrollments(
         enrollment.companyId,
         enrollment.id,
@@ -557,12 +564,12 @@ export async function applyReplyRules(
           reply_kind: replyKind,
           used_calendar: reply.usedCalendar,
           siblings_cancelled: cancelled,
-          company_status: "meeting",
+          call_status: "replied_interested",
         },
       });
       return {
         intent,
-        actionTaken: `stopped; ${replyKind} via ${reply.channel} (${describeReply(reply)}); ${cancelled} sibling(s) cancelled; company → meeting`,
+        actionTaken: `stopped; ${replyKind} via ${reply.channel} (${describeReply(reply)}); ${cancelled} sibling(s) cancelled; call list → replied_interested`,
       };
     }
 

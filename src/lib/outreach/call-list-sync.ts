@@ -5,7 +5,7 @@ import {
   companyActivities,
   type CallStatus,
 } from "@/lib/db/schema";
-import { TERMINAL_STATUSES } from "@/lib/call-status";
+import { canAutoAdvanceStatus, TERMINAL_STATUSES } from "@/lib/call-status";
 import { ensureNotesNewestFirst } from "@/lib/outreach/call-list-notes";
 
 /**
@@ -41,9 +41,16 @@ export async function recordCallListOutreachEvent(options: {
   bumpAttempt?: boolean;
   /**
    * Advance Call List workflow status. Skipped when the row is already in a
-   * terminal status (won / not interested / DNC / bad contact).
+   * terminal status (won / not interested / DNC / bad contact), and — unless
+   * allowRegression is set — when it would move the row BACKWARD in the
+   * funnel (a courtesy reply must not demote a booked call).
    */
   callStatus?: CallStatus;
+  /**
+   * Permit a backward move. Only for events that genuinely undo progress,
+   * e.g. a Calendly cancellation reverting Call Booked.
+   */
+  allowRegression?: boolean;
 }): Promise<void> {
   const line = stampLine(options.summary);
   try {
@@ -56,8 +63,12 @@ export async function recordCallListOutreachEvent(options: {
       const prev = ensureNotesNewestFirst(entry.notes).trim();
       const nextNotes = prev ? `${line}\n${prev}` : line;
       const terminal = TERMINAL_STATUSES.has(entry.callStatus);
-      const nextStatus =
-        options.callStatus && !terminal ? options.callStatus : entry.callStatus;
+      const advance =
+        options.callStatus &&
+        !terminal &&
+        (options.allowRegression ||
+          canAutoAdvanceStatus(entry.callStatus, options.callStatus));
+      const nextStatus = advance ? options.callStatus! : entry.callStatus;
       const statusChanged = nextStatus !== entry.callStatus;
       await db
         .update(callListEntries)
@@ -90,12 +101,18 @@ export async function recordCallListOutreachEvent(options: {
   }
 }
 
-/** Map inbound outreach intents onto Call List workflow statuses. */
+/**
+ * Map inbound outreach intents onto Call List workflow statuses.
+ *
+ * A positive reply is interest, not a booking: `meeting_scheduled` ("Call
+ * Booked") is reserved for applyCalendlyBooking, which fires only on a real
+ * Calendly invitee.created event.
+ */
 export function callStatusForReplyIntent(intent: string): CallStatus | undefined {
   switch (intent) {
     case "positive":
     case "positive_link_request":
-      return "meeting_scheduled";
+      return "replied_interested";
     case "info_request":
     case "courtesy":
       return "spoke_follow_up";
