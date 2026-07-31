@@ -17,9 +17,14 @@ import {
   sanitizeOutreachBody,
   sanitizeSubject,
 } from "@/lib/outreach/sanitizer";
+import { schedulingCallLength } from "@/lib/outreach/scheduling-link";
 
 const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 const MAX_DRAFT_ATTEMPTS = 3;
+
+/** How the prompts name the meeting, taken from the booking link itself. */
+const CALL_LENGTH = schedulingCallLength();
+const BOOKABLE_LENGTH = CALL_LENGTH ?? "a time";
 
 export type DraftContext = {
   contactName: string | null;
@@ -145,7 +150,7 @@ const STEP_GUIDANCE: Record<string, string> = {
   text_3:
     "Final SMS. Warm goodbye that leaves the door open. Under 220 characters.",
   reply_positive:
-    "Reply to a positive response. Warm, confirms interest. When a scheduling link is provided, put it on its own line so they can book 30 min; otherwise propose the given availability windows verbatim. Short.",
+    `Reply to a positive response. Warm, confirms interest. When a scheduling link is provided, put it on its own line so they can book ${BOOKABLE_LENGTH}; otherwise propose the given availability windows verbatim. Short.`,
   reply_info_request:
     "Reply acknowledging their question, promising a substantive follow up. Do not invent fees, process details, or candidate names. Short.",
   reply_decline:
@@ -384,7 +389,9 @@ export async function draftEnrollmentReply(options: {
       ? "You are replying by SMS / iMessage to a POSITIVE text. Keep it to 1 to 3 short sentences."
       : "You are replying to a POSITIVE response to a recruiter's outreach email. Keep the thread going naturally.";
     extraRules = options.includeSchedulingLink
-      ? `Include this scheduling link on its own line so they can book a 30 min call (do not invent other URLs):\n${options.includeSchedulingLink}`
+      ? `Include this scheduling link on its own line so they can book ${
+          CALL_LENGTH ? `a ${CALL_LENGTH} call` : "a call"
+        } (do not invent other URLs):\n${options.includeSchedulingLink}`
       : isSms
         ? `Offer one clear next step. Availability windows if given:\n${(options.availabilityLines ?? []).slice(0, 3).join("\n") || "(none — ask when works)"}`
         : `Offer EXACTLY these availability windows, as a short plain-text list, verbatim:\n${(options.availabilityLines ?? []).join("\n")}`;

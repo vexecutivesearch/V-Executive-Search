@@ -5,6 +5,10 @@ import {
   bookingConfirmationText,
   formatBookingWhen,
 } from "@/lib/outreach/booking-confirmation";
+import {
+  resolveSchedulingLink,
+  schedulingCallLength,
+} from "@/lib/outreach/scheduling-link";
 
 /**
  * Style exemplars for Claude (few-shot DNA) — NOT mail-merge templates.
@@ -22,6 +26,11 @@ import {
  *
  * House style: no dashes or hyphens anywhere in name, subject, or body.
  */
+const BOOKING_LINK = resolveSchedulingLink();
+const CALL_LENGTH = schedulingCallLength(BOOKING_LINK);
+/** "any 15 min" when the booking slug names a length, "any time" when it does not. */
+const OPEN_SLOT = CALL_LENGTH ? `any ${CALL_LENGTH}` : "any time";
+
 export const SEED_TEMPLATES: Array<{
   name: string;
   /** Older names we rename in place on seed. */
@@ -139,9 +148,9 @@ If the timing isn't right, no problem at all. Happy to reconnect whenever hiring
     channel: "email",
     exampleBody: `Hi Stacy,
 
-Great to hear from you, happy to set up a quick call. Grab any 30 min that works for you here:
+Great to hear from you, happy to set up a quick call. Grab ${OPEN_SLOT} that works for you here:
 
-https://calendly.com/odv-vexecutivesearch/30min
+${BOOKING_LINK}
 
 If that link does not work for your schedule, reply with a couple of windows and I will make it happen. Looking forward to it.`,
   },
@@ -153,9 +162,9 @@ If that link does not work for your schedule, reply with a couple of windows and
     legacyNames: ["Positive reply text, calendar link"],
     kind: "reply_positive",
     channel: "imessage",
-    exampleBody: `Great, thanks Stacy. Easiest way is to grab 30 min on my calendar here:
+    exampleBody: `Great, thanks Stacy. Easiest way is to grab ${CALL_LENGTH ?? "a time"} on my calendar here:
 
-https://calendly.com/odv-vexecutivesearch/30min
+${BOOKING_LINK}
 
 If nothing on there works, text me a couple of windows and I will make it happen.`,
   },

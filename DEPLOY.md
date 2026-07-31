@@ -307,8 +307,11 @@ Setup checklist:
 2. Vercel env: `ANTHROPIC_API_KEY` (drafting + reply classification),
    `OUTREACH_FROM_EMAIL` (fallback sender until domain profiles exist),
    optional `OUTREACH_SENDER_NAME/TITLE/FIRM/PHONE`,
-   `OUTREACH_SCHEDULING_LINK` (defaults to the ODV Calendly 30 min link when unset;
-   included on all positive / positive_link_request auto-replies),
+   `OUTREACH_SCHEDULING_LINK` (defaults to the ODV Calendly 15 min link
+   `https://calendly.com/odv-vexecutivesearch/15m` when unset; included on all
+   positive / positive_link_request auto-replies. If this var is already set on
+   Vercel it wins over the default, so change it there too when the booking link
+   changes — the reply copy takes its call length from the slug),
    `RESEND_WEBHOOK_SECRET`, Google Calendar free/busy
    (`GOOGLE_CALENDAR_CLIENT_ID/SECRET/REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID`).
 3. Resend dashboard: add a webhook → `https://<crm>/api/webhooks/resend?token=<RESEND_WEBHOOK_SECRET>`

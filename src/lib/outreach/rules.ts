@@ -29,18 +29,10 @@ import {
   resolveProfileApiKey,
   sendOutreachEmail,
 } from "@/lib/outreach/resend-send";
+import { resolveSchedulingLink } from "@/lib/outreach/scheduling-link";
 import { getOrCreateOutreachSettings } from "@/lib/outreach/settings";
 import { addSuppression } from "@/lib/outreach/suppression";
 import { addBusinessDays } from "@/lib/outreach/timezone-infer";
-
-/** Default Calendly booking URL when OUTREACH_SCHEDULING_LINK is unset. */
-const DEFAULT_SCHEDULING_LINK =
-  "https://calendly.com/odv-vexecutivesearch/30min";
-
-function resolveSchedulingLink(): string {
-  const fromEnv = process.env.OUTREACH_SCHEDULING_LINK?.trim();
-  return fromEnv || DEFAULT_SCHEDULING_LINK;
-}
 
 /**
  * Rule engine — channel-agnostic. A text reply and an email reply hit
