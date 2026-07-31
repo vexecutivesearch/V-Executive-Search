@@ -174,9 +174,13 @@ const LEADS: Lead[] = [
       callOpener:
         "Hi Miguel, saw Miguel RX Library is hiring a Pharmacy Technician and figured it would be worth a quick intro.",
     },
-    // No address or mobile supplied for this one yet, so it seeds as a lead
-    // without a contact and cannot enroll until one is added.
-    contact: null,
+    contact: {
+      name: "Miguel",
+      title: "Owner",
+      email: "miguel@rxlibrary.com",
+      phone: "+19382090620",
+      location: "Miami, FL",
+    },
     listing: {
       title: "Pharmacy Technician",
       url: null,
@@ -318,6 +322,42 @@ async function preflight(lead: Lead): Promise<boolean> {
   return ok;
 }
 
+/**
+ * imessage_capable drives channel_plan at enrollment: true plus a number gives
+ * email_and_text, which is the pair these tests are checking. The one address
+ * goes in all three email columns so the work-email-preferred toggle cannot
+ * change which address enrollment picks.
+ */
+async function insertContact(
+  contact: NonNullable<Lead["contact"]>,
+  companyId: string,
+): Promise<string> {
+  const [row] = await db
+    .insert(contacts)
+    .values({
+      companyId,
+      name: contact.name,
+      title: contact.title,
+      email: contact.email,
+      workEmail: contact.email,
+      personalEmail: contact.email,
+      phone: contact.phone,
+      personalPhone: contact.phone,
+      phones: [{ number: contact.phone, source: "apollo", kind: "mobile" }],
+      sourceProvider: "manual_test",
+      imessageCapable: true,
+      emailDeliverable: true,
+      locationMatched: true,
+      contactLocation: contact.location,
+      jobLocation: contact.location,
+      revealStatus: "revealed",
+      revealChannels: "email_phone",
+      isPrimary: true,
+    })
+    .returning({ id: contacts.id });
+  return row!.id;
+}
+
 async function seed(lead: Lead) {
   const [company] = await db
     .insert(companies)
@@ -340,37 +380,9 @@ async function seed(lead: Lead) {
     })
     .returning({ id: companies.id });
 
-  // imessage_capable drives channel_plan at enrollment: true plus a number
-  // gives email_and_text, which is the pair these tests are checking. The one
-  // address is written to all three email columns so the work-email-preferred
-  // toggle cannot change which address enrollment picks.
-  const [contact] = lead.contact
-    ? await db
-        .insert(contacts)
-        .values({
-          companyId: company!.id,
-          name: lead.contact.name,
-          title: lead.contact.title,
-          email: lead.contact.email,
-          workEmail: lead.contact.email,
-          personalEmail: lead.contact.email,
-          phone: lead.contact.phone,
-          personalPhone: lead.contact.phone,
-          phones: [
-            { number: lead.contact.phone, source: "apollo", kind: "mobile" },
-          ],
-          sourceProvider: "manual_test",
-          imessageCapable: true,
-          emailDeliverable: true,
-          locationMatched: true,
-          contactLocation: lead.contact.location,
-          jobLocation: lead.contact.location,
-          revealStatus: "revealed",
-          revealChannels: "email_phone",
-          isPrimary: true,
-        })
-        .returning({ id: contacts.id })
-    : [null];
+  const contact = lead.contact
+    ? { id: await insertContact(lead.contact, company!.id) }
+    : null;
 
   const now = new Date();
   const [listing] = await db
@@ -697,6 +709,32 @@ async function handle(lead: Lead) {
   }
 
   if (existing) {
+    // A lead seeded without contact details, whose email and mobile turn up
+    // afterwards: fill in the contact rather than making someone delete the
+    // company and start over.
+    const already = await db
+      .select({ id: contacts.id })
+      .from(contacts)
+      .where(eq(contacts.companyId, existing.id));
+    if (lead.contact && already.length === 0) {
+      console.log(
+        `  ${existing.name} is here with no contact yet — adding the one now on file`,
+      );
+      if (!(await preflight(lead))) {
+        failures += 1;
+        console.error("  Preflight failed. Nothing written for this lead.");
+        return;
+      }
+      if (!APPLY) {
+        console.log("  Dry run only. Re-run with --apply to add the contact.");
+        return;
+      }
+      const contactId = await insertContact(lead.contact, existing.id);
+      console.log(`    contact_id      ${contactId}`);
+      await verify(lead, existing.id);
+      return;
+    }
+
     console.log(`  Already seeded: ${existing.name} (${existing.id}). Nothing written.`);
     await describe(existing.id);
     return;
