@@ -1357,6 +1357,66 @@ def test_a_configured_inbox_still_gets_junk_polled_with_it(monkeypatch):
     assert pump._imap_folders() == ["Inbox", "Junk Email"]
 
 
+class _FakeList:
+    """A LIST response shaped like Microsoft 365 returns it."""
+
+    def __init__(self, lines):
+        self.lines = lines
+
+    def list(self):
+        return "OK", self.lines
+
+
+#: The real mailbox: rules file mail into ~30 folders, inbox at 117 unread.
+_REAL_LIST = [
+    br'(\HasNoChildren) "/" "INBOX"',
+    br'(\HasNoChildren) "/" "Junk Email"',
+    br'(\HasNoChildren) "/" "Sent Items"',
+    br'(\HasNoChildren) "/" "Deleted Items"',
+    br'(\HasNoChildren) "/" "Drafts"',
+    br'(\HasNoChildren) "/" "HR ROLE"',
+    br'(\HasNoChildren) "/" "KMK Law"',
+    br'(\HasNoChildren) "/" "Junior Attn"',
+    br'(\Noselect \HasChildren) "/" "Archive Root"',
+    br'(\HasNoChildren) "/" "Sent Items/2025"',
+]
+
+
+def test_every_rule_filed_folder_is_polled_not_just_inbox_and_junk(monkeypatch):
+    pump = _load_pump()
+    monkeypatch.delenv("OUTREACH_IMAP_FOLDERS", raising=False)
+    monkeypatch.delenv("OUTREACH_IMAP_FOLDER", raising=False)
+    monkeypatch.delenv("OUTREACH_IMAP_ALL_FOLDERS", raising=False)
+
+    folders = pump._imap_folders(_FakeList(_REAL_LIST))
+
+    assert folders[:2] == ["INBOX", "Junk Email"], "inbox and junk lead"
+    assert "HR ROLE" in folders and "KMK Law" in folders
+    for skipped in ("Sent Items", "Deleted Items", "Drafts", "Sent Items/2025"):
+        assert skipped not in folders, f"{skipped} cannot hold an inbound reply"
+    assert "Archive Root" not in folders, "\\Noselect folders cannot be selected"
+    assert len(folders) == len(set(folders))
+
+
+def test_discovery_can_be_turned_off(monkeypatch):
+    pump = _load_pump()
+    monkeypatch.delenv("OUTREACH_IMAP_FOLDERS", raising=False)
+    monkeypatch.delenv("OUTREACH_IMAP_FOLDER", raising=False)
+    monkeypatch.setenv("OUTREACH_IMAP_ALL_FOLDERS", "false")
+
+    assert pump._imap_folders(_FakeList(_REAL_LIST)) == ["INBOX", "Junk Email"]
+
+
+def test_a_folder_name_with_a_space_is_quoted_for_select():
+    pump = _load_pump()
+    # imaplib passes the mailbox through raw, so SELECT Junk Email would be two
+    # arguments and the server would reject it as an unavailable folder.
+    assert pump._quote_folder("Junk Email") == '"Junk Email"'
+    assert pump._quote_folder("INBOX") == '"INBOX"'
+    assert pump._quote_folder('"already quoted"') == '"already quoted"'
+    assert pump._quote_folder('odd"name') == '"odd\\"name"'
+
+
 def test_explicit_folder_list_wins_and_is_deduped(monkeypatch):
     pump = _load_pump()
     monkeypatch.setenv(

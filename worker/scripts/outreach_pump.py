@@ -1219,31 +1219,140 @@ def _imap_connect(host: str, port: int, user: str):
     )
 
 
-#: Polled unless OUTREACH_IMAP_FOLDERS overrides. Junk is in the default set
-#: because a forwarded reply routinely lands there: Cloudflare Email Routing
-#: rewrites the envelope sender to forward odv@<sending domain> into the watched
-#: mailbox, so the message arrives with the prospect's From, a DKIM signature
-#: over their domain and an SPF pass for Cloudflare's relay. Microsoft files
-#: that mismatch as junk. On 2026-07-31 a real "Re: ABA Therapy Assistant" reply
-#: was forwarded, accepted, and never seen, because the poll read INBOX only.
+#: Always polled first, in this order, before anything discovered.
 DEFAULT_IMAP_FOLDERS = ("INBOX", "Junk Email")
 
+#: Folders that cannot hold an inbound reply. Matched case insensitively
+#: against the leaf name, so "Sent Items/2025" is skipped with its parent.
+IMAP_SKIP_FOLDERS = frozenset(
+    {
+        "sent",
+        "sent items",
+        "sent mail",
+        "drafts",
+        "deleted items",
+        "deleted",
+        "trash",
+        "junk",  # the real junk folder is named "Junk Email" and IS polled
+        "outbox",
+        "conversation history",
+        "clutter",
+        "notes",
+        "tasks",
+        "journal",
+        "calendar",
+        "contacts",
+        "sync issues",
+        "server failures",
+        "local failures",
+        "conflicts",
+        "rss feeds",
+        "rss subscriptions",
+    }
+)
 
-def _imap_folders() -> list[str]:
-    """Folders to poll, in order, deduped."""
+_LIST_LINE = re.compile(
+    rb'^\((?P<flags>[^)]*)\)\s+(?P<delim>"[^"]*"|NIL)\s+(?P<name>.+)$'
+)
+
+
+def _quote_folder(name: str) -> str:
+    """IMAP mailbox names need quoting; imaplib passes them through raw.
+
+    Without this, SELECT Junk Email is two arguments and the server rejects it,
+    which is exactly how a folder with a space in its name looks "unavailable".
+    """
+    if len(name) >= 2 and name.startswith('"') and name.endswith('"'):
+        return name
+    escaped = name.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _folder_name_from_list_line(line) -> str | None:
+    """Mailbox name out of one LIST response line, or None to skip it."""
+    if isinstance(line, tuple):  # literal form: (b'... {12}', b'name')
+        line = b" ".join(part for part in line if isinstance(part, bytes))
+    if not isinstance(line, bytes):
+        return None
+    match = _LIST_LINE.match(line.strip())
+    if not match:
+        return None
+    if b"\\noselect" in match.group("flags").lower():
+        return None
+    raw = match.group("name").strip()
+    if raw.startswith(b'"') and raw.endswith(b'"'):
+        raw = raw[1:-1]
+    try:
+        # Folder names are modified UTF-7 on the wire; ASCII names decode as is.
+        name = raw.decode("utf-7") if b"&" in raw else raw.decode("ascii")
+    except (UnicodeDecodeError, LookupError):
+        try:
+            name = raw.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            return None
+    return name.strip() or None
+
+
+def _is_skippable_folder(name: str, delimiter: str = "/") -> bool:
+    leaf = name.split(delimiter)[-1] if delimiter else name
+    parts = {name.lower(), leaf.lower()}
+    if parts & IMAP_SKIP_FOLDERS:
+        return True
+    # A child of a skipped parent ("Sent Items/2025") goes with it.
+    head = name.split(delimiter)[0].lower() if delimiter else name.lower()
+    return head in IMAP_SKIP_FOLDERS
+
+
+def _discover_folders(client) -> list[str]:
+    """Every selectable folder that could hold a reply, inbox and junk first.
+
+    The watched mailbox runs server side rules: odv@vexecutivesearch.com has
+    around thirty folders (HR ROLE, Junior Attn, KMK Law …) and 117 unread in
+    the inbox. On 2026-07-31 a real reply was forwarded in, accepted, and filed
+    by one of those rules, so it was in neither INBOX nor Junk and a poll that
+    reads a fixed folder list could never find it.
+    """
+    try:
+        status, data = client.list()
+    except (imaplib.IMAP4.error, OSError) as exc:
+        logger.warning("IMAP LIST failed, falling back to the default folders: %s", exc)
+        return []
+    if status != "OK":
+        return []
+    found: list[str] = []
+    for line in data or []:
+        name = _folder_name_from_list_line(line)
+        if not name or _is_skippable_folder(name):
+            continue
+        if name not in found:
+            found.append(name)
+    return found
+
+
+def _imap_folders(client=None) -> list[str]:
+    """Folders to poll, in order, deduped. Explicit config wins outright."""
     explicit = (os.environ.get("OUTREACH_IMAP_FOLDERS") or "").strip()
     if explicit:
         names = [f.strip() for f in explicit.split(",") if f.strip()]
     else:
         configured = (os.environ.get("OUTREACH_IMAP_FOLDER") or "").strip()
         names = [configured or DEFAULT_IMAP_FOLDERS[0]]
-        # Whatever single inbox is configured, junk is polled alongside it.
         names += [f for f in DEFAULT_IMAP_FOLDERS[1:]]
+        if client is not None and _truthy_default_on(
+            os.environ.get("OUTREACH_IMAP_ALL_FOLDERS")
+        ):
+            names += _discover_folders(client)
     out: list[str] = []
     for name in names:
         if name not in out:
             out.append(name)
     return out
+
+
+def _truthy_default_on(value: str | None) -> bool:
+    if value is None or not value.strip():
+        return True
+    return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _folder_cursors(state: dict, folders: list[str]) -> dict[str, int]:
@@ -1299,19 +1408,20 @@ def poll_imap() -> int:
         return 0
     base, key = crm
 
-    folders = _imap_folders()
     port = int(os.environ.get("OUTREACH_IMAP_PORT", "993"))
     post_timeout = max(30, int(os.environ.get("OUTREACH_IMAP_POST_TIMEOUT", "120")))
     max_per_tick = max(1, int(os.environ.get("OUTREACH_IMAP_MAX_PER_TICK", "15")))
     backfill_days = max(1, int(os.environ.get("OUTREACH_IMAP_BACKFILL_DAYS", "2")))
     state = _load_state()
-    cursors = _folder_cursors(state, folders)
 
     try:
         client = _imap_connect(host, port, user)
     except (imaplib.IMAP4.error, OSError, RuntimeError) as exc:
         logger.warning("IMAP connect failed: %s", exc)
         return 0
+
+    folders = _imap_folders(client)
+    cursors = _folder_cursors(state, folders)
 
     posted_total = 0
     remaining = max_per_tick
@@ -1320,7 +1430,7 @@ def poll_imap() -> int:
             break
         cursor = cursors.get(folder)
         try:
-            status, _ = client.select(folder, readonly=True)
+            status, _ = client.select(_quote_folder(folder), readonly=True)
             if status != "OK":
                 raise imaplib.IMAP4.error(f"select {folder} returned {status}")
             uids = _uids_to_poll(client, folder, cursor, backfill_days)
@@ -1332,7 +1442,8 @@ def poll_imap() -> int:
 
         last_uid = cursor or 0
 
-        def remember(uid: int) -> None:
+        # folder bound as a default so the closure cannot drift to the next one.
+        def remember(uid: int, folder: str = folder) -> None:
             nonlocal last_uid
             last_uid = max(last_uid, uid)
             cursors[folder] = last_uid
