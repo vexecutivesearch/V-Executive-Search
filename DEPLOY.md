@@ -364,6 +364,15 @@ contacts. Day-0 sends are unaffected because enrollment dispatches inline, but
 later flow steps scheduled past that hour wait for the next cron day. The
 admin UI warns when the chosen end hour crosses that line.
 
+That **22** is set by Pacific *standard* time, the slowest zone: local 22:59
+PST is 06:59 UTC, past the 06:45 last tick of `*/15 0-6`. Under DST the same
+local hour is 05:59 UTC, so an end hour of **23** is in fact fully covered for
+every continental zone (ET/CT/MT/PT all dispatch within a minute) — which is
+why a summer testing override to 23 dispatches normally, and the same override
+in January would strand West-Coast flow steps. Alaska and Hawaii sit outside
+cron coverage at both 22 and 23. Re-derive with the schedules in `vercel.json`
+before assuming; do not raise `CRON_COVERED_END_HOUR` to match a summer run.
+
 The three `testing_window_*` columns on `outreach_settings` are nullable, so
 adding them ahead of a deploy is backward compatible with the running build.
 

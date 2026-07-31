@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { scheduleSendAt, wallClock } from "@/lib/outreach/timezone-infer";
 import {
   isValidWindowHour,
   minutesUntilOverrideExpiry,
@@ -163,6 +164,65 @@ describe("isValidWindowHour", () => {
     for (const h of [-1, 25, 9.5, "9", null, undefined, Number.NaN]) {
       expect(isValidWindowHour(h)).toBe(false);
     }
+  });
+});
+
+describe("the override reaches the scheduling decision, not just the settings row", () => {
+  // The override is only worth having if it changes what handleSendNode does:
+  // it resolves the window, then hands the hours straight to scheduleSendAt,
+  // and a day-0 send inside the window is backdated so the dispatch pass that
+  // runs milliseconds later picks it up. These two cases pin that seam, which
+  // is the one the operator relies on when testing late in the evening.
+  const tenThirtyPmEt = new Date("2026-07-31T02:30:00Z"); // 10:30 PM EDT Thursday
+
+  const LIVE_PRODUCTION: SendWindowSettings = {
+    sendWindowStartHour: 9,
+    sendWindowEndHour: 22,
+    testingWindowUntil: null,
+    testingWindowStartHour: null,
+    testingWindowEndHour: null,
+  };
+  const WITH_OVERRIDE: SendWindowSettings = {
+    ...LIVE_PRODUCTION,
+    testingWindowUntil: new Date("2026-07-31T08:00:00Z"),
+    testingWindowStartHour: 9,
+    testingWindowEndHour: 23,
+  };
+
+  it("an end hour of 23 makes a 10:30 PM ET send due immediately", () => {
+    const window = resolveSendWindow(WITH_OVERRIDE, tenThirtyPmEt);
+    expect(window.endHour).toBe(23);
+    // Every jitter draw must stay due: a positive lead would make the inline
+    // dispatch a no-op and strand the send until the next cron tick.
+    for (const draw of [0, 0.5, 0.999]) {
+      const scheduled = scheduleSendAt({
+        base: tenThirtyPmEt,
+        offsetDays: 0,
+        timeZone: "America/New_York",
+        windowStartHour: window.startHour,
+        windowEndHour: window.endHour,
+        random: () => draw,
+      });
+      expect(scheduled.getTime()).toBeLessThanOrEqual(tenThirtyPmEt.getTime());
+    }
+  });
+
+  it("the production 22 defers that same send, so the override is what carries it", () => {
+    const window = resolveSendWindow(LIVE_PRODUCTION, tenThirtyPmEt);
+    expect(window.endHour).toBe(22);
+    const scheduled = scheduleSendAt({
+      base: tenThirtyPmEt,
+      offsetDays: 0,
+      timeZone: "America/New_York",
+      windowStartHour: window.startHour,
+      windowEndHour: window.endHour,
+      random: () => 0.5,
+    });
+    expect(scheduled.getTime()).toBeGreaterThan(tenThirtyPmEt.getTime());
+    const wc = wallClock(scheduled, "America/New_York");
+    expect(wc.day).toBe(31); // Friday, not tonight
+    expect(wc.hour).toBeGreaterThanOrEqual(9);
+    expect(wc.hour).toBeLessThan(22);
   });
 });
 
