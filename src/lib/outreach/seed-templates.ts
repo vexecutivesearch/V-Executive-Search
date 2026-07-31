@@ -9,7 +9,7 @@ import { outreachTemplates } from "@/lib/db/schema";
  *
  * House style: no dashes or hyphens anywhere in name, subject, or body.
  */
-const SEED_TEMPLATES: Array<{
+export const SEED_TEMPLATES: Array<{
   name: string;
   /** Older names we rename in place on seed. */
   legacyNames?: string[];
@@ -120,6 +120,19 @@ https://calendly.com/odv-vexecutivesearch/30min
 If that link does not work for your schedule, reply with a couple of windows and I will make it happen. Looking forward to it.`,
   },
   {
+    // Someone who replies by text gets answered by text, so the reply kinds
+    // need a texting voice of their own. Without one the SMS auto-reply is
+    // drafted against a multi paragraph email exemplar.
+    name: "Positive reply text, calendar link",
+    kind: "reply_positive",
+    channel: "imessage",
+    exampleBody: `Great, thanks Stacy. Easiest way is to grab 30 min on my calendar here:
+
+https://calendly.com/odv-vexecutivesearch/30min
+
+If nothing on there works, text me a couple of windows and I will make it happen.`,
+  },
+  {
     name: "Info request, hand off ack",
     legacyNames: ["Info request, hand-off ack"],
     kind: "reply_info_request",
@@ -131,12 +144,24 @@ Absolutely, happy to share more detail. Let me pull together the specifics on th
 In the meantime, if it's easier to cover live, I'm glad to jump on a quick call whenever suits you.`,
   },
   {
+    name: "Info request text, hand off ack",
+    kind: "reply_info_request",
+    channel: "imessage",
+    exampleBody: `Good question Stacy. Let me pull the exact details and come back to you shortly with a proper answer. Happy to cover it on a quick call if that is easier.`,
+  },
+  {
     name: "Decline, graceful close",
     kind: "reply_decline",
     channel: "email",
     exampleBody: `Hi Stacy,
 
 Understood, thanks for letting me know. Wishing you the best with the search, and I'm happy to reconnect if hiring support would ever be useful down the road.`,
+  },
+  {
+    name: "Decline text, graceful close",
+    kind: "reply_decline",
+    channel: "imessage",
+    exampleBody: `Totally understood Stacy, thanks for the quick reply. Best of luck with the search, and I am around if hiring support is ever useful.`,
   },
 ];
 

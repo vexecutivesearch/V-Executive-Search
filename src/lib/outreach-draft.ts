@@ -365,11 +365,16 @@ export async function draftEnrollmentReply(options: {
   /** Match the inbound channel — SMS replies must stay short. */
   channel?: "email" | "imessage";
 }): Promise<string | null> {
+  lastDraftFailure = null;
   const channel = options.channel ?? "email";
   const isSms = channel === "imessage";
   const exemplars = await activeTemplatesForKind(options.replyKind);
-  const exemplarBlock = exemplars[0]
-    ? sanitizeExemplarForPrompt(exemplars[0].exampleBody)
+  // Prefer an exemplar written for this channel: a texted reply modelled on a
+  // multi-paragraph email exemplar reads wrong and blows the length budget.
+  const exemplar =
+    exemplars.find((t) => t.channel === channel) ?? exemplars[0] ?? null;
+  const exemplarBlock = exemplar
+    ? sanitizeExemplarForPrompt(exemplar.exampleBody)
     : "(none)";
 
   let situation: string;
@@ -421,14 +426,27 @@ ${isSms ? "- No email signature. No subject line. Text like a person texting fro
 
 Respond with ONLY the reply body (no subject, no signature).`;
 
+  let extraGuidance = "";
   for (let attempt = 1; attempt <= MAX_DRAFT_ATTEMPTS; attempt += 1) {
-    const raw = await anthropic(prompt);
+    const raw = await anthropic(`${prompt}${extraGuidance}`);
     if (!raw) return null;
     const check = sanitizeOutreachBody(raw, {
       channel: isSms ? "imessage" : "email",
       allowLinks: Boolean(options.includeSchedulingLink),
     });
-    if (check.ok) return check.cleaned;
+    if (check.ok) {
+      lastDraftFailure = null;
+      return check.cleaned;
+    }
+    // Feed the violations back, otherwise all three attempts repeat the same
+    // prompt and fail the same way.
+    lastDraftFailure = "sanitizer_rejected";
+    extraGuidance = `\n\nYour previous draft was rejected: ${check.violations.join(
+      "; ",
+    )}. Fix these problems.`;
+    console.error(
+      `[outreach] reply draft attempt ${attempt} rejected (${options.replyKind}/${channel}): ${check.violations.join("; ")}`,
+    );
   }
   return null;
 }

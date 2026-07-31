@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, notInArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   companies,
@@ -19,6 +19,7 @@ import { contextForEnrollment } from "@/lib/outreach/node-draft";
 import { notifyReply } from "@/lib/outreach/notifications";
 import {
   replyKindForIntent,
+  REPLY_TEMPLATE_KINDS,
   type ReplyTemplateKind,
 } from "@/lib/outreach/reply-playbook";
 import {
@@ -66,18 +67,40 @@ async function notificationEmail(): Promise<string | null> {
   return row?.email ?? process.env.ALERT_EMAIL ?? null;
 }
 
+/**
+ * Cancel the remaining sequence steps after a reply.
+ *
+ * `keepAutoReplies` protects an auto-reply that is already queued for the Mac
+ * worker. A contact who answers by text and by email seconds apart lands here
+ * twice, and the second pass used to cancel the SMS reply the first pass had
+ * just queued — the worker polls the queue once every five minutes, so the
+ * reply was gone long before it could be claimed. Suppression paths (opt out,
+ * complaint, wrong person) deliberately leave this off: a pending reply must
+ * never survive a stop request.
+ */
+export function pendingStepsCancelFilter(
+  enrollmentId: string,
+  keepAutoReplies: boolean,
+) {
+  return and(
+    eq(outreachMessages.enrollmentId, enrollmentId),
+    inArray(outreachMessages.status, ["drafted", "queued"]),
+    ...(keepAutoReplies
+      ? [notInArray(outreachMessages.stepKind, [...REPLY_TEMPLATE_KINDS])]
+      : []),
+  );
+}
+
 async function stopPendingSteps(
   enrollmentId: string,
   actor: string,
+  options: { keepAutoReplies?: boolean } = {},
 ): Promise<number> {
   const result = await db
     .update(outreachMessages)
     .set({ status: "cancelled", updatedAt: new Date() })
     .where(
-      and(
-        eq(outreachMessages.enrollmentId, enrollmentId),
-        inArray(outreachMessages.status, ["drafted", "queued"]),
-      ),
+      pendingStepsCancelFilter(enrollmentId, Boolean(options.keepAutoReplies)),
     )
     .returning({ id: outreachMessages.id });
   if (result.length) {
@@ -85,10 +108,47 @@ async function stopPendingSteps(
       enrollmentId,
       eventType: "cancelled",
       actor,
-      payload: { messages_cancelled: result.length },
+      payload: {
+        messages_cancelled: result.length,
+        kept_auto_replies: Boolean(options.keepAutoReplies),
+      },
     });
   }
   return result.length;
+}
+
+/**
+ * How long one auto-reply covers the contact. A reply that arrives by text and
+ * by email in the same breath is one human saying one thing, so it earns one
+ * answer, on the channel that spoke first.
+ */
+const AUTO_REPLY_COOLDOWN_MS = 15 * 60_000;
+
+/** An auto-reply already sent or waiting on the worker, inside the cooldown. */
+async function recentAutoReply(enrollmentId: string) {
+  const [row] = await db
+    .select({
+      id: outreachMessages.id,
+      channel: outreachMessages.channel,
+      status: outreachMessages.status,
+      stepKind: outreachMessages.stepKind,
+      createdAt: outreachMessages.createdAt,
+    })
+    .from(outreachMessages)
+    .where(
+      and(
+        eq(outreachMessages.enrollmentId, enrollmentId),
+        inArray(outreachMessages.stepKind, [...REPLY_TEMPLATE_KINDS]),
+        inArray(outreachMessages.status, ["drafted", "queued", "sent"]),
+        gte(
+          outreachMessages.createdAt,
+          new Date(Date.now() - AUTO_REPLY_COOLDOWN_MS),
+        ),
+      ),
+    )
+    .orderBy(desc(outreachMessages.createdAt))
+    .limit(1);
+  return row ?? null;
 }
 
 async function setEnrollmentStatus(
@@ -126,25 +186,115 @@ async function lastSentEmail(enrollmentId: string) {
   )[0];
 }
 
+export type AutoReplyResult = {
+  sent: boolean;
+  queued: boolean;
+  /** Deliberate no-op (an auto-reply already covers this inbound). */
+  skipped: boolean;
+  usedCalendar: boolean;
+  channel: "email" | "imessage";
+  /** Why nothing went out. Null on success. */
+  reason: string | null;
+};
+
+/**
+ * A reply we could not get out is an escalation, not a shrug: it lands in the
+ * audit trail as an error with a manual note so it shows up in the enrollment
+ * timeline instead of vanishing into a false return value.
+ */
+async function failAutoReply(options: {
+  enrollmentId: string;
+  replyKind: ReplyTemplateKind;
+  channel: "email" | "imessage";
+  reason: string;
+  usedCalendar?: boolean;
+}): Promise<AutoReplyResult> {
+  console.error(
+    `[outreach] auto-reply not delivered (enrollment=${options.enrollmentId}, kind=${options.replyKind}, channel=${options.channel}): ${options.reason}`,
+  );
+  await logEnrollmentEvent({
+    enrollmentId: options.enrollmentId,
+    eventType: "error",
+    actor: `rule:${options.replyKind}`,
+    payload: {
+      auto_reply: true,
+      auto_reply_failed: true,
+      reply_kind: options.replyKind,
+      channel: options.channel,
+      reason: options.reason,
+      manual_note:
+        "no auto-reply went out — answer this contact by hand while the thread is warm",
+    },
+  });
+  return {
+    sent: false,
+    queued: false,
+    skipped: false,
+    usedCalendar: Boolean(options.usedCalendar),
+    channel: options.channel,
+    reason: options.reason,
+  };
+}
+
 async function sendThreadedAutoReply(options: {
   enrollment: SequenceEnrollment;
   inbound: InboundMessage;
   replyKind: ReplyTemplateKind;
   includeSchedulingLink?: boolean;
-}): Promise<{ sent: boolean; queued: boolean; usedCalendar: boolean; channel: "email" | "imessage" }> {
+}): Promise<AutoReplyResult> {
   const { enrollment, inbound, replyKind } = options;
   const settings = await getOrCreateOutreachSettings();
-  const context = await contextForEnrollment(enrollment);
-  if (!context) {
-    return { sent: false, queued: false, usedCalendar: false, channel: "email" };
-  }
 
   // Reply on the same channel they used.
   const preferSms =
     inbound.channel === "imessage" && Boolean(enrollment.phoneNumber);
   const channel: "email" | "imessage" = preferSms ? "imessage" : "email";
+
+  const existing = await recentAutoReply(enrollment.id);
+  if (existing) {
+    const reason = `an auto-reply is already ${existing.status} on ${existing.channel}`;
+    await logEnrollmentEvent({
+      enrollmentId: enrollment.id,
+      eventType: "rule_action",
+      actor: `rule:${replyKind}`,
+      payload: {
+        auto_reply: true,
+        auto_reply_skipped: true,
+        reply_kind: replyKind,
+        channel,
+        reason,
+        existing_message_id: existing.id,
+        existing_channel: existing.channel,
+        existing_status: existing.status,
+      },
+    });
+    return {
+      sent: false,
+      queued: false,
+      skipped: true,
+      usedCalendar: false,
+      channel: existing.channel === "imessage" ? "imessage" : "email",
+      reason,
+    };
+  }
+
+  const context = await contextForEnrollment(enrollment);
+  if (!context) {
+    return failAutoReply({
+      enrollmentId: enrollment.id,
+      replyKind,
+      channel,
+      reason: "no draft context (contact or company row missing)",
+    });
+  }
+
   if (channel === "email" && !enrollment.emailAddress) {
-    return { sent: false, queued: false, usedCalendar: false, channel };
+    return failAutoReply({
+      enrollmentId: enrollment.id,
+      replyKind,
+      channel,
+      reason: "enrollment has no email address to reply to",
+    });
   }
 
   const needsAvailability =
@@ -165,12 +315,16 @@ async function sendThreadedAutoReply(options: {
     channel,
   });
   if (!body) {
-    return {
-      sent: false,
-      queued: false,
-      usedCalendar: availability.fromCalendar,
+    const { getLastDraftFailureReason } = await import("@/lib/outreach-draft");
+    return failAutoReply({
+      enrollmentId: enrollment.id,
+      replyKind,
       channel,
-    };
+      usedCalendar: availability.fromCalendar,
+      reason: `could not draft a ${channel} reply that passes the sanitizer (${
+        getLastDraftFailureReason() ?? "unknown"
+      })`,
+    });
   }
 
   if (channel === "imessage") {
@@ -202,8 +356,10 @@ async function sendThreadedAutoReply(options: {
     return {
       sent: false,
       queued: true,
+      skipped: false,
       usedCalendar: availability.fromCalendar,
       channel: "imessage",
+      reason: null,
     };
   }
 
@@ -213,12 +369,15 @@ async function sendThreadedAutoReply(options: {
   const sendFrom = pick?.profile?.fromAddress ?? defaultFromAddress();
   const sendKey = resolveProfileApiKey(pick?.profile ?? null);
   if (!sendKey || !sendFrom) {
-    return {
-      sent: false,
-      queued: false,
-      usedCalendar: availability.fromCalendar,
+    return failAutoReply({
+      enrollmentId: enrollment.id,
+      replyKind,
       channel: "email",
-    };
+      usedCalendar: availability.fromCalendar,
+      reason: sendKey
+        ? "no from address on any sending profile"
+        : "no Resend API key resolved for the sending profile",
+    });
   }
 
   const footer = emailFooter({
@@ -266,13 +425,23 @@ async function sendThreadedAutoReply(options: {
         scheduling_link: Boolean(schedulingLink),
       },
     });
+    return {
+      sent: true,
+      queued: false,
+      skipped: false,
+      usedCalendar: availability.fromCalendar,
+      channel: "email",
+      reason: null,
+    };
   }
-  return {
-    sent: result.ok,
-    queued: false,
-    usedCalendar: availability.fromCalendar,
+
+  return failAutoReply({
+    enrollmentId: enrollment.id,
+    replyKind,
     channel: "email",
-  };
+    usedCalendar: availability.fromCalendar,
+    reason: `Resend rejected the reply: ${result.error}`,
+  });
 }
 
 /** Data-deletion purge: drafts + inbound bodies, full suppression, audit. */
@@ -344,6 +513,14 @@ export type RuleOutcome = {
   actionTaken: string;
 };
 
+/** Human-readable auto-reply state for the inbound row's action_taken. */
+function describeReply(reply: AutoReplyResult): string {
+  if (reply.sent) return "sent";
+  if (reply.queued) return "queued SMS";
+  if (reply.skipped) return `skipped, ${reply.reason}`;
+  return `FAILED, ${reply.reason ?? "unknown reason"}, needs a manual reply`;
+}
+
 export async function applyReplyRules(
   enrollment: SequenceEnrollment,
   inbound: InboundMessage,
@@ -377,7 +554,7 @@ export async function applyReplyRules(
   switch (intent) {
     case "positive":
     case "positive_link_request": {
-      await stopPendingSteps(enrollment.id, actor);
+      await stopPendingSteps(enrollment.id, actor, { keepAutoReplies: true });
       const replyKind = replyKindForIntent(intent) ?? "reply_positive";
       // Queue/send the channel-matched reply BEFORE flipping enrollment
       // status — iMessage worker only dequeues active-ish enrollments.
@@ -406,6 +583,8 @@ export async function applyReplyRules(
         payload: {
           auto_reply_sent: reply.sent,
           auto_reply_queued: reply.queued,
+          auto_reply_skipped: reply.skipped,
+          auto_reply_reason: reply.reason,
           reply_channel: reply.channel,
           reply_kind: replyKind,
           used_calendar: reply.usedCalendar,
@@ -413,19 +592,14 @@ export async function applyReplyRules(
           company_status: "meeting",
         },
       });
-      const replyState = reply.sent
-        ? "sent"
-        : reply.queued
-          ? "queued SMS"
-          : "FAILED — manual";
       return {
         intent,
-        actionTaken: `stopped; ${replyKind} via ${reply.channel} (${replyState}); ${cancelled} sibling(s) cancelled; company → meeting`,
+        actionTaken: `stopped; ${replyKind} via ${reply.channel} (${describeReply(reply)}); ${cancelled} sibling(s) cancelled; company → meeting`,
       };
     }
 
     case "info_request": {
-      await stopPendingSteps(enrollment.id, actor);
+      await stopPendingSteps(enrollment.id, actor, { keepAutoReplies: true });
       const replyKind = replyKindForIntent(intent) ?? "reply_info_request";
       const reply = await sendThreadedAutoReply({
         enrollment,
@@ -447,24 +621,21 @@ export async function applyReplyRules(
           hand_off: true,
           auto_reply_sent: reply.sent,
           auto_reply_queued: reply.queued,
+          auto_reply_skipped: reply.skipped,
+          auto_reply_reason: reply.reason,
           reply_channel: reply.channel,
           reply_kind: replyKind,
           quoted_ask: snippet,
         },
       });
-      const replyState = reply.sent
-        ? "sent"
-        : reply.queued
-          ? "queued SMS"
-          : "FAILED";
       return {
         intent,
-        actionTaken: `${replyKind} via ${reply.channel} (${replyState}); stopped automation; handed off with quoted ask`,
+        actionTaken: `${replyKind} via ${reply.channel} (${describeReply(reply)}); stopped automation; handed off with quoted ask`,
       };
     }
 
     case "negative": {
-      await stopPendingSteps(enrollment.id, actor);
+      await stopPendingSteps(enrollment.id, actor, { keepAutoReplies: true });
       const replyKind = replyKindForIntent(intent) ?? "reply_decline";
       const reply = await sendThreadedAutoReply({
         enrollment,
@@ -488,20 +659,17 @@ export async function applyReplyRules(
         payload: {
           auto_reply_sent: reply.sent,
           auto_reply_queued: reply.queued,
+          auto_reply_skipped: reply.skipped,
+          auto_reply_reason: reply.reason,
           reply_channel: reply.channel,
           reply_kind: replyKind,
           suppressed_contact: enrollment.contactId,
           colleagues_unaffected: true,
         },
       });
-      const replyState = reply.sent
-        ? "sent"
-        : reply.queued
-          ? "queued SMS"
-          : "FAILED";
       return {
         intent,
-        actionTaken: `${replyKind} via ${reply.channel} (${replyState}); contact suppressed (colleagues continue)`,
+        actionTaken: `${replyKind} via ${reply.channel} (${describeReply(reply)}); contact suppressed (colleagues continue)`,
       };
     }
 

@@ -78,15 +78,15 @@ export function formatReplyPlaybookForClassifier(
       .slice(0, 2)
       .map((t, i) => {
         const body = sanitizeExemplarForPrompt(t.exampleBody, 700);
-        return `Exemplar ${i + 1} (${t.name}):\n"""\n${body}\n"""`;
+        return `Exemplar ${i + 1} (${t.name}, ${t.channel}):\n"""\n${body}\n"""`;
       })
       .join("\n\n");
     sections.push(
-      `When intent is ${label}, the NEXT email we send matches this voice (${kind}):\n${bodies}`,
+      `When intent is ${label}, the NEXT message we send matches this voice (${kind}):\n${bodies}`,
     );
   }
 
-  return `OUR RESPONSE PLAYBOOK (from Template bank — use these to decide which intent fits, because that intent picks which email goes out next):\n\n${sections.join("\n\n")}`;
+  return `OUR RESPONSE PLAYBOOK (from Template bank — use these to decide which intent fits, because that intent picks which message goes out next, on whichever channel they replied on):\n\n${sections.join("\n\n")}`;
 }
 
 export function replyKindForIntent(
