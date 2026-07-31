@@ -780,7 +780,7 @@ export const outreachSettings = pgTable("outreach_settings", {
   introStaggerDays: integer("intro_stagger_days").default(1).notNull(),
   workEmailPreferred: boolean("work_email_preferred").default(true).notNull(),
   sendWindowStartHour: integer("send_window_start_hour").default(9).notNull(),
-  sendWindowEndHour: integer("send_window_end_hour").default(21).notNull(),
+  sendWindowEndHour: integer("send_window_end_hour").default(22).notNull(),
   /** CAN-SPAM: physical mailing address appended to every email. */
   physicalAddress: text("physical_address"),
   /** Reply-To for outreach sends; the IMAP poll watches this mailbox. */

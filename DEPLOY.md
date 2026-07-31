@@ -340,9 +340,9 @@ Setup checklist:
    cannot send; verified ones warm up 5/day → +5 per clean week → ~50/day with
    automatic rollback on bounce >2% / complaint >0.1%.
 7. Crons are already in `vercel.json` (`/api/cron/outreach-dispatch` every
-   15 min). Contact-local send window defaults to **9–21** (9 AM–9 PM).
-   Vercel cron is UTC: `*/15 12-23 * * 1-5` plus `*/15 0-5 * * 2-6` so
-   dispatch keeps running through 9 PM Pacific year-round (and later ET).
+   15 min). Contact-local send window defaults to **9–22** (9 AM–10 PM).
+   Vercel cron is UTC: `*/15 12-23 * * 1-5` plus `*/15 0-6 * * 2-6` so
+   dispatch keeps running through 10 PM Pacific year-round (and later ET).
 
 Enrollment: automatic at the end of enrich ingest (verified-deliverable email,
 company status `new`, ICP pass, never previously enrolled, per-channel
