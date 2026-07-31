@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  eventDurationMinutes,
   isCalendlyNotificationAddress,
   parseCalendlyNotificationEmail,
   parseCalendlySubjectDateTime,
   stripHtmlToText,
+  unfoldHeader,
 } from "@/lib/outreach/calendly-email";
 import {
   nameMatchStrength,
@@ -50,12 +52,41 @@ describe("parseCalendlyNotificationEmail", () => {
     expect(parsed!.inviteeName).toBe("Miguel Lozano");
   });
 
+  it("unfolds a wrapped subject before matching", () => {
+    const parsed = parseCalendlyNotificationEmail({
+      subject:
+        "New Event: Jeff Willson - 09:00am Mon, Aug 3, 2026 - 15 Minute\r\n Meeting",
+    });
+    expect(parsed!.kind).toBe("created");
+    expect(parsed!.inviteeName).toBe("Jeff Willson");
+    expect(parsed!.eventTitle).toBe("15 Minute Meeting");
+    expect(parsed!.rawSubject).not.toContain("\n");
+    expect(parsed!.startTime?.toISOString()).toBe("2026-08-03T13:00:00.000Z");
+    expect(parsed!.endTime?.toISOString()).toBe("2026-08-03T13:15:00.000Z");
+  });
+
   it("treats teamcalendly marketing as no-op marketing", () => {
     const parsed = parseCalendlyNotificationEmail({
       subject: "You did it — your first booking is in!",
     });
     expect(parsed!.kind).toBe("marketing");
     expect(parsed!.inviteeName).toBeNull();
+  });
+});
+
+describe("eventDurationMinutes", () => {
+  it("reads every event type on the account, not just 30 minute", () => {
+    expect(eventDurationMinutes("15 Minute Meeting")).toBe(15);
+    expect(eventDurationMinutes("30 Minute Meeting")).toBe(30);
+    expect(eventDurationMinutes("60 Minute Deep Dive")).toBe(60);
+    expect(eventDurationMinutes("1 Hour Intro")).toBe(60);
+    expect(eventDurationMinutes("Intro Call")).toBeNull();
+  });
+});
+
+describe("unfoldHeader", () => {
+  it("collapses SMTP line folding", () => {
+    expect(unfoldHeader("15 Minute\r\n Meeting")).toBe("15 Minute Meeting");
   });
 });
 

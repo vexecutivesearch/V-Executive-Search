@@ -41,6 +41,7 @@ import imaplib
 import json
 import logging
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -1120,6 +1121,11 @@ def scan_chat_db(watch_phones: set[str]) -> int:
 # --------------------------------------------------------------------------
 
 def _decode_header(value: str | None) -> str:
+    """Decode a header and undo RFC 5322 folding.
+
+    Long subjects arrive wrapped ("… - 15 Minute\\r\\n Meeting"); leaving the
+    newline in breaks every downstream single-line subject match.
+    """
     if not value:
         return ""
     parts = email.header.decode_header(value)
@@ -1129,7 +1135,7 @@ def _decode_header(value: str | None) -> str:
             out.append(text.decode(charset or "utf-8", errors="replace"))
         else:
             out.append(text)
-    return "".join(out)
+    return re.sub(r"\s+", " ", "".join(out)).strip()
 
 
 def _plain_body(message: email.message.Message) -> str:

@@ -37,6 +37,8 @@ export type ParsedCalendlyBooking = {
   rawPayload: Record<string, unknown>;
   /** webhook = Calendly API; email = IMAP free-tier notification parse. */
   source?: "webhook" | "email";
+  /** When the notification arrived — anchors name-mismatch attribution. */
+  notifiedAt?: Date | null;
 };
 
 export type ApplyCalendlyBookingResult = {
@@ -47,12 +49,7 @@ export type ApplyCalendlyBookingResult = {
   enrollmentId?: string | null;
   action?: string;
   reason?: string;
-  matchVia?:
-    | "name_exact"
-    | "name_strong"
-    | "name_partial_positive"
-    | "sole_recent_positive"
-    | null;
+  matchVia?: CalendlyNameMatchVia | null;
   contactName?: string | null;
 };
 
@@ -389,11 +386,22 @@ const LIVE_ENROLLMENT_STATUSES = [
 /** Lookback for positive / Calendly-link signals when name match is weak. */
 export const CALENDLY_POSITIVE_LOOKBACK_DAYS = 21;
 
+/**
+ * How much fresher the winning positive signal must be than the runner-up
+ * before we attribute a name-mismatched booking to it. Two leads who went
+ * positive within half an hour of each other stay unmatched for review.
+ */
+export const CALENDLY_PROXIMITY_MARGIN_MS = 30 * 60 * 1000;
+
+/** Tolerance for clock skew between the mail hop and our own timestamps. */
+const CALENDLY_CLOCK_SLACK_MS = 10 * 60 * 1000;
+
 export type CalendlyNameMatchVia =
   | "name_exact"
   | "name_strong"
   | "name_partial_positive"
-  | "sole_recent_positive";
+  | "sole_recent_positive"
+  | "latest_recent_positive";
 
 export type CalendlyNameMatchResult = {
   contact: Contact | null;
@@ -458,15 +466,23 @@ function scoreNameCandidate(options: {
  *    positive inbound — prefer partial name hit within that set
  * 3. If name still weak AND exactly one recent "waiting for booking" positive
  *    enrollment with name overlap → use it. Never pick at random among many.
- * 4. Else unmatched — caller logs for manual review.
+ * 4. Name matches nobody (personal Calendly account, alias, assistant booking):
+ *    attribute to the lead whose positive/Calendly-link signal is the most
+ *    recent one before the notification, if decisively ahead of the runner-up.
+ * 5. Else unmatched — caller logs for manual review.
  */
 export async function matchByInviteeName(
   name: string,
+  options?: {
+    /** When the Calendly notification landed — anchors step 4. */
+    notifiedAt?: Date | null;
+  },
 ): Promise<CalendlyNameMatchResult> {
   const tokens = significantNameTokens(name);
   if (tokens.length === 0) {
     return { contact: null, enrollment: null, reason: "empty invitee name" };
   }
+  const notifiedAt = options?.notifiedAt ?? new Date();
 
   const since = new Date(
     Date.now() - CALENDLY_POSITIVE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
@@ -548,6 +564,7 @@ export async function matchByInviteeName(
     .select({
       contactId: inboundMessages.contactId,
       enrollmentId: inboundMessages.enrollmentId,
+      receivedAt: inboundMessages.receivedAt,
     })
     .from(inboundMessages)
     .where(
@@ -564,6 +581,8 @@ export async function matchByInviteeName(
   const calendlySends = await db
     .select({
       enrollmentId: outreachMessages.enrollmentId,
+      sentAt: outreachMessages.sentAt,
+      updatedAt: outreachMessages.updatedAt,
     })
     .from(outreachMessages)
     .where(
@@ -583,12 +602,43 @@ export async function matchByInviteeName(
   const calendlyEnrollmentIds = new Set(
     calendlySends.map((r) => r.enrollmentId),
   );
+
+  /**
+   * Latest moment each contact showed booking intent, capped at the
+   * notification so a later touch cannot backdate its way to the front.
+   */
+  const signalAtByContact = new Map<string, number>();
+  const cutoff = notifiedAt.getTime() + CALENDLY_CLOCK_SLACK_MS;
+  const noteSignal = (contactId: string, at: Date | null | undefined) => {
+    if (!at) return;
+    const ms = at.getTime();
+    if (Number.isNaN(ms) || ms > cutoff || ms < since.getTime()) return;
+    const prev = signalAtByContact.get(contactId);
+    if (prev === undefined || ms > prev) signalAtByContact.set(contactId, ms);
+  };
+
+  const contactIdByEnrollment = new Map<string, string>();
+  for (const e of [...liveEnrollments, ...extraEnrollments]) {
+    contactIdByEnrollment.set(e.id, e.contactId);
+  }
+  const calendlySentAtByEnrollment = new Map<string, Date>();
+  for (const row of calendlySends) {
+    const at = row.sentAt ?? row.updatedAt;
+    if (!at) continue;
+    const prev = calendlySentAtByEnrollment.get(row.enrollmentId);
+    if (!prev || at > prev) calendlySentAtByEnrollment.set(row.enrollmentId, at);
+  }
+
   for (const row of positiveInbound) {
-    if (row.contactId) positiveContactIds.add(row.contactId);
+    if (row.contactId) {
+      positiveContactIds.add(row.contactId);
+      noteSignal(row.contactId, row.receivedAt);
+    }
   }
   for (const e of liveEnrollments) {
     if (e.status === "replied_positive" && e.updatedAt >= since) {
       positiveContactIds.add(e.contactId);
+      noteSignal(e.contactId, e.updatedAt);
     }
     if (calendlyEnrollmentIds.has(e.id)) positiveContactIds.add(e.contactId);
   }
@@ -597,13 +647,20 @@ export async function matchByInviteeName(
       if (calendlyEnrollmentIds.has(e.id)) positiveContactIds.add(e.contactId);
     }
   }
+  for (const [enrollmentId, at] of calendlySentAtByEnrollment) {
+    const contactId = contactIdByEnrollment.get(enrollmentId);
+    if (contactId) noteSignal(contactId, at);
+  }
   for (const entry of callListRows) {
     if (
       entry.callStatus === "meeting_scheduled" &&
       (entry.callStatusUpdatedAt ?? entry.updatedAt) >= since
     ) {
       for (const c of poolContacts) {
-        if (c.companyId === entry.companyId) positiveContactIds.add(c.id);
+        if (c.companyId === entry.companyId) {
+          positiveContactIds.add(c.id);
+          noteSignal(c.id, entry.callStatusUpdatedAt ?? entry.updatedAt);
+        }
       }
     }
   }
@@ -738,11 +795,47 @@ export async function matchByInviteeName(
         };
       }
       return {
-        contact: null,
-        enrollment: null,
-        reason: `sole recent positive is "${contact.name}" but invitee "${name}" does not overlap`,
+        contact,
+        enrollment,
+        matchVia: "sole_recent_positive",
+        reason: `invitee "${name}" does not match "${contact.name}"; sole lead awaiting a booking`,
       };
     }
+  }
+
+  // Step 4: booked under a name we have never seen. Whoever we just handed the
+  // Calendly link to is the booker, so long as one lead is clearly the freshest.
+  if (waitingContacts.size > 1) {
+    const ranked = [...waitingContacts.entries()]
+      .map(([contactId, enrollment]) => ({
+        contactId,
+        enrollment,
+        signalAt: signalAtByContact.get(contactId) ?? 0,
+      }))
+      .filter((c) => c.signalAt > 0)
+      .sort((a, b) => b.signalAt - a.signalAt);
+
+    const [top, runnerUp] = ranked;
+    if (top && (!runnerUp || top.signalAt - runnerUp.signalAt >= CALENDLY_PROXIMITY_MARGIN_MS)) {
+      const [contact] = await db
+        .select()
+        .from(contacts)
+        .where(eq(contacts.id, top.contactId))
+        .limit(1);
+      if (contact) {
+        return {
+          contact,
+          enrollment: top.enrollment,
+          matchVia: "latest_recent_positive",
+          reason: `invitee "${name}" does not match any contact; most recent of ${waitingContacts.size} leads awaiting a booking`,
+        };
+      }
+    }
+    return {
+      contact: null,
+      enrollment: null,
+      reason: `invitee "${name}" does not match any contact and ${waitingContacts.size} leads await a booking within minutes of each other`,
+    };
   }
 
   return {
@@ -762,6 +855,8 @@ export async function matchContactForCalendlyBooking(options: {
   phone: string | null;
   /** Invitee display name — used when email/phone unavailable (IMAP path). */
   name?: string | null;
+  /** When the booking notification landed — anchors the recency cascade. */
+  notifiedAt?: Date | null;
 }): Promise<CalendlyNameMatchResult> {
   const email = options.email;
   const phone = options.phone;
@@ -849,7 +944,9 @@ export async function matchContactForCalendlyBooking(options: {
 
   // IMAP Calendly notifications: From is Calendly — match invitee name instead.
   if (options.name?.trim()) {
-    return matchByInviteeName(options.name.trim());
+    return matchByInviteeName(options.name.trim(), {
+      notifiedAt: options.notifiedAt ?? null,
+    });
   }
 
   return { contact: null, enrollment: null };
@@ -891,6 +988,7 @@ export async function applyCalendlyBooking(
     email: booking.email,
     phone: booking.phone,
     name: booking.name,
+    notifiedAt: booking.notifiedAt ?? null,
   });
   const { contact, enrollment } = matched;
 
@@ -913,9 +1011,16 @@ export async function applyCalendlyBooking(
     booking.event.endsWith(".canceled") ||
     booking.event.endsWith(".cancelled");
 
+  // Booked under an alias / personal account: name the invitee in the note so a
+  // human can spot a wrong attribution without digging through the inbox.
+  const inviteeAside =
+    booking.name && nameMatchStrength(booking.name, contact.name) === "none"
+      ? ` (booked as ${booking.name.trim()})`
+      : "";
+
   const note = isCanceled
-    ? `Call canceled${booking.startTime ? `: ${formatCallBookedNote(booking.startTime, booking.endTime).replace(/^Call Booked:\s*/, "")}` : ""}`.trim()
-    : formatCallBookedNote(booking.startTime, booking.endTime);
+    ? `Call canceled${booking.startTime ? `: ${formatCallBookedNote(booking.startTime, booking.endTime).replace(/^Call Booked:\s*/, "")}` : ""}${inviteeAside}`.trim()
+    : `${formatCallBookedNote(booking.startTime, booking.endTime)}${inviteeAside}`;
 
   if (isCreated) {
     await recordCallListOutreachEvent({

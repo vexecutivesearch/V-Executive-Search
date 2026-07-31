@@ -52,6 +52,14 @@ describe("formatCallBookedNote", () => {
       "Call Booked: Fri Jul 31, 2026 9:00–9:30 AM ET",
     );
   });
+
+  it("formats the 15 minute Aug 3 booking", () => {
+    const start = new Date("2026-08-03T13:00:00.000Z"); // 9:00 AM ET
+    const end = new Date("2026-08-03T13:15:00.000Z");
+    expect(formatCallBookedNote(start, end)).toBe(
+      "Call Booked: Mon Aug 3, 2026 9:00–9:15 AM ET",
+    );
+  });
 });
 
 describe("verifyCalendlySignature", () => {

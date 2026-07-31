@@ -73,6 +73,16 @@ def test_normalize_phone():
     assert pump._normalize_phone("12345") == ""
 
 
+def test_decode_header_unfolds_a_wrapped_subject():
+    """The real Calendly booking subject arrives wrapped before "Meeting"."""
+    pump = _load_pump()
+    assert pump._decode_header(
+        "New Event: Jeff Willson - 09:00am Mon, Aug 3, 2026 - 15 Minute\r\n Meeting"
+    ) == "New Event: Jeff Willson - 09:00am Mon, Aug 3, 2026 - 15 Minute Meeting"
+    assert pump._decode_header(None) == ""
+    assert pump._decode_header("Re: quick question") == "Re: quick question"
+
+
 def test_is_substantive_imessage_text():
     pump = _load_pump()
     assert pump._is_substantive_imessage_text("Yes, let's talk!")

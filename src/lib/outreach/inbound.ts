@@ -181,6 +181,7 @@ async function ingestCalendlyNotification(options: {
       event_title: parsed.eventTitle,
     },
     source: "email",
+    notifiedAt: options.receivedAt ?? new Date(),
   };
 
   const result = await applyCalendlyBooking(booking);

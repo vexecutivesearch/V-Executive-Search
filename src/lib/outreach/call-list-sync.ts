@@ -18,7 +18,10 @@ import { ensureNotesNewestFirst } from "@/lib/outreach/call-list-notes";
  */
 
 function stampLine(line: string): string {
+  // Vercel and the worker both run TZ=UTC; stamp Eastern so the times on a row
+  // read the same as the business day they happened in.
   const ts = new Date().toLocaleString("en-US", {
+    timeZone: "America/New_York",
     month: "short",
     day: "numeric",
     hour: "numeric",

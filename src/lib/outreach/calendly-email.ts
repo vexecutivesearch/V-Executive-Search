@@ -23,6 +23,18 @@ export type ParsedCalendlyEmail = {
 
 const CALENDLY_FROM_SUFFIXES = ["@calendly.com", "@send.calendly.com"];
 
+/**
+ * Undo RFC 5322 header folding. Calendly subjects are long enough that the
+ * SMTP hop wraps them, so IMAP hands us "… - 15 Minute\r\n Meeting" and any
+ * `^…$` subject regex fails on the embedded newline.
+ */
+export function unfoldHeader(value: string): string {
+  return value
+    .replace(/\r\n|\r|\n/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 const MARKETING_SUBJECT =
   /\b(you did it|first booking|getting started|welcome to calendly|tips for|introduce yourself)\b/i;
 
@@ -156,6 +168,26 @@ const EVENT_SUBJECT =
   /^(new|canceled|cancelled)\s+event:\s*(.+)$/i;
 
 /**
+ * Duration from a Calendly event type name ("15 Minute Meeting", "1 Hour
+ * Intro"). Drives the end time in Call List notes, so it must cover every
+ * event type on the account, not just the 30 minute default.
+ */
+export function eventDurationMinutes(eventTitle: string): number | null {
+  const mins = eventTitle.match(/\b(\d{1,3})\s*(?:minute|min)s?\b/i);
+  if (mins) {
+    const n = Number(mins[1]);
+    return n > 0 && n <= 600 ? n : null;
+  }
+  const hours = eventTitle.match(/\b(\d{1,2})(?:\.5)?\s*(?:hour|hr)s?\b/i);
+  if (hours) {
+    const half = /\.5\s*(?:hour|hr)/i.test(eventTitle);
+    const n = Number(hours[1]) * 60 + (half ? 30 : 0);
+    return n > 0 && n <= 600 ? n : null;
+  }
+  return null;
+}
+
+/**
  * Parse Calendly notification subject (+ optional HTML/text body).
  * Does not use the From address for identity.
  */
@@ -163,7 +195,7 @@ export function parseCalendlyNotificationEmail(options: {
   subject?: string | null;
   body?: string | null;
 }): ParsedCalendlyEmail | null {
-  const subject = (options.subject ?? "").trim();
+  const subject = unfoldHeader(options.subject ?? "");
   if (!subject) return null;
 
   if (MARKETING_SUBJECT.test(subject)) {
@@ -239,8 +271,9 @@ export function parseCalendlyNotificationEmail(options: {
     }
   }
 
-  if (startTime && eventTitle && /\b30\s*minute/i.test(eventTitle)) {
-    endTime = new Date(startTime.getTime() + 30 * 60 * 1000);
+  if (startTime && eventTitle) {
+    const minutes = eventDurationMinutes(eventTitle);
+    if (minutes) endTime = new Date(startTime.getTime() + minutes * 60 * 1000);
   }
 
   return {

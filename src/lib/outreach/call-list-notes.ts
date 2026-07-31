@@ -20,6 +20,11 @@ function parseStampDate(line: string): Date | null {
  * If notes look like oldest→newest stamped lines (legacy append order),
  * reverse them so newest is on top. Leaves free-form / already-newest-first
  * blobs alone when chronological order is unclear or already correct.
+ *
+ * Every adjacent pair has to agree before we reverse. Comparing only the top
+ * and bottom line misreads rows whose stamps straddle the switch from UTC to
+ * Eastern: one fresh Eastern line can read hours *earlier* than the UTC lines
+ * below it, which used to flip an already-correct row upside down.
  */
 export function ensureNotesNewestFirst(notes: string | null | undefined): string {
   if (!notes?.trim()) return notes ?? "";
@@ -30,10 +35,17 @@ export function ensureNotesNewestFirst(notes: string | null | undefined): string
     .filter((x): x is { index: number; date: Date } => x.date != null);
   if (stamped.length < 2) return normalized;
 
-  const first = stamped[0].date.getTime();
-  const last = stamped[stamped.length - 1].date.getTime();
-  // Ascending (oldest at top) → reverse. Equal/descending → already newest-first.
-  if (first < last) {
+  let ascending = 0;
+  let descending = 0;
+  for (let i = 1; i < stamped.length; i += 1) {
+    const prev = stamped[i - 1].date.getTime();
+    const next = stamped[i].date.getTime();
+    if (next > prev) ascending += 1;
+    else if (next < prev) descending += 1;
+  }
+
+  // Only a wholly oldest-first blob gets reversed.
+  if (ascending > 0 && descending === 0) {
     return [...lines].reverse().join("\n");
   }
   return normalized;
