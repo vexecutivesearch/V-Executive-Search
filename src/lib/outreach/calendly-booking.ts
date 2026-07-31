@@ -19,6 +19,7 @@ import {
 import { recordCallListOutreachEvent } from "@/lib/outreach/call-list-sync";
 import { cancelSiblingEnrollments } from "@/lib/outreach/enroll";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
+import { stopPendingSteps } from "@/lib/outreach/pending-messages";
 import { normalizeEmail, normalizePhone } from "@/lib/outreach/suppression";
 
 /** Calendly webhook event names we act on. */
@@ -968,18 +969,6 @@ async function latestEnrollmentForContact(
   return enrollment ?? null;
 }
 
-async function cancelPendingMessages(enrollmentId: string): Promise<void> {
-  await db
-    .update(outreachMessages)
-    .set({ status: "cancelled", updatedAt: new Date() })
-    .where(
-      and(
-        eq(outreachMessages.enrollmentId, enrollmentId),
-        inArray(outreachMessages.status, ["drafted", "queued"]),
-      ),
-    );
-}
-
 /**
  * Apply invitee.created / invitee.canceled to Call List + company + enrollment.
  */
@@ -1049,7 +1038,14 @@ export async function applyCalendlyBooking(
     }
 
     if (enrollment) {
-      await cancelPendingMessages(enrollment.id);
+      // Someone who just booked should stop getting follow ups, so the
+      // remaining sequence steps go. A booking is a reply though, not a stop
+      // request: it must not take the auto-reply the contact's own text earned
+      // minutes earlier, nor the confirmation an earlier notification for this
+      // same booking already queued.
+      const cancelledSteps = await stopPendingSteps(enrollment.id, actor, {
+        keepAutoReplies: true,
+      });
       const liveStatuses = [
         "active",
         "paused",
@@ -1094,6 +1090,7 @@ export async function applyCalendlyBooking(
           invitee_uri: booking.inviteeUri,
           source: booking.source ?? "webhook",
           match_via: matched.matchVia ?? null,
+          steps_cancelled: cancelledSteps,
         },
       });
       // Calendly emails its own confirmation, so only a texting thread needs

@@ -166,7 +166,9 @@ const queuedTexts = () =>
 describe("cancel sweep after a reply", () => {
   const dialect = new PgDialect();
   const sqlFor = async (keepAutoReplies: boolean) => {
-    const { pendingStepsCancelFilter } = await import("@/lib/outreach/rules");
+    const { pendingStepsCancelFilter } = await import(
+      "@/lib/outreach/pending-messages"
+    );
     return dialect.sqlToQuery(pendingStepsCancelFilter("enr-1", keepAutoReplies)!)
       .sql;
   };

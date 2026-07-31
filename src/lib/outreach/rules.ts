@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, notInArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   companies,
@@ -17,6 +17,7 @@ import { cancelSiblingEnrollments } from "@/lib/outreach/enroll";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
 import { contextForEnrollment } from "@/lib/outreach/node-draft";
 import { notifyReply } from "@/lib/outreach/notifications";
+import { stopPendingSteps } from "@/lib/outreach/pending-messages";
 import {
   replyKindForIntent,
   REPLY_TEMPLATE_KINDS,
@@ -65,56 +66,6 @@ async function notificationEmail(): Promise<string | null> {
     .from(pipelineSettings)
     .limit(1);
   return row?.email ?? process.env.ALERT_EMAIL ?? null;
-}
-
-/**
- * Cancel the remaining sequence steps after a reply.
- *
- * `keepAutoReplies` protects an auto-reply that is already queued for the Mac
- * worker. A contact who answers by text and by email seconds apart lands here
- * twice, and the second pass used to cancel the SMS reply the first pass had
- * just queued — the worker polls the queue once every five minutes, so the
- * reply was gone long before it could be claimed. Suppression paths (opt out,
- * complaint, wrong person) deliberately leave this off: a pending reply must
- * never survive a stop request.
- */
-export function pendingStepsCancelFilter(
-  enrollmentId: string,
-  keepAutoReplies: boolean,
-) {
-  return and(
-    eq(outreachMessages.enrollmentId, enrollmentId),
-    inArray(outreachMessages.status, ["drafted", "queued"]),
-    ...(keepAutoReplies
-      ? [notInArray(outreachMessages.stepKind, [...REPLY_TEMPLATE_KINDS])]
-      : []),
-  );
-}
-
-async function stopPendingSteps(
-  enrollmentId: string,
-  actor: string,
-  options: { keepAutoReplies?: boolean } = {},
-): Promise<number> {
-  const result = await db
-    .update(outreachMessages)
-    .set({ status: "cancelled", updatedAt: new Date() })
-    .where(
-      pendingStepsCancelFilter(enrollmentId, Boolean(options.keepAutoReplies)),
-    )
-    .returning({ id: outreachMessages.id });
-  if (result.length) {
-    await logEnrollmentEvent({
-      enrollmentId,
-      eventType: "cancelled",
-      actor,
-      payload: {
-        messages_cancelled: result.length,
-        kept_auto_replies: Boolean(options.keepAutoReplies),
-      },
-    });
-  }
-  return result.length;
 }
 
 /**
