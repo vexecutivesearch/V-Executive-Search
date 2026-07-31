@@ -1,6 +1,10 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { outreachTemplates } from "@/lib/db/schema";
+import {
+  bookingConfirmationText,
+  formatBookingWhen,
+} from "@/lib/outreach/booking-confirmation";
 
 /**
  * Style exemplars for Claude (few-shot DNA) — NOT mail-merge templates.
@@ -22,7 +26,8 @@ export const SEED_TEMPLATES: Array<{
     | "text_3"
     | "reply_positive"
     | "reply_info_request"
-    | "reply_decline";
+    | "reply_decline"
+    | "booking_confirmation";
   channel: "email" | "imessage";
   exampleSubject?: string;
   exampleBody: string;
@@ -162,6 +167,16 @@ Understood, thanks for letting me know. Wishing you the best with the search, an
     kind: "reply_decline",
     channel: "imessage",
     exampleBody: `Totally understood Stacy, thanks for the quick reply. Best of luck with the search, and I am around if hiring support is ever useful.`,
+  },
+  {
+    // Rendered from the same function that builds the real send, so the bank
+    // always shows exactly what a contact receives.
+    name: "Booking confirmation text",
+    kind: "booking_confirmation",
+    channel: "imessage",
+    exampleBody: bookingConfirmationText(
+      formatBookingWhen(new Date("2026-08-03T13:00:00.000Z")),
+    ),
   },
 ];
 

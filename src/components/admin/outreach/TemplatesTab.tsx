@@ -14,6 +14,7 @@ const KINDS = [
   "reply_positive",
   "reply_info_request",
   "reply_decline",
+  "booking_confirmation",
 ];
 
 export function TemplatesTab() {

@@ -455,6 +455,8 @@ export const outreachTemplateKindEnum = pgEnum("outreach_template_kind", [
   "reply_positive",
   "reply_info_request",
   "reply_decline",
+  /** Texted "your meeting is booked" confirmation for SMS only threads. */
+  "booking_confirmation",
 ]);
 
 export const enrollmentStatusEnum = pgEnum("enrollment_status", [

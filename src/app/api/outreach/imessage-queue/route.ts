@@ -4,6 +4,7 @@ import { unauthorized, verifyWorkerAuth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { outreachMessages, sequenceEnrollments } from "@/lib/db/schema";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
+import { WORKER_CLAIMABLE_ENROLLMENT_STATUSES } from "@/lib/outreach/imessage-queue";
 import { getOrCreateOutreachSettings } from "@/lib/outreach/settings";
 import { isSuppressed } from "@/lib/outreach/suppression";
 
@@ -43,10 +44,7 @@ export async function GET(request: NextRequest) {
         // Include post-reply statuses so SMS auto-replies queued in the same
         // tick as a status flip still leave the Mac worker.
         inArray(sequenceEnrollments.status, [
-          "active",
-          "replied_positive",
-          "waiting_on_manual",
-          "replied_negative",
+          ...WORKER_CLAIMABLE_ENROLLMENT_STATUSES,
         ]),
         isNotNull(sequenceEnrollments.phoneNumber),
       ),

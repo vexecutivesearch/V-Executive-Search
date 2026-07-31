@@ -12,6 +12,10 @@ import {
   type SequenceEnrollment,
 } from "@/lib/db/schema";
 import { TERMINAL_STATUSES } from "@/lib/call-status";
+import {
+  cancelPendingBookingConfirmation,
+  queueBookingConfirmationText,
+} from "@/lib/outreach/booking-confirmation";
 import { recordCallListOutreachEvent } from "@/lib/outreach/call-list-sync";
 import { cancelSiblingEnrollments } from "@/lib/outreach/enroll";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
@@ -1052,12 +1056,11 @@ export async function applyCalendlyBooking(
         "waiting_on_reply",
         "waiting_on_manual",
       ] as const;
-      if (
+      const nowReplied =
         liveStatuses.includes(
           enrollment.status as (typeof liveStatuses)[number],
-        ) ||
-        enrollment.status === "replied_positive"
-      ) {
+        ) || enrollment.status === "replied_positive";
+      if (nowReplied) {
         await db
           .update(sequenceEnrollments)
           .set({
@@ -1092,6 +1095,17 @@ export async function applyCalendlyBooking(
           source: booking.source ?? "webhook",
           match_via: matched.matchVia ?? null,
         },
+      });
+      // Calendly emails its own confirmation, so only a texting thread needs
+      // one from us. Queued after the cancel sweep above so it survives.
+      await queueBookingConfirmationText({
+        // The row was just flipped; the local copy still holds the old status.
+        enrollment: nowReplied
+          ? { ...enrollment, status: "replied_positive" }
+          : enrollment,
+        startTime: booking.startTime,
+        actor,
+        bookingKey: booking.inviteeUri ?? booking.scheduledEventUri ?? null,
       });
     }
 
@@ -1134,6 +1148,7 @@ export async function applyCalendlyBooking(
     });
 
     if (enrollment) {
+      await cancelPendingBookingConfirmation(enrollment.id, actor);
       await logEnrollmentEvent({
         enrollmentId: enrollment.id,
         eventType: "calendly_booking",
