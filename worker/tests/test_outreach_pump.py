@@ -1331,3 +1331,92 @@ def test_pump_second_pass_failure_is_non_fatal(monkeypatch):
     stats = mod.run_outreach_pump()  # must not raise
     assert calls["pump"] == 2
     assert stats["emails_in"] == 2
+
+
+# ---------------------------------------------------------------------------
+# IMAP folders: a reply forwarded into the watched mailbox is routinely filed
+# as junk, and a poll that reads INBOX only never sees it (Autism One's
+# "Re: ABA Therapy Assistant" reply, 2026-07-31 — Cloudflare logged it
+# Forwarded, the routing rule pointed at the right mailbox, and the sequencer
+# never got it).
+
+
+def test_junk_is_polled_alongside_the_inbox_by_default(monkeypatch):
+    pump = _load_pump()
+    monkeypatch.delenv("OUTREACH_IMAP_FOLDERS", raising=False)
+    monkeypatch.delenv("OUTREACH_IMAP_FOLDER", raising=False)
+
+    assert pump._imap_folders() == ["INBOX", "Junk Email"]
+
+
+def test_a_configured_inbox_still_gets_junk_polled_with_it(monkeypatch):
+    pump = _load_pump()
+    monkeypatch.delenv("OUTREACH_IMAP_FOLDERS", raising=False)
+    monkeypatch.setenv("OUTREACH_IMAP_FOLDER", "Inbox")
+
+    assert pump._imap_folders() == ["Inbox", "Junk Email"]
+
+
+def test_explicit_folder_list_wins_and_is_deduped(monkeypatch):
+    pump = _load_pump()
+    monkeypatch.setenv(
+        "OUTREACH_IMAP_FOLDERS", "INBOX, [Gmail]/Spam ,INBOX"
+    )
+
+    assert pump._imap_folders() == ["INBOX", "[Gmail]/Spam"]
+
+
+def test_the_old_single_folder_cursor_migrates_to_the_first_folder():
+    pump = _load_pump()
+    folders = ["INBOX", "Junk Email"]
+
+    cursors = pump._folder_cursors({"imap_last_uid": 9412}, folders)
+
+    assert cursors == {"INBOX": 9412}, "INBOX must not rescan from zero"
+    assert "Junk Email" not in cursors, "an untracked folder starts on a date window"
+
+
+def test_per_folder_cursors_are_kept_apart():
+    pump = _load_pump()
+    state = {"imap_last_uids": {"INBOX": 9412, "Junk Email": 37}, "imap_last_uid": 9412}
+
+    cursors = pump._folder_cursors(state, ["INBOX", "Junk Email"])
+
+    # One shared cursor would hide every junk message below the INBOX mark.
+    assert cursors == {"INBOX": 9412, "Junk Email": 37}
+
+
+class _FakeImap:
+    """Just enough IMAP to drive _uids_to_poll."""
+
+    def __init__(self, uids_by_query):
+        self.uids_by_query = uids_by_query
+        self.queries = []
+
+    def uid(self, command, _charset, *args):
+        self.queries.append((command, args))
+        key = " ".join(args)
+        return "OK", [" ".join(str(u) for u in self.uids_by_query.get(key, [])).encode()]
+
+
+def test_a_tracked_folder_asks_only_for_uids_past_its_cursor():
+    pump = _load_pump()
+    client = _FakeImap({"UID 41:*": [41, 42, 43]})
+
+    uids = pump._uids_to_poll(client, "INBOX", 40, backfill_days=2)
+
+    assert uids == [41, 42, 43]
+    assert client.queries == [("search", ("UID 41:*",))]
+
+
+def test_a_new_folder_starts_from_a_date_window_not_uid_one():
+    pump = _load_pump()
+    since = (
+        datetime.now(timezone.utc) - timedelta(days=2)
+    ).strftime("%d-%b-%Y")
+    client = _FakeImap({f"SINCE {since}": [7, 8]})
+
+    uids = pump._uids_to_poll(client, "Junk Email", None, backfill_days=2)
+
+    assert uids == [7, 8], "recent junk only"
+    assert client.queries == [("search", ("SINCE", since))]

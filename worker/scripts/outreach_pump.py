@@ -26,7 +26,9 @@ Env:
   OUTREACH_PENDING_GRACE_SECONDS / OUTREACH_PENDING_MAX_AGE_SECONDS — bounds on
     the asynchronous re-check
   OUTREACH_IMAP_HOST / OUTREACH_IMAP_USER
-  OUTREACH_IMAP_FOLDER (default INBOX) / OUTREACH_IMAP_PORT (default 993)
+  OUTREACH_IMAP_FOLDER (default INBOX, polled alongside "Junk Email")
+  OUTREACH_IMAP_FOLDERS (comma separated, overrides the pair above)
+  OUTREACH_IMAP_PORT (default 993)
   Auth (prefer OAuth for M365 / GoDaddy — app passwords are often unavailable):
     OUTREACH_MS_CLIENT_ID + MSAL cache from scripts/outreach_imap_login.py
     OR legacy OUTREACH_IMAP_PASSWORD (basic auth)
@@ -1217,12 +1219,73 @@ def _imap_connect(host: str, port: int, user: str):
     )
 
 
+#: Polled unless OUTREACH_IMAP_FOLDERS overrides. Junk is in the default set
+#: because a forwarded reply routinely lands there: Cloudflare Email Routing
+#: rewrites the envelope sender to forward odv@<sending domain> into the watched
+#: mailbox, so the message arrives with the prospect's From, a DKIM signature
+#: over their domain and an SPF pass for Cloudflare's relay. Microsoft files
+#: that mismatch as junk. On 2026-07-31 a real "Re: ABA Therapy Assistant" reply
+#: was forwarded, accepted, and never seen, because the poll read INBOX only.
+DEFAULT_IMAP_FOLDERS = ("INBOX", "Junk Email")
+
+
+def _imap_folders() -> list[str]:
+    """Folders to poll, in order, deduped."""
+    explicit = (os.environ.get("OUTREACH_IMAP_FOLDERS") or "").strip()
+    if explicit:
+        names = [f.strip() for f in explicit.split(",") if f.strip()]
+    else:
+        configured = (os.environ.get("OUTREACH_IMAP_FOLDER") or "").strip()
+        names = [configured or DEFAULT_IMAP_FOLDERS[0]]
+        # Whatever single inbox is configured, junk is polled alongside it.
+        names += [f for f in DEFAULT_IMAP_FOLDERS[1:]]
+    out: list[str] = []
+    for name in names:
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def _folder_cursors(state: dict, folders: list[str]) -> dict[str, int]:
+    """Per folder UID cursor, migrating the old single-folder cursor.
+
+    UIDs are per folder, so one shared cursor cannot track two: an INBOX high
+    water mark would skip every lower-numbered message in Junk.
+    """
+    cursors = dict(state.get("imap_last_uids") or {})
+    legacy = state.get("imap_last_uid")
+    if legacy and folders and folders[0] not in cursors:
+        cursors[folders[0]] = int(legacy)
+    return {k: int(v) for k, v in cursors.items() if isinstance(v, (int, float, str))}
+
+
+def _uids_to_poll(client, folder: str, cursor: int | None, backfill_days: int):
+    """UIDs newer than the cursor, or a bounded first look at a new folder.
+
+    A folder with no cursor starts from a date window rather than UID 1: the
+    watched mailbox holds thousands of messages, and each inbound the CRM
+    accepts may cost an LLM classification.
+    """
+    if cursor is None:
+        since = (datetime.now(timezone.utc) - timedelta(days=max(1, backfill_days))).strftime(
+            "%d-%b-%Y"
+        )
+        status, data = client.uid("search", None, "SINCE", since)
+        if status != "OK":
+            return []
+        return [int(u) for u in (data[0] or b"").split()]
+    status, data = client.uid("search", None, f"UID {cursor + 1}:*")
+    if status != "OK":
+        return []
+    return [int(u) for u in (data[0] or b"").split() if int(u) > cursor]
+
+
 def poll_imap() -> int:
     """Poll the Reply-To mailbox for new mail; post to the CRM. Returns count.
 
-    Posts one message at a time and advances imap_last_uid after each success.
-    Bulk posts of ~100 timed out on the CRM (each inbound may LLM-classify),
-    so the UID cursor never moved and real replies sat invisible in IMAP.
+    Posts one message at a time and advances that folder's UID cursor after each
+    success. Bulk posts of ~100 timed out on the CRM (each inbound may
+    LLM-classify), so the cursor never moved and real replies sat invisible.
     """
     host = os.environ.get("OUTREACH_IMAP_HOST", "")
     user = os.environ.get("OUTREACH_IMAP_USER", "")
@@ -1236,101 +1299,127 @@ def poll_imap() -> int:
         return 0
     base, key = crm
 
-    folder = os.environ.get("OUTREACH_IMAP_FOLDER", "INBOX")
+    folders = _imap_folders()
     port = int(os.environ.get("OUTREACH_IMAP_PORT", "993"))
     post_timeout = max(30, int(os.environ.get("OUTREACH_IMAP_POST_TIMEOUT", "120")))
     max_per_tick = max(1, int(os.environ.get("OUTREACH_IMAP_MAX_PER_TICK", "15")))
+    backfill_days = max(1, int(os.environ.get("OUTREACH_IMAP_BACKFILL_DAYS", "2")))
     state = _load_state()
-    last_uid = int(state.get("imap_last_uid") or 0)
+    cursors = _folder_cursors(state, folders)
 
     try:
         client = _imap_connect(host, port, user)
-        client.select(folder, readonly=True)
-        status, data = client.uid("search", None, f"UID {last_uid + 1}:*")
-        if status != "OK":
-            client.logout()
-            return 0
-        uids = [int(u) for u in (data[0] or b"").split() if int(u) > last_uid]
     except (imaplib.IMAP4.error, OSError, RuntimeError) as exc:
-        logger.warning("IMAP poll failed: %s", exc)
+        logger.warning("IMAP connect failed: %s", exc)
         return 0
 
     posted_total = 0
-    for uid in uids[:max_per_tick]:
-        try:
-            status, msg_data = client.uid("fetch", str(uid), "(RFC822)")
-            if status != "OK" or not msg_data or msg_data[0] is None:
-                continue
-            raw = msg_data[0][1]
-            message = email.message_from_bytes(raw)
-        except (imaplib.IMAP4.error, OSError, TypeError) as exc:
-            logger.warning("IMAP fetch uid=%s failed: %s", uid, exc)
-            continue
-
-        from_header = _decode_header(message.get("From"))
-        from_addr = email.utils.parseaddr(from_header)[1]
-        # Skip our own sends landing in the mailbox — still advance cursor.
-        if from_addr.lower() == user.lower():
-            last_uid = max(last_uid, uid)
-            state["imap_last_uid"] = last_uid
-            _save_state(state)
-            continue
-        message_id = (message.get("Message-ID") or "").strip()
-        in_reply_to = (message.get("In-Reply-To") or "").strip() or None
-        body = _plain_body(message).strip()
-        if not body:
-            last_uid = max(last_uid, uid)
-            state["imap_last_uid"] = last_uid
-            _save_state(state)
-            continue
-        date_header = message.get("Date")
-        received_at = None
-        if date_header:
-            try:
-                received_at = email.utils.parsedate_to_datetime(date_header).isoformat()
-            except (TypeError, ValueError):
-                received_at = None
-
-        item = {
-            "channel": "email",
-            "from": from_addr,
-            "subject": _decode_header(message.get("Subject")),
-            "body": body[:20000],
-            "external_id": f"imap:{message_id or uid}",
-            **({"in_reply_to": in_reply_to} if in_reply_to else {}),
-            **({"received_at": received_at} if received_at else {}),
-        }
-
-        try:
-            requests.post(
-                f"{base}/api/outreach/inbound",
-                headers=_headers(key),
-                json={"messages": [item]},
-                timeout=post_timeout,
-            ).raise_for_status()
-            posted_total += 1
-            last_uid = max(last_uid, uid)
-            state["imap_last_uid"] = last_uid
-            _save_state(state)
-        except requests.RequestException as exc:
-            logger.warning(
-                "inbound email post failed (uid=%s); will retry next tick: %s",
-                uid,
-                exc,
-            )
+    remaining = max_per_tick
+    for folder in folders:
+        if remaining <= 0:
             break
+        cursor = cursors.get(folder)
+        try:
+            status, _ = client.select(folder, readonly=True)
+            if status != "OK":
+                raise imaplib.IMAP4.error(f"select {folder} returned {status}")
+            uids = _uids_to_poll(client, folder, cursor, backfill_days)
+        except (imaplib.IMAP4.error, OSError) as exc:
+            # A mailbox that does not exist on this server (junk is named
+            # differently elsewhere) must not stop the folders after it.
+            logger.warning("IMAP folder %r unavailable: %s", folder, exc)
+            continue
+
+        last_uid = cursor or 0
+
+        def remember(uid: int) -> None:
+            nonlocal last_uid
+            last_uid = max(last_uid, uid)
+            cursors[folder] = last_uid
+            state["imap_last_uids"] = cursors
+            # Kept in step so a rollback to the single-folder poll resumes
+            # where this left off instead of rescanning the mailbox.
+            if folder == folders[0]:
+                state["imap_last_uid"] = last_uid
+            _save_state(state)
+
+        posted_here = 0
+        for uid in uids[:remaining]:
+            try:
+                status, msg_data = client.uid("fetch", str(uid), "(RFC822)")
+                if status != "OK" or not msg_data or msg_data[0] is None:
+                    continue
+                raw = msg_data[0][1]
+                message = email.message_from_bytes(raw)
+            except (imaplib.IMAP4.error, OSError, TypeError) as exc:
+                logger.warning("IMAP fetch %s uid=%s failed: %s", folder, uid, exc)
+                continue
+
+            from_header = _decode_header(message.get("From"))
+            from_addr = email.utils.parseaddr(from_header)[1]
+            # Skip our own sends landing in the mailbox — still advance cursor.
+            if from_addr.lower() == user.lower():
+                remember(uid)
+                continue
+            message_id = (message.get("Message-ID") or "").strip()
+            in_reply_to = (message.get("In-Reply-To") or "").strip() or None
+            body = _plain_body(message).strip()
+            if not body:
+                remember(uid)
+                continue
+            date_header = message.get("Date")
+            received_at = None
+            if date_header:
+                try:
+                    received_at = email.utils.parsedate_to_datetime(date_header).isoformat()
+                except (TypeError, ValueError):
+                    received_at = None
+
+            item = {
+                "channel": "email",
+                "from": from_addr,
+                "subject": _decode_header(message.get("Subject")),
+                "body": body[:20000],
+                # Message-ID keyed, so the same reply seen in two folders (or
+                # re-seen after a move) is a no-op at the CRM.
+                "external_id": f"imap:{message_id or f'{folder}:{uid}'}",
+                **({"in_reply_to": in_reply_to} if in_reply_to else {}),
+                **({"received_at": received_at} if received_at else {}),
+            }
+
+            try:
+                requests.post(
+                    f"{base}/api/outreach/inbound",
+                    headers=_headers(key),
+                    json={"messages": [item]},
+                    timeout=post_timeout,
+                ).raise_for_status()
+                posted_here += 1
+                remember(uid)
+            except requests.RequestException as exc:
+                logger.warning(
+                    "inbound email post failed (%s uid=%s); will retry next tick: %s",
+                    folder,
+                    uid,
+                    exc,
+                )
+                break
+
+        if posted_here:
+            logger.info(
+                "posted %d inbound email(s) from %s (last_uid=%s)",
+                posted_here,
+                folder,
+                last_uid,
+            )
+        posted_total += posted_here
+        remaining -= posted_here
 
     try:
         client.logout()
     except (imaplib.IMAP4.error, OSError):
         pass
 
-    if posted_total:
-        logger.info(
-            "posted %d inbound email(s) from IMAP (last_uid=%s)",
-            posted_total,
-            last_uid,
-        )
     return posted_total
 
 
