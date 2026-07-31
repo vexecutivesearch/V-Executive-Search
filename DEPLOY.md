@@ -344,6 +344,29 @@ Setup checklist:
    Vercel cron is UTC: `*/15 12-23 * * 1-5` plus `*/15 0-6 * * 2-6` so
    dispatch keeps running through 10 PM Pacific year-round (and later ET).
 
+#### Testing send window (temporary override)
+
+Testing outside business hours used to mean widening the production window,
+which ratcheted it from 17 to 22 in one evening and never got put back — a
+window that wide means a real prospect can be texted at 10 PM. Instead use
+**Admin → Outreach → Overview → Testing send window**: set the hours and a
+duration, and the widened window applies immediately (no deploy, no SQL) and
+**reverts on its own** when it expires. Max 12 hours per override; renew if a
+session runs long. While it is on, an amber banner sits at the top of the
+Overview tab with a live countdown and an **End now** button.
+
+Production `sendWindowStartHour`/`sendWindowEndHour` are what apply whenever
+the override is off, so leave them at genuine business hours.
+
+Cron interaction: an override cannot widen dispatch beyond what the crons
+cover — past **22** contact-local there is no cron running for West-Coast
+contacts. Day-0 sends are unaffected because enrollment dispatches inline, but
+later flow steps scheduled past that hour wait for the next cron day. The
+admin UI warns when the chosen end hour crosses that line.
+
+The three `testing_window_*` columns on `outreach_settings` are nullable, so
+adding them ahead of a deploy is backward compatible with the running build.
+
 Enrollment: automatic at the end of enrich ingest (verified-deliverable email,
 company status `new`, ICP pass, never previously enrolled, per-channel
 suppression check, 2–3 contacts/company with staggered intros; contacts

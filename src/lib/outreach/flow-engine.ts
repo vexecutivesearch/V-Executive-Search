@@ -26,6 +26,7 @@ import { logEnrollmentEvent } from "@/lib/outreach/events";
 import { addSuppression } from "@/lib/outreach/suppression";
 import { addBusinessDays, scheduleSendAt } from "@/lib/outreach/timezone-infer";
 import { getOrCreateOutreachSettings } from "@/lib/outreach/settings";
+import { resolveSendWindow } from "@/lib/outreach/send-window";
 
 /**
  * Flow execution engine — a graph walk over immutable flow versions.
@@ -158,6 +159,7 @@ async function handleSendNode(
 ): Promise<"waiting" | "advance" | "halt"> {
   const config = (node.config ?? {}) as SendNodeConfig;
   const settings = await getOrCreateOutreachSettings();
+  const sendWindow = resolveSendWindow(settings, now);
 
   if (config.channel === "imessage" && !enrollment.phoneNumber) {
     // Text steps are skipped for contacts without a verified iMessage number.
@@ -221,8 +223,8 @@ async function handleSendNode(
       base: now,
       offsetDays: 0,
       timeZone: enrollment.timezone,
-      windowStartHour: settings.sendWindowStartHour,
-      windowEndHour: settings.sendWindowEndHour,
+      windowStartHour: sendWindow.startHour,
+      windowEndHour: sendWindow.endHour,
     });
     await db
       .update(outreachMessages)
@@ -254,8 +256,8 @@ async function handleSendNode(
       base: now,
       offsetDays: 0,
       timeZone: enrollment.timezone,
-      windowStartHour: settings.sendWindowStartHour,
-      windowEndHour: settings.sendWindowEndHour,
+      windowStartHour: sendWindow.startHour,
+      windowEndHour: sendWindow.endHour,
     });
     await db.insert(outreachMessages).values({
       enrollmentId: enrollment.id,

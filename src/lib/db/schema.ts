@@ -783,6 +783,14 @@ export const outreachSettings = pgTable("outreach_settings", {
   workEmailPreferred: boolean("work_email_preferred").default(true).notNull(),
   sendWindowStartHour: integer("send_window_start_hour").default(9).notNull(),
   sendWindowEndHour: integer("send_window_end_hour").default(22).notNull(),
+  /**
+   * Testing-window override. While `testingWindowUntil` is in the future the
+   * hours below replace the production window; once it lapses the production
+   * window resumes with no further action. Null = off. See send-window.ts.
+   */
+  testingWindowUntil: timestamp("testing_window_until"),
+  testingWindowStartHour: integer("testing_window_start_hour"),
+  testingWindowEndHour: integer("testing_window_end_hour"),
   /** CAN-SPAM: physical mailing address appended to every email. */
   physicalAddress: text("physical_address"),
   /** Reply-To for outreach sends; the IMAP poll watches this mailbox. */
