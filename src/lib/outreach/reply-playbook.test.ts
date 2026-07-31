@@ -13,6 +13,7 @@ function stubTemplate(
     channel: "email",
     exampleSubject: null,
     isActive: true,
+    isProven: false,
     timesUsed: 0,
     timesReplied: 0,
     timesPositive: 0,

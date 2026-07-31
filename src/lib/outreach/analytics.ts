@@ -10,6 +10,7 @@ import {
   sequenceEnrollments,
 } from "@/lib/db/schema";
 import { profileHealth } from "@/lib/outreach/profiles";
+import { computeTemplateCounters, rate } from "@/lib/outreach/template-counters";
 
 /**
  * Phase 6 — analytics + ROI. Rollups per template, per branch (A/B split),
@@ -21,6 +22,8 @@ export type TemplateStats = {
   id: string;
   name: string;
   kind: string;
+  channel: string;
+  isProven: boolean;
   isActive: boolean;
   sends: number;
   replies: number;
@@ -74,28 +77,35 @@ const FLAG_MIN_SENDS = 30;
 const FLAG_MAX_POSITIVE_RATE = 0.0;
 const FLAG_MIN_OPTOUT_RATE = 0.05;
 
+/**
+ * Sends, replies and positives all come from the same attribution pass over
+ * message history, so the numerator can never outrun the denominator. The
+ * stored times_* columns are a cache of exactly this and are not read here.
+ */
 export async function templateStats(): Promise<TemplateStats[]> {
   const templates = await db.select().from(outreachTemplates);
-  const sendCounts = await db
-    .select({ templateId: outreachMessages.templateId, count: sql<number>`count(*)` })
-    .from(outreachMessages)
-    .where(and(eq(outreachMessages.status, "sent"), isNotNull(outreachMessages.templateId)))
-    .groupBy(outreachMessages.templateId);
-  const sends = new Map(sendCounts.map((r) => [r.templateId, Number(r.count)]));
+  const counters = await computeTemplateCounters();
 
   return templates.map((t) => {
-    const sent = sends.get(t.id) ?? t.timesUsed;
+    const counts = counters.get(t.id) ?? {
+      sends: 0,
+      replies: 0,
+      positives: 0,
+      optOuts: 0,
+    };
     return {
       id: t.id,
       name: t.name,
       kind: t.kind,
+      channel: t.channel,
+      isProven: t.isProven,
       isActive: t.isActive,
-      sends: sent,
-      replies: t.timesReplied,
-      positives: t.timesPositive,
-      optOuts: t.timesOptOut,
-      replyRate: sent > 0 ? t.timesReplied / sent : null,
-      positiveRate: sent > 0 ? t.timesPositive / sent : null,
+      sends: counts.sends,
+      replies: counts.replies,
+      positives: counts.positives,
+      optOuts: counts.optOuts,
+      replyRate: rate(counts.replies, counts.sends),
+      positiveRate: rate(counts.positives, counts.sends),
       flagged: Boolean(t.flaggedAt),
       flagReason: t.flagReason,
     };

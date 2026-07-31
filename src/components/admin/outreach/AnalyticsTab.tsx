@@ -1,6 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import {
+  PROVEN_BADGE_LABEL,
+  templateChannelLabel,
+  templateKindLabel,
+} from "@/lib/outreach/template-labels";
 import { api, Badge, Section } from "./shared";
 
 type Analytics = {
@@ -8,6 +13,8 @@ type Analytics = {
     id: string;
     name: string;
     kind: string;
+    channel: string;
+    isProven: boolean;
     isActive: boolean;
     sends: number;
     replies: number;
@@ -68,13 +75,16 @@ export function AnalyticsTab() {
     <div className="space-y-4">
       <Section
         title="Templates"
-        subtitle="Underperformers (volume with zero positives / heavy opt-outs) are auto-flagged for deactivation — never auto-disabled."
+        subtitle="Rates count sends, not messages: a send is replied once however long the thread runs, so these can never exceed 100%. Underperformers (volume with zero positives / heavy opt-outs) are auto-flagged for deactivation, never auto-disabled."
       >
         <table className="w-full text-xs">
           <thead>
             <tr className="text-left text-[10px] uppercase tracking-wide text-gray-500 border-b border-gray-200 dark:border-gray-800">
               <th className="py-1.5 pr-2">Template</th>
+              <th className="py-1.5 pr-2">Step</th>
+              <th className="py-1.5 pr-2">Channel</th>
               <th className="py-1.5 pr-2 text-right">Sends</th>
+              <th className="py-1.5 pr-2 text-right">Replied</th>
               <th className="py-1.5 pr-2 text-right">Reply rate</th>
               <th className="py-1.5 pr-2 text-right">Positive rate</th>
               <th className="py-1.5 pr-2 text-right">Opt-outs</th>
@@ -85,9 +95,20 @@ export function AnalyticsTab() {
             {data.templates.map((t) => (
               <tr key={t.id} className="border-b border-gray-100 dark:border-gray-900 last:border-b-0">
                 <td className="py-1.5 pr-2">
-                  {t.name} <span className="text-gray-400">({t.kind})</span>
+                  {t.name}
+                  {t.isProven && (
+                    <>
+                      {" "}
+                      <Badge tone="blue">{PROVEN_BADGE_LABEL}</Badge>
+                    </>
+                  )}
+                </td>
+                <td className="py-1.5 pr-2 text-gray-500">{templateKindLabel(t.kind)}</td>
+                <td className="py-1.5 pr-2 text-gray-500">
+                  {templateChannelLabel(t.channel)}
                 </td>
                 <td className="py-1.5 pr-2 text-right tabular-nums">{t.sends}</td>
+                <td className="py-1.5 pr-2 text-right tabular-nums">{t.replies}</td>
                 <td className="py-1.5 pr-2 text-right tabular-nums">{pct(t.replyRate)}</td>
                 <td className="py-1.5 pr-2 text-right tabular-nums">{pct(t.positiveRate)}</td>
                 <td className="py-1.5 pr-2 text-right tabular-nums">{t.optOuts}</td>

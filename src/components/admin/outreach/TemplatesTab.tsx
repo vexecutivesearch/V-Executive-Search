@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { OutreachTemplate } from "@/lib/db/schema";
+import {
+  PROVEN_BADGE_LABEL,
+  templateChannelLabel,
+  templateKindLabel,
+} from "@/lib/outreach/template-labels";
 import { api, Badge, btn, btnPrimary, input, label, Section } from "./shared";
 
 const KINDS = [
@@ -92,6 +97,17 @@ export function TemplatesTab() {
             goes out (not a guess).
           </li>
           <li>
+            Naming: <em>&quot;medium and step, what it says&quot;</em>, for example{" "}
+            <strong>Intro email, boutique firm pitch</strong>. Never put the step kind,
+            the channel or the provenance in the name; those are real fields and show as
+            the badges on each row.
+          </li>
+          <li>
+            A <strong>{PROVEN_BADGE_LABEL}</strong> badge means the exemplar is a real
+            message Alejandro actually sent that actually got a reply. Without it, the
+            exemplar was written in that voice so the step kind has coverage.
+          </li>
+          <li>
             House style: <strong>no dashes or hyphens</strong> in exemplars or outbound
             copy (sanitizer rejects them).
           </li>
@@ -120,7 +136,7 @@ export function TemplatesTab() {
             >
               {KINDS.map((k) => (
                 <option key={k} value={k}>
-                  {k}
+                  {templateKindLabel(k)}
                 </option>
               ))}
             </select>
@@ -160,16 +176,17 @@ export function TemplatesTab() {
           {templates.map((t) => (
             <div key={t.id} className="border border-gray-200 dark:border-gray-800 rounded-lg p-3">
               <div className="flex flex-wrap items-center gap-2">
-                <Badge tone="blue">{t.kind}</Badge>
-                <Badge>{t.channel}</Badge>
+                <Badge tone="blue">{templateKindLabel(t.kind)}</Badge>
+                <Badge>{templateChannelLabel(t.channel)}</Badge>
                 <Badge tone="gray">exemplar · not sent as is</Badge>
                 <span className="text-sm font-medium">{t.name}</span>
+                {t.isProven && <Badge tone="green">{PROVEN_BADGE_LABEL}</Badge>}
                 <Badge tone={t.isActive ? "green" : "gray"}>
                   {t.isActive ? "active" : "inactive"}
                 </Badge>
                 {t.flaggedAt && <Badge tone="red">⚠ {t.flagReason}</Badge>}
                 <span className="text-[11px] text-gray-400">
-                  used {t.timesUsed} · replies {t.timesReplied} · positive {t.timesPositive} ·
+                  sent {t.timesUsed} · replied {t.timesReplied} · positive {t.timesPositive} ·
                   opt-out {t.timesOptOut}
                 </span>
               </div>

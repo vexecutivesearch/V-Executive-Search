@@ -19,6 +19,7 @@ import { classifyInbound } from "@/lib/outreach/classify";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
 import { applyReplyRules } from "@/lib/outreach/rules";
 import { bumpProfileCounters } from "@/lib/outreach/profiles";
+import { recomputeTemplateCounters } from "@/lib/outreach/template-counters";
 import { normalizeEmail, normalizePhone } from "@/lib/outreach/suppression";
 
 /**
@@ -403,49 +404,12 @@ export async function ingestInboundMessage(options: {
     }
   }
 
-  // Template performance counters.
+  // Template performance counters. Recomputed from history rather than
+  // incremented: re-ingesting a thread must not keep inflating the numbers.
   try {
-    const sentMessages = await db
-      .select({ templateId: outreachMessages.templateId })
-      .from(outreachMessages)
-      .where(
-        and(
-          eq(outreachMessages.enrollmentId, enrollmentId),
-          eq(outreachMessages.status, "sent"),
-          inArray(outreachMessages.channel, ["email", "imessage"]),
-        ),
-      );
-    const templateIds = [...new Set(sentMessages.map((m) => m.templateId).filter(Boolean))] as string[];
-    if (templateIds.length) {
-      const { outreachTemplates } = await import("@/lib/db/schema");
-      const { sql } = await import("drizzle-orm");
-      const isNoise = ["ooo", "bounce_hard", "bounce_soft"].includes(
-        classification.intent,
-      );
-      const isComplaint = classification.intent === "complaint";
-      const isOptOut =
-        classification.intent === "opt_out" || isComplaint;
-      if (!isNoise) {
-        await db
-          .update(outreachTemplates)
-          .set({
-            // Complaints are not real replies — count as opt-outs only.
-            ...(!isComplaint
-              ? { timesReplied: sql`${outreachTemplates.timesReplied} + 1` }
-              : {}),
-            ...(classification.intent.startsWith("positive")
-              ? { timesPositive: sql`${outreachTemplates.timesPositive} + 1` }
-              : {}),
-            ...(isOptOut
-              ? { timesOptOut: sql`${outreachTemplates.timesOptOut} + 1` }
-              : {}),
-            updatedAt: new Date(),
-          })
-          .where(inArray(outreachTemplates.id, templateIds));
-      }
-    }
+    await recomputeTemplateCounters();
   } catch (error) {
-    console.error("[outreach] template counter update failed", error);
+    console.error("[outreach] template counter recompute failed", error);
   }
 
   return {

@@ -529,7 +529,14 @@ export const outreachTemplates = pgTable("outreach_templates", {
   exampleSubject: text("example_subject"),
   exampleBody: text("example_body").notNull(),
   isActive: boolean("is_active").default(true).notNull(),
-  // Performance counters (phase 6 rollups read these).
+  /**
+   * Provenance, not performance: true when this exemplar is a verbatim message
+   * that was really sent and really got a reply. False means it was written in
+   * that voice to give a step kind coverage. Used to be smuggled into the name
+   * as "(won reply)".
+   */
+  isProven: boolean("is_proven").default(false).notNull(),
+  // Performance counters, recomputed from message history (never incremented).
   timesUsed: integer("times_used").default(0).notNull(),
   timesReplied: integer("times_replied").default(0).notNull(),
   timesPositive: integer("times_positive").default(0).notNull(),

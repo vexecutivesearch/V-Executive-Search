@@ -11,6 +11,15 @@ import {
  * They are never sent as-is. At enroll, Claude writes a NEW email/SMS about
  * the selected job listing, matching this voice/structure.
  *
+ * Naming convention: "<Medium and step>, <what this one says>".
+ * The first clause names the medium and where it sits in the sequence
+ * ("Intro email", "Text 2", "Positive reply text"); the second says in plain
+ * words what this particular exemplar does. One comma, never a parenthetical:
+ * kind, channel and provenance are real columns and the admin UI renders them
+ * as their own badge/column, so the name must not repeat them as "(intro)" or
+ * "(won reply)". Every name states its medium so the email/text pairs of a
+ * reply kind read in parallel.
+ *
  * House style: no dashes or hyphens anywhere in name, subject, or body.
  */
 export const SEED_TEMPLATES: Array<{
@@ -29,13 +38,17 @@ export const SEED_TEMPLATES: Array<{
     | "reply_decline"
     | "booking_confirmation";
   channel: "email" | "imessage";
+  /** A real send that really got a reply, rather than written for coverage. */
+  isProven?: boolean;
   exampleSubject?: string;
   exampleBody: string;
 }> = [
   {
-    name: "Boutique legal recruitment (won reply)",
+    name: "Intro email, boutique firm pitch",
+    legacyNames: ["Boutique legal recruitment (won reply)"],
     kind: "intro",
     channel: "email",
+    isProven: true,
     exampleSubject: "Boutique Legal Recruitment",
     exampleBody: `Hello,
 
@@ -48,10 +61,14 @@ I run a boutique firm based in South Florida, which allows me to move fast, stay
 If you're open to it, I'd welcome a quick call to understand your current hiring needs and see if there's a fit to work together.`,
   },
   {
-    name: "Role specific technical intro (won reply)",
-    legacyNames: ["Role-specific technical intro (won reply)"],
+    name: "Intro email, named open roles",
+    legacyNames: [
+      "Role specific technical intro (won reply)",
+      "Role-specific technical intro (won reply)",
+    ],
     kind: "intro",
     channel: "email",
+    isProven: true,
     exampleSubject: "Support for Your Battery Storage Engineering Hires",
     exampleBody: `Hi Stacy,
 
@@ -64,8 +81,8 @@ We work quickly while maintaining a strong focus on technical alignment, compens
 Would you be open to a quick conversation this week to discuss how Villatoro Executive Search could support these searches?`,
   },
   {
-    name: "Follow up 1, short nudge",
-    legacyNames: ["Follow-up 1, short nudge"],
+    name: "Follow up email 1, short nudge",
+    legacyNames: ["Follow up 1, short nudge", "Follow-up 1, short nudge"],
     kind: "followup_1",
     channel: "email",
     exampleSubject: "Following up on your open roles",
@@ -78,8 +95,8 @@ If it would help, I can share how we'd approach the search and what a realistic 
 Worth a quick call this week?`,
   },
   {
-    name: "Follow up 2, final email",
-    legacyNames: ["Follow-up 2, final email"],
+    name: "Follow up email 2, last note",
+    legacyNames: ["Follow up 2, final email", "Follow-up 2, final email"],
     kind: "followup_2",
     channel: "email",
     exampleSubject: "Last note on your hiring",
@@ -90,8 +107,9 @@ I'll keep this short. If filling that role is still a priority, I'd welcome ten 
 If the timing isn't right, no problem at all. Happy to reconnect whenever hiring picks back up.`,
   },
   {
-    name: "Text 1, same day intro",
+    name: "Text 1, same day as the intro email",
     legacyNames: [
+      "Text 1, same day intro",
       "Text 1, post email intro",
       "Text 1, post-email intro",
       "Text 1, post intro",
@@ -101,19 +119,22 @@ If the timing isn't right, no problem at all. Happy to reconnect whenever hiring
     exampleBody: `Hey, my name is Alejandro with V Executive Search. I've just emailed you about your Senior SCADA Controls Systems Engineer opening in West Palm Beach. When is a good time to chat?`,
   },
   {
-    name: "Text 2, value nudge",
+    name: "Text 2, why us nudge",
+    legacyNames: ["Text 2, value nudge"],
     kind: "text_2",
     channel: "imessage",
     exampleBody: `Hey Stacy, Alejandro again with V Executive Search. We move quickly on specialized searches like yours, happy to jump on a quick call if useful. When works this week?`,
   },
   {
-    name: "Text 3, final",
+    name: "Text 3, last note",
+    legacyNames: ["Text 3, final"],
     kind: "text_3",
     channel: "imessage",
     exampleBody: `Hey Stacy, last note from me. If hiring support would help, I'm around, otherwise I'll leave you be. Best of luck with the search.`,
   },
   {
-    name: "Positive reply, availability",
+    name: "Positive reply email, send the booking link",
+    legacyNames: ["Positive reply, availability"],
     kind: "reply_positive",
     channel: "email",
     exampleBody: `Hi Stacy,
@@ -128,7 +149,8 @@ If that link does not work for your schedule, reply with a couple of windows and
     // Someone who replies by text gets answered by text, so the reply kinds
     // need a texting voice of their own. Without one the SMS auto-reply is
     // drafted against a multi paragraph email exemplar.
-    name: "Positive reply text, calendar link",
+    name: "Positive reply text, send the booking link",
+    legacyNames: ["Positive reply text, calendar link"],
     kind: "reply_positive",
     channel: "imessage",
     exampleBody: `Great, thanks Stacy. Easiest way is to grab 30 min on my calendar here:
@@ -138,8 +160,8 @@ https://calendly.com/odv-vexecutivesearch/30min
 If nothing on there works, text me a couple of windows and I will make it happen.`,
   },
   {
-    name: "Info request, hand off ack",
-    legacyNames: ["Info request, hand-off ack"],
+    name: "Question reply email, promise the detail",
+    legacyNames: ["Info request, hand off ack", "Info request, hand-off ack"],
     kind: "reply_info_request",
     channel: "email",
     exampleBody: `Hi Stacy,
@@ -149,13 +171,15 @@ Absolutely, happy to share more detail. Let me pull together the specifics on th
 In the meantime, if it's easier to cover live, I'm glad to jump on a quick call whenever suits you.`,
   },
   {
-    name: "Info request text, hand off ack",
+    name: "Question reply text, promise the detail",
+    legacyNames: ["Info request text, hand off ack"],
     kind: "reply_info_request",
     channel: "imessage",
     exampleBody: `Good question Stacy. Let me pull the exact details and come back to you shortly with a proper answer. Happy to cover it on a quick call if that is easier.`,
   },
   {
-    name: "Decline, graceful close",
+    name: "Decline reply email, close warmly",
+    legacyNames: ["Decline, graceful close"],
     kind: "reply_decline",
     channel: "email",
     exampleBody: `Hi Stacy,
@@ -163,7 +187,8 @@ In the meantime, if it's easier to cover live, I'm glad to jump on a quick call 
 Understood, thanks for letting me know. Wishing you the best with the search, and I'm happy to reconnect if hiring support would ever be useful down the road.`,
   },
   {
-    name: "Decline text, graceful close",
+    name: "Decline reply text, close warmly",
+    legacyNames: ["Decline text, graceful close"],
     kind: "reply_decline",
     channel: "imessage",
     exampleBody: `Totally understood Stacy, thanks for the quick reply. Best of luck with the search, and I am around if hiring support is ever useful.`,
@@ -171,7 +196,8 @@ Understood, thanks for letting me know. Wishing you the best with the search, an
   {
     // Rendered from the same function that builds the real send, so the bank
     // always shows exactly what a contact receives.
-    name: "Booking confirmation text",
+    name: "Booking confirmation text, after they pick a time",
+    legacyNames: ["Booking confirmation text"],
     kind: "booking_confirmation",
     channel: "imessage",
     exampleBody: bookingConfirmationText(
@@ -219,6 +245,8 @@ export async function seedOutreachTemplates(): Promise<number> {
           .update(outreachTemplates)
           .set({
             name: t.name,
+            channel: t.channel,
+            isProven: t.isProven ?? false,
             exampleSubject: t.exampleSubject ?? null,
             exampleBody: t.exampleBody,
             updatedAt: new Date(),
@@ -231,6 +259,7 @@ export async function seedOutreachTemplates(): Promise<number> {
         name: t.name,
         kind: t.kind,
         channel: t.channel,
+        isProven: t.isProven ?? false,
         exampleSubject: t.exampleSubject ?? null,
         exampleBody: t.exampleBody,
         isActive: true,
@@ -241,11 +270,15 @@ export async function seedOutreachTemplates(): Promise<number> {
 
     if (
       existing.exampleBody !== t.exampleBody ||
-      (existing.exampleSubject ?? null) !== (t.exampleSubject ?? null)
+      (existing.exampleSubject ?? null) !== (t.exampleSubject ?? null) ||
+      existing.channel !== t.channel ||
+      existing.isProven !== (t.isProven ?? false)
     ) {
       await db
         .update(outreachTemplates)
         .set({
+          channel: t.channel,
+          isProven: t.isProven ?? false,
           exampleSubject: t.exampleSubject ?? null,
           exampleBody: t.exampleBody,
           updatedAt: new Date(),
