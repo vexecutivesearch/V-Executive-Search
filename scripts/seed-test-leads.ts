@@ -188,6 +188,70 @@ const LEADS: Lead[] = [
       board: "manual_seed",
     },
   },
+  {
+    slug: "florida-elite-epoxy",
+    company: {
+      name: "Florida Elite Epoxy",
+      domain: null,
+      industry: "Construction",
+      estimatedEmployees: 8,
+      leadScore: 72,
+      hiringSignals: { reposted_role: true },
+      market: "West Palm Beach, FL",
+      reasonToCall:
+        "Hiring an Epoxy Floor Installer for garage, warehouse and patio coatings across Palm Beach County: surface prep and grinding, mixing and rolling the coats, flake broadcast and clear topcoat, and leaving the job clean for handover. Owner run crew with no recruiter, so the owner is screening applicants between jobs.",
+      callOpener:
+        "Saw Florida Elite Epoxy is hiring an Epoxy Floor Installer and figured it would be worth a quick intro.",
+    },
+    contact: {
+      // No name was supplied and the address gives none away, so the drafter is
+      // left to open with "Hello," rather than guessing at one.
+      name: "",
+      title: "Owner",
+      email: "Mrpressurewashing@yahoo.com",
+      phone: "+15612461915",
+      location: "West Palm Beach, FL",
+    },
+    listing: {
+      title: "Epoxy Floor Installer",
+      url: null,
+      location: "West Palm Beach, FL",
+      board: "manual_seed",
+    },
+  },
+  {
+    slug: "connor-flooring",
+    company: {
+      name: "Connor Flooring and Construction",
+      domain: null,
+      industry: "Construction",
+      estimatedEmployees: 10,
+      leadScore: 72,
+      hiringSignals: { reposted_role: true },
+      // 317 is Indianapolis, so the lead sits in its own market rather than
+      // being filed under Florida with the rest.
+      market: "Indianapolis, IN",
+      reasonToCall:
+        "Hiring a Flooring Installer for residential remodels and light commercial work around Indianapolis: subfloor prep, laying plank, tile and hardwood, trim and transitions, and leaving each job clean for the walkthrough. Small crew with no recruiter, so the owner is screening applicants between jobs.",
+      callOpener:
+        "Saw Connor Flooring and Construction is hiring a Flooring Installer and figured it would be worth a quick intro.",
+    },
+    contact: {
+      // Same as the epoxy lead: no name given, and the address does not settle
+      // it, so the drafter opens with "Hello," rather than guessing.
+      name: "",
+      title: "Owner",
+      email: "babcocck@mail.uc.edu",
+      phone: "+13174472797",
+      location: "Indianapolis, IN",
+    },
+    listing: {
+      title: "Flooring Installer",
+      url: null,
+      location: "Indianapolis, IN",
+      board: "manual_seed",
+    },
+  },
 ];
 
 function selectedLeads(): Lead[] {
