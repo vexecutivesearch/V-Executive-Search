@@ -219,6 +219,39 @@ const LEADS: Lead[] = [
       board: "manual_seed",
     },
   },
+  {
+    slug: "connor-flooring",
+    company: {
+      name: "Connor Flooring and Construction",
+      domain: null,
+      industry: "Construction",
+      estimatedEmployees: 10,
+      leadScore: 72,
+      hiringSignals: { reposted_role: true },
+      // 317 is Indianapolis, so the lead sits in its own market rather than
+      // being filed under Florida with the rest.
+      market: "Indianapolis, IN",
+      reasonToCall:
+        "Hiring a Flooring Installer for residential remodels and light commercial work around Indianapolis: subfloor prep, laying plank, tile and hardwood, trim and transitions, and leaving each job clean for the walkthrough. Small crew with no recruiter, so the owner is screening applicants between jobs.",
+      callOpener:
+        "Saw Connor Flooring and Construction is hiring a Flooring Installer and figured it would be worth a quick intro.",
+    },
+    contact: {
+      // Same as the epoxy lead: no name given, and the address does not settle
+      // it, so the drafter opens with "Hello," rather than guessing.
+      name: "",
+      title: "Owner",
+      email: "babcocck@mail.uc.edu",
+      phone: "+13174472797",
+      location: "Indianapolis, IN",
+    },
+    listing: {
+      title: "Flooring Installer",
+      url: null,
+      location: "Indianapolis, IN",
+      board: "manual_seed",
+    },
+  },
 ];
 
 function selectedLeads(): Lead[] {
