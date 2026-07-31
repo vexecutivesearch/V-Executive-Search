@@ -14,6 +14,7 @@ import { db } from "@/lib/db";
 import { outreachTemplates, type OutreachTemplate, type OutreachTemplateKind } from "@/lib/db/schema";
 import {
   repairDashes,
+  repairSubject,
   sanitizeExemplarForPrompt,
   sanitizeOutreachBody,
   sanitizeSubject,
@@ -338,7 +339,7 @@ export async function draftStep(options: {
         extraGuidance = "Your previous answer was malformed. Use the exact SUBJECT:/BODY: format.";
         continue;
       }
-      const subjectCheck = sanitizeSubject(repairDashes(parsed.subject));
+      const subjectCheck = sanitizeSubject(repairSubject(parsed.subject));
       const bodyCheck = sanitizeOutreachBody(repairDashes(parsed.body), {
         channel: "email",
       });

@@ -67,6 +67,18 @@ const BANNED_PHRASES = [
   "unsubscribe",
 ];
 
+/**
+ * A faked reply prefix, which is only a fake when it LEADS the subject.
+ *
+ * Unanchored, this rule read "re:" anywhere in the line, so an ordinary subject
+ * whose colon happens to follow a word ending in those letters was rejected as
+ * a fake thread: "One more thing on the Roofing Technician hire: crews" and
+ * "Following up here: Roofing Technician" both tripped it. The retry guidance
+ * then told the model to fix a prefix it had never written, so all three
+ * attempts failed the same way and the enrollment was lost.
+ */
+const FAKE_REPLY_PREFIX = /^\s*(?:re|fwd|fw)\s*:\s*/i;
+
 export const EMAIL_BODY_MAX_CHARS = 1600;
 export const EMAIL_BODY_MIN_CHARS = 200;
 export const EMAIL_SUBJECT_MAX_CHARS = 80;
@@ -142,6 +154,18 @@ export function repairDashes(text: string): string {
     .replace(/,(\s*,)+/g, ",")
     .replace(/[ \t]{2,}/g, " ");
   return repaired.replace(/__URL_(\d+)__/g, (_, i) => urls[Number(i)] ?? "");
+}
+
+/**
+ * Subject repair the drafting loop runs before the lint: dashes, plus any
+ * stacked faked reply prefixes ("Re: Fwd: ...") the model put in front.
+ */
+export function repairSubject(subject: string): string {
+  let out = repairDashes(subject ?? "");
+  for (let i = 0; i < 3 && FAKE_REPLY_PREFIX.test(out); i += 1) {
+    out = out.replace(FAKE_REPLY_PREFIX, "");
+  }
+  return out.trim();
 }
 
 function pushDashViolation(violations: string[], text: string) {
@@ -224,7 +248,7 @@ export function sanitizeSubject(subject: string): SanitizeResult {
   }
   if (LINK_PATTERN.test(cleaned)) violations.push("subject contains a link");
   pushDashViolation(violations, cleaned);
-  if (/re:|fwd:/i.test(cleaned)) {
+  if (FAKE_REPLY_PREFIX.test(cleaned)) {
     violations.push("fake RE:/FWD: subject prefix");
   }
   const lower = cleaned.toLowerCase();
