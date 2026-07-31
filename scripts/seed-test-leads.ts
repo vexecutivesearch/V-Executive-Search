@@ -252,6 +252,37 @@ const LEADS: Lead[] = [
       board: "manual_seed",
     },
   },
+  {
+    slug: "tyler-junk-removal",
+    company: {
+      name: "Tyler Junk Removal",
+      domain: null,
+      industry: "Consumer Services",
+      estimatedEmployees: 7,
+      leadScore: 72,
+      hiringSignals: { reposted_role: true },
+      market: "West Palm Beach, FL",
+      reasonToCall:
+        "Hiring a Junk Removal Driver for residential and commercial cleanouts across Palm Beach County: loading and hauling, running the truck and the dump runs, quoting jobs on site, and looking after customers at the door. Owner run crew with no recruiter, so the owner is screening applicants between runs.",
+      callOpener:
+        "Saw Tyler Junk Removal is hiring a Junk Removal Driver and figured it would be worth a quick intro.",
+    },
+    contact: {
+      // Left empty like the other two: "Tyler" is in the company name, which is
+      // not the same as knowing the owner is called it.
+      name: "",
+      title: "Owner",
+      email: "Sbmfits@icloud.com",
+      phone: "+15614275248",
+      location: "West Palm Beach, FL",
+    },
+    listing: {
+      title: "Junk Removal Driver",
+      url: null,
+      location: "West Palm Beach, FL",
+      board: "manual_seed",
+    },
+  },
 ];
 
 function selectedLeads(): Lead[] {
