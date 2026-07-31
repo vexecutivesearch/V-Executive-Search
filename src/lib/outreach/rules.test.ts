@@ -8,10 +8,16 @@ import type {
 } from "@/lib/db/schema";
 
 /**
- * The bug these cover: a contact answered by text and by email seven seconds
- * apart. The text queued an SMS auto-reply for the Mac worker; the email ran
- * the same positive branch and its cancel sweep deleted that queued reply
- * before the worker's next five minute poll, so nothing was ever texted back.
+ * Two ways a mixed-channel reply lost its text answer, both covered here.
+ *
+ * First the cancel sweep: a contact answered by text and by email seven seconds
+ * apart, the text queued an SMS auto-reply for the Mac worker, and the email ran
+ * the same positive branch and cancelled it before the next five minute poll.
+ *
+ * Then the guard added to stop that, which scoped its cooldown across the whole
+ * conversation instead of per channel. When the email arrived first it satisfied
+ * the guard and the texted reply was skipped without a row ever being created —
+ * the same silence from the opposite direction.
  */
 
 type Row = Record<string, unknown>;
@@ -142,6 +148,16 @@ function queuedSmsReply(createdAt: Date): Row {
   } satisfies Partial<OutreachMessage> as Row;
 }
 
+function sentEmailReply(createdAt: Date): Row {
+  return {
+    id: "sent-email-reply",
+    channel: "email",
+    status: "sent",
+    stepKind: "reply_positive",
+    createdAt,
+  } satisfies Partial<OutreachMessage> as Row;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   selectResults.clear();
@@ -233,7 +249,46 @@ describe("positive reply arriving by text", () => {
     expect(inserts.some((i) => i.values.channel === "imessage")).toBe(true);
   });
 
-  it("keeps the queued text when the same reply also lands by email", async () => {
+  it("still replies when the earlier auto-reply is older than the cooldown", async () => {
+    selectResults.set("outreach_messages", []);
+    const { applyReplyRules } = await import("@/lib/outreach/rules");
+    await applyReplyRules(enrollment, inboundOn("email"), "positive");
+    expect(sendOutreachEmail).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Mixed-channel threads: one answer per channel, not one per conversation.
+ *
+ * Proven Theory v10 answered by email at 9:13 PM and by text at 9:15 PM. A
+ * conversation-wide cooldown saw the email auto-reply already sent and skipped
+ * the text entirely, so a live "yes, 2pm Wednesday?" went unanswered and no
+ * imessage row was ever created. The guard was written expecting the text to
+ * arrive first; when the email won the race it silenced the channel the prospect
+ * was actually using.
+ */
+describe("a positive reply on both channels", () => {
+  it("still texts back when the email reply landed first", async () => {
+    selectResults.set("outreach_messages", [sentEmailReply(new Date())]);
+    const { applyReplyRules } = await import("@/lib/outreach/rules");
+    const outcome = await applyReplyRules(
+      enrollment,
+      inboundOn("imessage"),
+      "positive",
+    );
+
+    const texts = queuedTexts();
+    expect(texts).toHaveLength(1);
+    expect(texts[0].values).toMatchObject({
+      stepKind: "reply_positive",
+      channel: "imessage",
+      status: "queued",
+    });
+    expect(outcome.actionTaken).toContain("queued SMS");
+    expect(outcome.actionTaken).not.toContain("skipped");
+  });
+
+  it("still emails back when the text reply landed first", async () => {
     selectResults.set("outreach_messages", [queuedSmsReply(new Date())]);
     const { applyReplyRules } = await import("@/lib/outreach/rules");
     const outcome = await applyReplyRules(
@@ -242,8 +297,54 @@ describe("positive reply arriving by text", () => {
       "positive",
     );
 
-    expect(draftEnrollmentReply).not.toHaveBeenCalled();
+    expect(sendOutreachEmail).toHaveBeenCalledTimes(1);
+    expect(queuedTexts()).toHaveLength(0);
+    expect(outcome.actionTaken).toContain("sent");
+    expect(outcome.actionTaken).not.toContain("skipped");
+  });
+
+  it("answers a texted reply on the text thread, never by email", async () => {
+    selectResults.set("outreach_messages", [sentEmailReply(new Date())]);
+    const { applyReplyRules } = await import("@/lib/outreach/rules");
+    await applyReplyRules(enrollment, inboundOn("imessage"), "positive");
     expect(sendOutreachEmail).not.toHaveBeenCalled();
+    expect(draftEnrollmentReply).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "imessage" }),
+    );
+  });
+});
+
+/** Duplicate protection has to survive on the channel it was built for. */
+describe("the same reply twice on one channel", () => {
+  it("skips a second email reply inside the cooldown", async () => {
+    selectResults.set("outreach_messages", [sentEmailReply(new Date())]);
+    const { applyReplyRules } = await import("@/lib/outreach/rules");
+    const outcome = await applyReplyRules(
+      enrollment,
+      inboundOn("email"),
+      "positive",
+    );
+
+    expect(sendOutreachEmail).not.toHaveBeenCalled();
+    expect(draftEnrollmentReply).not.toHaveBeenCalled();
+    expect(outcome.actionTaken).toContain("skipped");
+    const skip = events().find((e) => e.payload.auto_reply_skipped === true);
+    expect(skip?.payload).toMatchObject({
+      existing_channel: "email",
+      existing_status: "sent",
+    });
+  });
+
+  it("skips a second texted reply inside the cooldown", async () => {
+    selectResults.set("outreach_messages", [queuedSmsReply(new Date())]);
+    const { applyReplyRules } = await import("@/lib/outreach/rules");
+    const outcome = await applyReplyRules(
+      enrollment,
+      inboundOn("imessage"),
+      "positive",
+    );
+
+    expect(queuedTexts()).toHaveLength(0);
     expect(outcome.actionTaken).toContain("skipped");
     const skip = events().find((e) => e.payload.auto_reply_skipped === true);
     expect(skip?.payload).toMatchObject({
@@ -251,12 +352,22 @@ describe("positive reply arriving by text", () => {
       existing_status: "queued",
     });
   });
+});
 
-  it("still replies when the earlier auto-reply is older than the cooldown", async () => {
+/** Email only: one reply goes out and the text queue stays empty. */
+describe("a positive reply by email alone", () => {
+  it("sends exactly one email reply and queues no text", async () => {
     selectResults.set("outreach_messages", []);
     const { applyReplyRules } = await import("@/lib/outreach/rules");
-    await applyReplyRules(enrollment, inboundOn("email"), "positive");
+    const outcome = await applyReplyRules(
+      enrollment,
+      inboundOn("email"),
+      "positive",
+    );
+
     expect(sendOutreachEmail).toHaveBeenCalledTimes(1);
+    expect(queuedTexts()).toHaveLength(0);
+    expect(outcome.actionTaken).toContain("via email");
   });
 });
 

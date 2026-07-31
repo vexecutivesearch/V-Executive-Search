@@ -69,15 +69,33 @@ async function notificationEmail(): Promise<string | null> {
 }
 
 /**
- * How long one auto-reply covers the contact. A reply that arrives by text and
- * by email in the same breath is one human saying one thing, so it earns one
- * answer, on the channel that spoke first.
+ * How long one auto-reply covers a channel: a duplicate reply arriving on the
+ * same channel inside this window reuses the first answer.
  */
 const AUTO_REPLY_COOLDOWN_MS = 15 * 60_000;
 
-/** An auto-reply already sent or waiting on the worker, inside the cooldown. */
-async function recentAutoReply(enrollmentId: string) {
-  const [row] = await db
+/**
+ * The rule for mixed-channel threads: one answer per channel, not one per
+ * conversation.
+ *
+ * Somebody who answers by text and by email is holding two conversations with
+ * us, and each one is owed a reply where it happened. Prospects who text expect
+ * a text back; leaving a texted "yes, 2pm Wednesday?" unanswered because an
+ * email went out ninety seconds earlier reads as being ignored, and the whole
+ * point of texting them is that the text thread is the live one.
+ *
+ * This deliberately replaces a conversation-wide guard that scoped the cooldown
+ * across every channel at once. That guard was written assuming the text would
+ * arrive first and win, so when the email landed first it suppressed the SMS
+ * reply instead — the exact inverse of the intent. Scoping by channel keeps the
+ * duplicate protection it was built for (the same reply arriving twice on one
+ * channel) without letting one channel silence another.
+ */
+async function recentAutoReply(
+  enrollmentId: string,
+  channel: "email" | "imessage",
+) {
+  const rows = await db
     .select({
       id: outreachMessages.id,
       channel: outreachMessages.channel,
@@ -97,9 +115,8 @@ async function recentAutoReply(enrollmentId: string) {
         ),
       ),
     )
-    .orderBy(desc(outreachMessages.createdAt))
-    .limit(1);
-  return row ?? null;
+    .orderBy(desc(outreachMessages.createdAt));
+  return rows.find((row) => row.channel === channel) ?? null;
 }
 
 async function setEnrollmentStatus(
@@ -140,7 +157,7 @@ async function lastSentEmail(enrollmentId: string) {
 export type AutoReplyResult = {
   sent: boolean;
   queued: boolean;
-  /** Deliberate no-op (an auto-reply already covers this inbound). */
+  /** Deliberate no-op (this channel already has a fresh auto-reply). */
   skipped: boolean;
   usedCalendar: boolean;
   channel: "email" | "imessage";
@@ -201,7 +218,7 @@ async function sendThreadedAutoReply(options: {
     inbound.channel === "imessage" && Boolean(enrollment.phoneNumber);
   const channel: "email" | "imessage" = preferSms ? "imessage" : "email";
 
-  const existing = await recentAutoReply(enrollment.id);
+  const existing = await recentAutoReply(enrollment.id, channel);
   if (existing) {
     const reason = `an auto-reply is already ${existing.status} on ${existing.channel}`;
     await logEnrollmentEvent({
@@ -224,7 +241,7 @@ async function sendThreadedAutoReply(options: {
       queued: false,
       skipped: true,
       usedCalendar: false,
-      channel: existing.channel === "imessage" ? "imessage" : "email",
+      channel,
       reason,
     };
   }

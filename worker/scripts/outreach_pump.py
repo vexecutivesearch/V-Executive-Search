@@ -46,7 +46,7 @@ import sqlite3
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -924,6 +924,11 @@ def resolve_pending_text_sends() -> int:
 
 APPLE_EPOCH_OFFSET = 978_307_200  # 2001-01-01 in unix seconds
 
+# Independent of the rowid watermark: however we got here, a text this old is not
+# a reply to anything we are currently sending. Belt and braces, so a corrupted
+# or hand-edited watermark can never replay message history into the CRM again.
+CHAT_DB_MAX_INBOUND_AGE = timedelta(hours=24)
+
 
 def _normalize_phone(value: str) -> str:
     digits = "".join(ch for ch in value if ch.isdigit())
@@ -1012,7 +1017,25 @@ def scan_chat_db(watch_phones: set[str]) -> int:
     base, key = crm
 
     state = _load_state()
-    last_rowid = int(state.get("chat_last_rowid") or 0)
+    stored_watermark = state.get("chat_last_rowid")
+    if stored_watermark is None:
+        # No watermark means a fresh install, a wiped state file, or a promote
+        # that did not carry the state across. Scanning from rowid 0 in that
+        # situation ingests the entire local Messages history for every watched
+        # number as brand new replies: that is how eleven days of personal texts
+        # with a test number arrived as answers to outreach that had not been
+        # sent yet. Adopt the current maximum instead, so watching starts now and
+        # history is left alone.
+        baseline = _chat_db_max_rowid() or 0
+        state["chat_last_rowid"] = baseline
+        _save_state(state)
+        logger.warning(
+            "chat.db scan: no watermark — baselining at rowid=%d, "
+            "existing history will not be ingested",
+            baseline,
+        )
+        return 0
+    last_rowid = int(stored_watermark or 0)
 
     try:
         conn = sqlite3.connect(f"file:{CHAT_DB}?mode=ro", uri=True)
@@ -1061,6 +1084,8 @@ def scan_chat_db(watch_phones: set[str]) -> int:
 
     inbound = []
     max_rowid = last_rowid
+    stale = 0
+    cutoff = datetime.now(tz=timezone.utc) - CHAT_DB_MAX_INBOUND_AGE
     for rowid, guid, text, apple_date, is_from_me, handle, attributed_body in rows:
         max_rowid = max(max_rowid, int(rowid))
         # Filter self-sent messages — otherwise our own outbound texts loop
@@ -1080,6 +1105,9 @@ def scan_chat_db(watch_phones: set[str]) -> int:
         received = datetime.fromtimestamp(
             seconds + APPLE_EPOCH_OFFSET, tz=timezone.utc
         )
+        if received < cutoff:
+            stale += 1
+            continue
         inbound.append(
             {
                 "channel": "imessage",
@@ -1091,11 +1119,14 @@ def scan_chat_db(watch_phones: set[str]) -> int:
         )
 
     logger.info(
-        "chat.db scan: %d row(s) past rowid=%d, %d inbound from %d watched number(s)",
+        "chat.db scan: %d row(s) past rowid=%d, %d inbound from %d watched "
+        "number(s), %d skipped as older than %s",
         len(rows),
         last_rowid,
         len(inbound),
         len(watch_phones),
+        stale,
+        CHAT_DB_MAX_INBOUND_AGE,
     )
 
     if inbound:

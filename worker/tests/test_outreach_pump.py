@@ -1,8 +1,10 @@
 """Outreach pump: chat.db inbound scan filtering + IMAP/phone helpers."""
 
 import importlib.util
+import json
 import sqlite3
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -39,8 +41,27 @@ def _attributed_body(text: str) -> bytes:
     )
 
 
-def _make_chat_db(path: Path, rows, with_attributed_body: bool = True):
-    """Rows are (guid, text, is_from_me, handle[, attributed_body])."""
+APPLE_EPOCH_OFFSET = 978_307_200  # 2001-01-01 in unix seconds
+
+
+def _apple_ns(when: datetime) -> int:
+    """A chat.db ``message.date``: nanoseconds since 2001 on modern macOS."""
+    return int(when.timestamp() - APPLE_EPOCH_OFFSET) * 1_000_000_000
+
+
+def _make_chat_db(
+    path: Path,
+    rows,
+    with_attributed_body: bool = True,
+    sent_at: datetime | None = None,
+):
+    """Rows are (guid, text, is_from_me, handle[, attributed_body[, sent_at]]).
+
+    Rows default to "a moment ago" because the scan ignores anything older than
+    ``CHAT_DB_MAX_INBOUND_AGE``; a fixed date in the past would make every test
+    here assert the stale-row path by accident.
+    """
+    default_at = sent_at or datetime.now(tz=timezone.utc) - timedelta(minutes=1)
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT)")
     conn.execute(
@@ -52,10 +73,11 @@ def _make_chat_db(path: Path, rows, with_attributed_body: bool = True):
     for i, row in enumerate(rows, start=1):
         guid, text, is_from_me, handle = row[:4]
         body_blob = row[4] if len(row) > 4 else None
+        row_at = row[5] if len(row) > 5 else default_at
         if handle not in handles:
             handles[handle] = len(handles) + 1
             conn.execute("INSERT INTO handle VALUES (?, ?)", (handles[handle], handle))
-        values = [i, guid, text, 700_000_000_000_000_000, is_from_me, handles[handle]]
+        values = [i, guid, text, _apple_ns(row_at), is_from_me, handles[handle]]
         if with_attributed_body:
             values.append(body_blob)
         conn.execute(
@@ -64,6 +86,17 @@ def _make_chat_db(path: Path, rows, with_attributed_body: bool = True):
         )
     conn.commit()
     conn.close()
+
+
+def _seed_watermark(pump, path: Path, rowid: int = 0):
+    """Give the scan a starting rowid.
+
+    Without one it baselines at the current maximum and ingests nothing, which is
+    the whole point of the guard — so any test that expects rows to come through
+    has to say where it is scanning from.
+    """
+    path.write_text(json.dumps({"chat_last_rowid": rowid}), encoding="utf-8")
+    return path
 
 
 def test_normalize_phone():
@@ -134,7 +167,9 @@ def test_chat_scan_ingests_attributed_body_when_text_is_null(tmp_path, monkeypat
         ],
     )
     monkeypatch.setattr(pump, "CHAT_DB", db_path)
-    monkeypatch.setattr(pump, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(
+        pump, "STATE_FILE", _seed_watermark(pump, tmp_path / "state.json")
+    )
     monkeypatch.setattr(pump.sys, "platform", "darwin")
     monkeypatch.setenv("CRM_API_URL", "https://crm.example")
     monkeypatch.setenv("CRM_API_KEY", "test")
@@ -169,7 +204,9 @@ def test_chat_scan_works_without_attributed_body_column(tmp_path, monkeypatch):
         with_attributed_body=False,
     )
     monkeypatch.setattr(pump, "CHAT_DB", db_path)
-    monkeypatch.setattr(pump, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(
+        pump, "STATE_FILE", _seed_watermark(pump, tmp_path / "state.json")
+    )
     monkeypatch.setattr(pump.sys, "platform", "darwin")
     monkeypatch.setenv("CRM_API_URL", "https://crm.example")
     monkeypatch.setenv("CRM_API_KEY", "test")
@@ -191,6 +228,91 @@ def test_chat_scan_works_without_attributed_body_column(tmp_path, monkeypatch):
 
     assert pump.scan_chat_db({"5615550100"}) == 1
     assert posted["messages"][0]["body"] == "Reply from an old schema"
+
+
+def _fake_crm(pump, monkeypatch, posted):
+    """Capture what the scan would post to /api/outreach/inbound."""
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        posted.setdefault("messages", []).extend(json["messages"])
+        return FakeResponse()
+
+    monkeypatch.setattr(pump.requests, "post", fake_post)
+    monkeypatch.setenv("CRM_API_URL", "https://crm.example")
+    monkeypatch.setenv("CRM_API_KEY", "test")
+
+
+def test_first_scan_without_a_watermark_ingests_no_history(tmp_path, monkeypatch, caplog):
+    """A missing watermark must baseline, not replay the whole message history.
+
+    ``state.get("chat_last_rowid") or 0`` meant a fresh install, a wiped state
+    file, or a promote that dropped the state started the scan at rowid 0 and
+    swept every message ever exchanged with a watched number into the CRM as a
+    brand new reply. Eleven days of personal texts arrived that way, each one
+    scored as an answer to outreach that had not been sent yet.
+    """
+    pump = _load_pump()
+    db_path = tmp_path / "chat.db"
+    long_ago = datetime.now(tz=timezone.utc) - timedelta(days=11)
+    _make_chat_db(
+        db_path,
+        [
+            ("old1", "lmfao how?", 0, "+15615550100"),
+            ("old2", "get this money", 0, "+15615550100"),
+        ],
+        sent_at=long_ago,
+    )
+    state_file = tmp_path / "state.json"
+    monkeypatch.setattr(pump, "CHAT_DB", db_path)
+    monkeypatch.setattr(pump, "STATE_FILE", state_file)
+    monkeypatch.setattr(pump.sys, "platform", "darwin")
+    posted = {}
+    _fake_crm(pump, monkeypatch, posted)
+
+    with caplog.at_level("WARNING"):
+        assert pump.scan_chat_db({"5615550100"}) == 0
+    assert "no watermark" in caplog.text
+    assert posted == {}
+    # Baselined at the end of the table, so the next tick starts from now.
+    assert json.loads(state_file.read_text())["chat_last_rowid"] == 2
+
+
+def test_chat_scan_ignores_rows_older_than_the_age_limit(tmp_path, monkeypatch):
+    """Backstop for a hand-edited or corrupted watermark.
+
+    Even told to scan from rowid 0, history must not come through: only the
+    recent row is a plausible reply to what we are sending now.
+    """
+    pump = _load_pump()
+    db_path = tmp_path / "chat.db"
+    _make_chat_db(
+        db_path,
+        [
+            (
+                "stale",
+                "so she was cheating to? lmaooo",
+                0,
+                "+15615550100",
+                None,
+                datetime.now(tz=timezone.utc) - timedelta(days=11),
+            ),
+            ("fresh", "Yes ! I'm interested", 0, "+15615550100"),
+        ],
+    )
+    monkeypatch.setattr(pump, "CHAT_DB", db_path)
+    monkeypatch.setattr(
+        pump, "STATE_FILE", _seed_watermark(pump, tmp_path / "state.json")
+    )
+    monkeypatch.setattr(pump.sys, "platform", "darwin")
+    posted = {}
+    _fake_crm(pump, monkeypatch, posted)
+
+    assert pump.scan_chat_db({"5615550100"}) == 1
+    assert [m["external_id"] for m in posted["messages"]] == ["chatdb:fresh"]
 
 
 def test_empty_watchlist_is_logged_not_silent(tmp_path, monkeypatch, caplog):
@@ -230,7 +352,9 @@ def test_chat_scan_filters_self_and_unwatched(tmp_path, monkeypatch):
         ],
     )
     monkeypatch.setattr(pump, "CHAT_DB", db_path)
-    monkeypatch.setattr(pump, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(
+        pump, "STATE_FILE", _seed_watermark(pump, tmp_path / "state.json")
+    )
     monkeypatch.setattr(pump.sys, "platform", "darwin")
     monkeypatch.setenv("CRM_API_URL", "https://crm.example")
     monkeypatch.setenv("CRM_API_KEY", "test")
@@ -265,7 +389,9 @@ def test_chat_scan_does_not_advance_state_on_post_failure(tmp_path, monkeypatch)
     db_path = tmp_path / "chat.db"
     _make_chat_db(db_path, [("g1", "Reply!", 0, "+15615550100")])
     monkeypatch.setattr(pump, "CHAT_DB", db_path)
-    monkeypatch.setattr(pump, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(
+        pump, "STATE_FILE", _seed_watermark(pump, tmp_path / "state.json")
+    )
     monkeypatch.setattr(pump.sys, "platform", "darwin")
     monkeypatch.setenv("CRM_API_URL", "https://crm.example")
     monkeypatch.setenv("CRM_API_KEY", "test")

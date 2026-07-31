@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   contacts,
@@ -36,12 +36,107 @@ export type InboundIngestResult = {
   actionTaken?: string;
 };
 
+/**
+ * Enrollments that have been deliberately retired and must not absorb a reply.
+ *
+ * Retired test enrollments used to keep answering for a number long after it was
+ * released: a note the operator texted themselves landed on a stopped v4
+ * enrollment, was classified, and flipped it back to paused. `replied_positive`
+ * and `completed` stay eligible on purpose, because a follow-up on a thread we
+ * already answered is exactly the reply we most want to catch.
+ */
+const RETIRED_ENROLLMENT_STATUSES = ["stopped", "suppressed"] as const;
+
+/**
+ * Slack for clock skew between the Mac's chat.db timestamps and our sent_at.
+ * A genuine reply cannot predate the message it answers, but the two clocks are
+ * not the same clock.
+ */
+const REPLY_CLOCK_SKEW_GRACE_MS = 5 * 60_000;
+
+/**
+ * Did we actually send this enrollment something before the reply arrived?
+ *
+ * Nothing else establishes that an inbound is a *reply*. Without this, a first
+ * chat.db scan that starts from rowid 0 hands over the whole local message
+ * history for a watched number and every line of it scores as an answer to
+ * outreach that had not been sent yet.
+ */
+async function hasOutboundBefore(
+  enrollmentId: string,
+  receivedAt: Date,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: outreachMessages.id })
+    .from(outreachMessages)
+    .where(
+      and(
+        eq(outreachMessages.enrollmentId, enrollmentId),
+        eq(outreachMessages.status, "sent"),
+        isNotNull(outreachMessages.sentAt),
+        lte(
+          outreachMessages.sentAt,
+          new Date(receivedAt.getTime() + REPLY_CLOCK_SKEW_GRACE_MS),
+        ),
+      ),
+    )
+    .limit(1);
+  return Boolean(row);
+}
+
+type EnrollmentMatch = {
+  enrollmentId: string | null;
+  contactId: string | null;
+  /** Set when a candidate was found but refused, for the audit trail. */
+  refusedReason: string | null;
+};
+
+/**
+ * Is this candidate allowed to own the reply? Keeps the contact attribution
+ * either way so the row still shows under the right person in the CRM.
+ */
+async function admitEnrollment(
+  candidate: { id: string; status: string; contactId: string },
+  receivedAt: Date,
+): Promise<EnrollmentMatch> {
+  if (
+    (RETIRED_ENROLLMENT_STATUSES as readonly string[]).includes(
+      candidate.status,
+    )
+  ) {
+    return {
+      enrollmentId: null,
+      contactId: candidate.contactId,
+      refusedReason: `newest matching enrollment is ${candidate.status}`,
+    };
+  }
+  if (!(await hasOutboundBefore(candidate.id, receivedAt))) {
+    return {
+      enrollmentId: null,
+      contactId: candidate.contactId,
+      refusedReason: "predates anything we sent on that enrollment",
+    };
+  }
+  return {
+    enrollmentId: candidate.id,
+    contactId: candidate.contactId,
+    refusedReason: null,
+  };
+}
+
 /** Find the live enrollment for a reply, by threading id or address. */
 async function matchEnrollment(options: {
   channel: OutreachChannel;
   fromAddress?: string | null;
   inReplyTo?: string | null;
-}): Promise<{ enrollmentId: string | null; contactId: string | null }> {
+  receivedAt: Date;
+}): Promise<EnrollmentMatch> {
+  const unmatched: EnrollmentMatch = {
+    enrollmentId: null,
+    contactId: null,
+    refusedReason: null,
+  };
+
   // 1. Threading header wins — exact message match.
   if (options.inReplyTo) {
     const [message] = await db
@@ -53,11 +148,15 @@ async function matchEnrollment(options: {
       .limit(1);
     if (message) {
       const [enrollment] = await db
-        .select({ id: sequenceEnrollments.id, contactId: sequenceEnrollments.contactId })
+        .select({
+          id: sequenceEnrollments.id,
+          contactId: sequenceEnrollments.contactId,
+          status: sequenceEnrollments.status,
+        })
         .from(sequenceEnrollments)
         .where(eq(sequenceEnrollments.id, message.enrollmentId))
         .limit(1);
-      if (enrollment) return { enrollmentId: enrollment.id, contactId: enrollment.contactId };
+      if (enrollment) return admitEnrollment(enrollment, options.receivedAt);
     }
   }
 
@@ -65,34 +164,46 @@ async function matchEnrollment(options: {
   if (options.channel === "email") {
     const email = normalizeEmail(options.fromAddress);
     if (email) {
+      // normalizeEmail lowercases, stored addresses keep whatever case they were
+      // seeded with, and an exact comparison silently loses the match — which is
+      // how two positive replies from Aminoogian@gmail.com came back "no
+      // matching enrollment". Compare case-insensitively at both ends.
       const rows = await db
-        .select({ id: sequenceEnrollments.id, contactId: sequenceEnrollments.contactId })
+        .select({
+          id: sequenceEnrollments.id,
+          contactId: sequenceEnrollments.contactId,
+          status: sequenceEnrollments.status,
+        })
         .from(sequenceEnrollments)
-        .where(eq(sequenceEnrollments.emailAddress, email))
+        .where(sql`lower(${sequenceEnrollments.emailAddress}) = ${email}`)
         .orderBy(desc(sequenceEnrollments.enrolledAt))
         .limit(1);
-      if (rows[0]) return { enrollmentId: rows[0].id, contactId: rows[0].contactId };
+      if (rows[0]) return admitEnrollment(rows[0], options.receivedAt);
       // Fallback: any contact with this email (reply from a different alias).
       const [contact] = await db
         .select({ id: contacts.id })
         .from(contacts)
         .where(
           or(
-            eq(contacts.email, email),
-            eq(contacts.workEmail, email),
-            eq(contacts.personalEmail, email),
+            sql`lower(${contacts.email}) = ${email}`,
+            sql`lower(${contacts.workEmail}) = ${email}`,
+            sql`lower(${contacts.personalEmail}) = ${email}`,
           ),
         )
         .limit(1);
       if (contact) {
         const [enrollment] = await db
-          .select({ id: sequenceEnrollments.id, contactId: sequenceEnrollments.contactId })
+          .select({
+            id: sequenceEnrollments.id,
+            contactId: sequenceEnrollments.contactId,
+            status: sequenceEnrollments.status,
+          })
           .from(sequenceEnrollments)
           .where(eq(sequenceEnrollments.contactId, contact.id))
           .orderBy(desc(sequenceEnrollments.enrolledAt))
           .limit(1);
-        if (enrollment) return { enrollmentId: enrollment.id, contactId: enrollment.contactId };
-        return { enrollmentId: null, contactId: contact.id };
+        if (enrollment) return admitEnrollment(enrollment, options.receivedAt);
+        return { ...unmatched, contactId: contact.id };
       }
     }
   } else {
@@ -102,15 +213,16 @@ async function matchEnrollment(options: {
         .select({
           id: sequenceEnrollments.id,
           contactId: sequenceEnrollments.contactId,
+          status: sequenceEnrollments.status,
           phoneNumber: sequenceEnrollments.phoneNumber,
         })
         .from(sequenceEnrollments)
         .orderBy(desc(sequenceEnrollments.enrolledAt));
       const match = rows.find((r) => normalizePhone(r.phoneNumber) === phone);
-      if (match) return { enrollmentId: match.id, contactId: match.contactId };
+      if (match) return admitEnrollment(match, options.receivedAt);
     }
   }
-  return { enrollmentId: null, contactId: null };
+  return unmatched;
 }
 
 /**
@@ -295,7 +407,11 @@ export async function ingestInboundMessage(options: {
     if (calendly) return calendly;
   }
 
-  const { enrollmentId, contactId } = await matchEnrollment(options);
+  const receivedAt = options.receivedAt ?? new Date();
+  const { enrollmentId, contactId, refusedReason } = await matchEnrollment({
+    ...options,
+    receivedAt,
+  });
 
   const [row] = await db
     .insert(inboundMessages)
@@ -307,7 +423,7 @@ export async function ingestInboundMessage(options: {
       subject: options.subject ?? null,
       rawBody: options.body,
       externalId: options.externalId ?? null,
-      receivedAt: options.receivedAt ?? new Date(),
+      receivedAt,
     })
     .onConflictDoNothing({ target: inboundMessages.externalId })
     .returning();
@@ -348,15 +464,22 @@ export async function ingestInboundMessage(options: {
   });
 
   if (!enrollmentId) {
+    // Say which of the two it was. "Refused" means we know whose message this is
+    // and deliberately did not treat it as a reply, which reads very differently
+    // in the Replies tab from never having recognised the sender at all.
+    const actionTaken = refusedReason
+      ? `not treated as a reply — ${refusedReason}; logged only`
+      : "no matching enrollment — logged only";
     await db
       .update(inboundMessages)
-      .set({ actionTaken: "no matching enrollment — logged only" })
+      .set({ actionTaken })
       .where(eq(inboundMessages.id, row.id));
     return {
       id: row.id,
       duplicate: false,
       matched: false,
       intent: classification.intent,
+      actionTaken,
     };
   }
 
