@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  repairDashes,
   sanitizeExemplarForPrompt,
   sanitizeOutreachBody,
   sanitizeSubject,
@@ -106,6 +107,76 @@ describe("sanitizeOutreachBody (anti-spam copy hygiene)", () => {
   it("accepts copy that uses spaces instead of hyphens", () => {
     const body = `${CLEAN_EMAIL}\n\nWe stay hands on with every search.`;
     expect(sanitizeOutreachBody(body, { channel: "email" }).ok).toBe(true);
+  });
+});
+
+describe("repairDashes (what the drafting loop runs before the lint)", () => {
+  /**
+   * The Jul 31 ABA Therapy Assistant enrollment: three attempts, three
+   * rejections, no enrollment, a lead sitting on the Call List that never
+   * sent. Every rejection was the dash rule catching vocabulary the role is
+   * simply written with.
+   */
+  it("saves the draft the ABA listing kept producing", () => {
+    const draft = `Hi Miguel,
+
+I saw you are hiring an ABA Therapy Assistant in West Palm Beach. Full-time, in-clinic roles like this are hard to fill while you are also running the practice.
+
+We place RBT-certified candidates and strong trainees across South Florida, with evidence-based screening so you only meet people who fit. Since you have no in-house recruiter, screening is landing on you.
+
+Worth a quick call this week?`;
+    expect(sanitizeOutreachBody(draft, { channel: "email" }).ok).toBe(false);
+
+    const repaired = repairDashes(draft);
+    const result = sanitizeOutreachBody(repaired, { channel: "email" });
+    expect(result.violations).toEqual([]);
+    expect(repaired).toContain("Full time, in clinic roles");
+    expect(repaired).toContain("RBT certified");
+    expect(repaired).toContain("evidence based");
+    expect(repaired).toContain("in house recruiter");
+  });
+
+  it("un-hyphenates a compound, including a triple", () => {
+    expect(repairDashes("one-on-one sessions")).toBe("one on one sessions");
+    expect(repairDashes("hands-on, long-term, day-to-day")).toBe(
+      "hands on, long term, day to day",
+    );
+  });
+
+  it("turns a dash between clauses into a comma", () => {
+    expect(repairDashes("We move fast — and stay close.")).toBe(
+      "We move fast, and stay close.",
+    );
+    expect(repairDashes("We move fast -- and stay close.")).toBe(
+      "We move fast, and stay close.",
+    );
+    expect(repairDashes("Two thoughts, one dash - then the rest.")).toBe(
+      "Two thoughts, one dash, then the rest.",
+    );
+  });
+
+  it("reads a range out as words rather than dropping the dash", () => {
+    expect(repairDashes("roughly 20-30 days")).toBe("roughly 20 to 30 days");
+    expect(repairDashes("$80,000-$100,000 base")).toBe(
+      "$80,000 to $100,000 base",
+    );
+  });
+
+  it("drops a leading dash instead of leaving a stray comma", () => {
+    expect(repairDashes("Why us:\n- we move fast\n- we stay close")).toBe(
+      "Why us:\nwe move fast\nwe stay close",
+    );
+  });
+
+  it("leaves hyphens inside URLs alone", () => {
+    const url = "https://calendly.com/odv-vexecutivesearch/15m";
+    const repaired = repairDashes(`Grab a slot here:\n${url}\nWe stay hands-on.`);
+    expect(repaired).toContain(url);
+    expect(repaired).toContain("hands on");
+  });
+
+  it("leaves copy that is already clean untouched", () => {
+    expect(repairDashes(CLEAN_EMAIL)).toBe(CLEAN_EMAIL);
   });
 });
 

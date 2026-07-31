@@ -13,6 +13,7 @@ import {
   DEFAULT_STEP_SPECS,
   draftSequence,
   getLastDraftFailureReason,
+  getLastDraftViolations,
   type StepSpec,
 } from "@/lib/outreach-draft";
 import { buildDraftContext } from "@/lib/outreach/draft-context";
@@ -227,10 +228,18 @@ export async function enrollContact(
   const drafted = await draftSequence({ specs, context });
   if (!drafted) {
     const draftFailure = getLastDraftFailureReason() ?? "unknown";
+    const { step, violations } = getLastDraftViolations();
+    // Name the step and the lint that stopped it, so the note in the CRM is
+    // enough to act on without opening the deploy logs.
+    const because = violations.length
+      ? ` (${step ?? "unknown step"}: ${violations.join("; ")})`
+      : step
+        ? ` (${step})`
+        : "";
     const failReason =
       draftFailure === "missing_anthropic_api_key"
         ? "drafting failed: ANTHROPIC_API_KEY missing on this deploy"
-        : `drafting failed: ${draftFailure}`;
+        : `drafting failed: ${draftFailure}${because}`;
     await logEnrollmentEvent({
       eventType: "error",
       actor: options?.actor ?? "system",
@@ -240,6 +249,8 @@ export async function enrollContact(
         company_id: company.id,
         job_listing_id: focusListing?.id ?? null,
         draft_failure: draftFailure,
+        failed_step: step,
+        violations,
         detail: failReason,
       },
     });
@@ -251,7 +262,7 @@ export async function enrollContact(
         await recordCallListOutreachEvent({
           companyId: company.id,
           contactId: contact.id,
-          summary: `Outreach enroll failed: ${failReason}`,
+          summary: `Outreach enroll failed: ${failReason}`.slice(0, 400),
         });
       } catch {
         /* non-fatal */
