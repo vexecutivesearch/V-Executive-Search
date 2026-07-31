@@ -188,6 +188,37 @@ const LEADS: Lead[] = [
       board: "manual_seed",
     },
   },
+  {
+    slug: "florida-elite-epoxy",
+    company: {
+      name: "Florida Elite Epoxy",
+      domain: null,
+      industry: "Construction",
+      estimatedEmployees: 8,
+      leadScore: 72,
+      hiringSignals: { reposted_role: true },
+      market: "West Palm Beach, FL",
+      reasonToCall:
+        "Hiring an Epoxy Floor Installer for garage, warehouse and patio coatings across Palm Beach County: surface prep and grinding, mixing and rolling the coats, flake broadcast and clear topcoat, and leaving the job clean for handover. Owner run crew with no recruiter, so the owner is screening applicants between jobs.",
+      callOpener:
+        "Saw Florida Elite Epoxy is hiring an Epoxy Floor Installer and figured it would be worth a quick intro.",
+    },
+    contact: {
+      // No name was supplied and the address gives none away, so the drafter is
+      // left to open with "Hello," rather than guessing at one.
+      name: "",
+      title: "Owner",
+      email: "Mrpressurewashing@yahoo.com",
+      phone: "+15612461915",
+      location: "West Palm Beach, FL",
+    },
+    listing: {
+      title: "Epoxy Floor Installer",
+      url: null,
+      location: "West Palm Beach, FL",
+      board: "manual_seed",
+    },
+  },
 ];
 
 function selectedLeads(): Lead[] {
