@@ -1,28 +1,27 @@
 /**
- * Seed one live test lead for the end to end sequence check: Miguel at Autism
- * One, hiring an ABA Therapy Assistant.
+ * Seed the live test leads for end to end sequence checks.
  *
- * Writes company + contact + job listing and nothing else. No enrollment, no
- * call_list_entries row, nothing drafted or queued — same shape as the v12
- * clean slate seeds, because the whole point of the test is to drive
- * add to Call List → enroll → day 0 email and SMS → reply → auto reply with
- * the booking link from the UI.
+ * Each lead is company + contact + job listing and nothing else. No enrollment,
+ * no call_list_entries row, nothing drafted or queued, the same shape as the v12
+ * clean slate seeds, because the point of the test is to drive add to Call List
+ * → enroll → day 0 email and SMS → reply → auto reply with the booking link
+ * from the UI.
  *
- * Refuses to write when it would create a second record on this email or phone
- * (two records on one identifier is what breaks inbound reply matching, which
- * is keyed on the enrollment's address and number) or when either identifier is
- * suppressed, since enrollment would then reject the lead. Re-running after a
- * successful seed reports the existing ids and writes nothing.
+ * Refuses to write when it would create a second record on a lead's email or
+ * phone (two records on one identifier is what makes an inbound reply
+ * ambiguous, since matching is keyed on the enrollment's address and number) or
+ * when either identifier is suppressed, since enrollment would then reject the
+ * lead. A lead that already exists is reported and left alone.
  *
- * `--remove` tears the lead back down so the test can be run again from a clean
- * slate: every row this company owns, children first, plus any suppression this
- * lead's own email or phone picked up during the test. It touches nothing
- * outside this company, and like the seed it does nothing without `--apply`.
+ * `--remove` tears a lead back down so its round can be run again: every row
+ * the company owns, children first, plus any suppression the lead's own email
+ * or phone picked up during the test. It touches nothing outside that company.
  *
  * Usage:
- *   npx tsx scripts/seed-lead-autism-one.ts                    # dry run, writes nothing
- *   npx tsx scripts/seed-lead-autism-one.ts --apply            # write
- *   npx tsx scripts/seed-lead-autism-one.ts --remove --apply   # tear back down
+ *   npx tsx scripts/seed-test-leads.ts                                # dry run, all leads
+ *   npx tsx scripts/seed-test-leads.ts --apply                        # write any that are missing
+ *   npx tsx scripts/seed-test-leads.ts --lead=miguels-roofing --apply # just one
+ *   npx tsx scripts/seed-test-leads.ts --lead=autism-one --remove --apply
  *
  * Requires DATABASE_URL in .env.local.
  */
@@ -43,56 +42,131 @@ import {
   outreachMessages,
   sequenceEnrollments,
   suppressions,
+  type HiringSignals,
 } from "@/lib/db/schema";
 import { jobUrlFingerprint } from "@/lib/hiring-signals";
 
 const APPLY = process.argv.includes("--apply");
 const REMOVE = process.argv.includes("--remove");
 
-/**
- * Everything about the lead in one place.
- *
- * The 239 number is a Naples / Fort Myers area code, but the market and the
- * role location are set to West Palm Beach so the lead lands inside the CRM's
- * working market instead of hiding behind a market filter. Change `market` and
- * the locations together if you want it to sit in Naples instead.
- */
-const LEAD = {
+type Lead = {
+  /** --lead= selector. */
+  slug: string;
   company: {
-    name: "Autism One",
-    domain: "autism.one",
-    industry: "Healthcare & Life Sciences",
-    estimatedEmployees: 14,
-    leadScore: 74,
-    // One listing, so not multiple_openings; a reposted role is what makes a
-    // single opening worth a call and keeps the lead in the hot filter.
-    hiringSignals: { reposted_role: true },
-    market: "West Palm Beach, FL",
+    name: string;
+    /** Null when the contact is on a personal address and the firm has no site. */
+    domain: string | null;
+    industry: string;
+    estimatedEmployees: number;
+    leadScore: number;
+    hiringSignals: HiringSignals;
+    market: string;
     /**
      * The listing blurb. This is the one field the drafter reads as free text
      * (it reaches the prompt as the internal reason to call note), so it is
-     * written the way the copy should sound: no dashes, no test harness
-     * chatter that Claude could echo into a real email.
+     * written the way the copy should sound: no test harness chatter that
+     * Claude could echo into a real email.
      */
-    reasonToCall:
-      "Hiring an ABA Therapy Assistant to support BCBA supervised sessions for children on the autism spectrum: running one to one therapy plans, logging session data, and coaching parents so the program carries over at home. Full time in clinic, RBT certification preferred but they will train the right candidate. Small practice with no in house recruiter, so the owner is screening applicants himself.",
-    callOpener:
-      "Hi Miguel, saw Autism One is hiring an ABA Therapy Assistant and figured it would be worth a quick intro.",
-  },
+    reasonToCall: string;
+    callOpener: string;
+  };
   contact: {
-    name: "Miguel",
-    title: "Owner",
-    email: "miguel@autism.one",
+    name: string;
+    title: string;
+    email: string;
     /** E.164 — the worker and the inbound matcher both normalize to this. */
-    phone: "+12397890148",
-    location: "West Palm Beach, FL",
-  },
+    phone: string;
+    location: string;
+  };
   listing: {
-    title: "ABA Therapy Assistant",
-    url: "https://autism.one/careers",
-    location: "West Palm Beach, FL",
+    title: string;
+    url: string | null;
+    location: string;
+    /** "manual_seed" keeps the drafter from claiming we found it on a board. */
+    board: string;
+  };
+};
+
+const LEADS: Lead[] = [
+  {
+    slug: "autism-one",
+    company: {
+      name: "Autism One",
+      domain: "autism.one",
+      industry: "Healthcare & Life Sciences",
+      estimatedEmployees: 14,
+      leadScore: 74,
+      // One listing, so not multiple_openings; a reposted role is what makes a
+      // single opening worth a call and keeps the lead in the hot filter.
+      hiringSignals: { reposted_role: true },
+      // The 239 number is a Naples area code, but the market and role location
+      // are West Palm Beach so the lead lands inside the working market
+      // instead of hiding behind a market filter.
+      market: "West Palm Beach, FL",
+      reasonToCall:
+        "Hiring an ABA Therapy Assistant to support BCBA supervised sessions for children on the autism spectrum: running one to one therapy plans, logging session data, and coaching parents so the program carries over at home. Full time in clinic, RBT certification preferred but they will train the right candidate. Small practice with no in house recruiter, so the owner is screening applicants himself.",
+      callOpener:
+        "Hi Miguel, saw Autism One is hiring an ABA Therapy Assistant and figured it would be worth a quick intro.",
+    },
+    contact: {
+      name: "Miguel",
+      title: "Owner",
+      email: "miguel@autism.one",
+      phone: "+12397890148",
+      location: "West Palm Beach, FL",
+    },
+    listing: {
+      title: "ABA Therapy Assistant",
+      url: "https://autism.one/careers",
+      location: "West Palm Beach, FL",
+      board: "company_careers",
+    },
   },
-} as const;
+  {
+    slug: "miguels-roofing",
+    company: {
+      name: "Miguel's Roofing",
+      // Personal Gmail contact, no company site to point at, so no domain and
+      // low confidence rather than an invented one.
+      domain: null,
+      industry: "Construction",
+      estimatedEmployees: 11,
+      leadScore: 72,
+      hiringSignals: { reposted_role: true },
+      market: "Miami, FL",
+      reasonToCall:
+        "Hiring a Roofing Technician for residential repairs and reroofs across Miami Dade: tear off and dry in, shingle and tile work, and keeping the crew moving through the day. Owner run crew with no recruiter, so the owner is fielding applicants himself between jobs.",
+      callOpener:
+        "Hi Miguel, saw Miguel's Roofing is hiring a Roofing Technician and figured it would be worth a quick intro.",
+    },
+    contact: {
+      name: "Miguel",
+      title: "Owner",
+      email: "ptmproventheory@gmail.com",
+      phone: "+13059634759",
+      location: "Miami, FL",
+    },
+    listing: {
+      title: "Roofing Technician",
+      url: null,
+      location: "Miami, FL",
+      board: "manual_seed",
+    },
+  },
+];
+
+function selectedLeads(): Lead[] {
+  const flag = process.argv.find((a) => a.startsWith("--lead="));
+  if (!flag) return LEADS;
+  const slug = flag.slice("--lead=".length);
+  const picked = LEADS.filter((l) => l.slug === slug);
+  if (!picked.length) {
+    throw new Error(
+      `unknown --lead=${slug}. Known leads: ${LEADS.map((l) => l.slug).join(", ")}`,
+    );
+  }
+  return picked;
+}
 
 let failures = 0;
 function check(label: string, ok: boolean, detail?: unknown) {
@@ -136,8 +210,7 @@ async function holdersOfPhone(phone: string): Promise<Holder[]> {
       or ${contacts.phones}::text like ${`%${phone}%`}`);
 }
 
-async function suppressionsForLead() {
-  const email = LEAD.contact.email.toLowerCase();
+async function suppressionsFor(lead: Lead) {
   return db
     .select({
       channel: suppressions.channel,
@@ -146,109 +219,115 @@ async function suppressionsForLead() {
       phone: suppressions.phone,
     })
     .from(suppressions)
-    .where(sql`lower(coalesce(${suppressions.email}, '')) = ${email}
-      or ${suppressions.phone} = ${LEAD.contact.phone}`);
+    .where(sql`lower(coalesce(${suppressions.email}, '')) = ${lead.contact.email.toLowerCase()}
+      or ${suppressions.phone} = ${lead.contact.phone}`);
 }
 
-async function existingCompany() {
+/** Match on domain when the lead has one, otherwise on the exact name. */
+async function existingCompany(lead: Lead) {
+  const name = lead.company.name.trim().toLowerCase();
   const [row] = await db
     .select({ id: companies.id, name: companies.name, status: companies.status })
     .from(companies)
     .where(
-      sql`lower(coalesce(${companies.domain}, '')) = ${LEAD.company.domain}
-        or lower(trim(${companies.name})) = ${LEAD.company.name.toLowerCase()}`,
+      lead.company.domain
+        ? sql`lower(coalesce(${companies.domain}, '')) = ${lead.company.domain}
+            or lower(trim(${companies.name})) = ${name}`
+        : sql`lower(trim(${companies.name})) = ${name}`,
     )
     .limit(1);
   return row ?? null;
 }
 
-async function preflight(): Promise<boolean> {
-  console.log("\n=== preflight ===");
+async function preflight(lead: Lead): Promise<boolean> {
+  console.log("  preflight");
   let ok = true;
 
-  const emailHolders = await holdersOfEmail(LEAD.contact.email);
+  const emailHolders = await holdersOfEmail(lead.contact.email);
   if (emailHolders.length) {
     ok = false;
     console.error(
-      `  ABORT  ${LEAD.contact.email} is already on ${emailHolders.length} contact(s): ` +
+      `    ABORT  ${lead.contact.email} is already on ${emailHolders.length} contact(s): ` +
         `${JSON.stringify(emailHolders)}\n` +
-        "         Two records on one address make inbound replies ambiguous. Delete the old one first.",
+        "           Two records on one address make inbound replies ambiguous. Delete the old one first.",
     );
   } else {
-    console.log(`  ok     ${LEAD.contact.email} is unused`);
+    console.log(`    ok   ${lead.contact.email} is unused`);
   }
 
-  const phoneHolders = await holdersOfPhone(LEAD.contact.phone);
+  const phoneHolders = await holdersOfPhone(lead.contact.phone);
   if (phoneHolders.length) {
     ok = false;
     console.error(
-      `  ABORT  ${LEAD.contact.phone} is already on ${phoneHolders.length} contact(s): ` +
+      `    ABORT  ${lead.contact.phone} is already on ${phoneHolders.length} contact(s): ` +
         `${JSON.stringify(phoneHolders)}\n` +
-        "         The worker watchlist and the inbound matcher both key on the number. Delete the old one first.",
+        "           The worker watchlist and the inbound matcher both key on the number. Delete the old one first.",
     );
   } else {
-    console.log(`  ok     ${LEAD.contact.phone} is unused`);
+    console.log(`    ok   ${lead.contact.phone} is unused`);
   }
 
-  const suppressed = await suppressionsForLead();
+  const suppressed = await suppressionsFor(lead);
   if (suppressed.length) {
     ok = false;
     console.error(
-      `  ABORT  this lead is suppressed: ${JSON.stringify(suppressed)}\n` +
-        "         A suppressed address stops enrollment outright, and a suppressed number\n" +
-        "         silently drops the SMS half of the sequence. Clear the row first.",
+      `    ABORT  this lead is suppressed: ${JSON.stringify(suppressed)}\n` +
+        "           A suppressed address stops enrollment outright, and a suppressed number\n" +
+        "           silently drops the SMS half of the sequence. Clear the row first.",
     );
   } else {
-    console.log("  ok     neither identifier is suppressed");
+    console.log("    ok   neither identifier is suppressed");
   }
 
   return ok;
 }
 
-async function seed() {
+async function seed(lead: Lead) {
   const [company] = await db
     .insert(companies)
     .values({
-      name: LEAD.company.name,
-      domain: LEAD.company.domain,
-      domainConfidence: "high",
+      name: lead.company.name,
+      domain: lead.company.domain,
+      domainConfidence: lead.company.domain ? "high" : "low",
       status: "new",
       firstSeen: new Date().toISOString().slice(0, 10),
-      leadScore: LEAD.company.leadScore,
-      hiringSignals: LEAD.company.hiringSignals,
-      reasonToCall: LEAD.company.reasonToCall,
-      callOpener: LEAD.company.callOpener,
+      leadScore: lead.company.leadScore,
+      hiringSignals: lead.company.hiringSignals,
+      reasonToCall: lead.company.reasonToCall,
+      callOpener: lead.company.callOpener,
       icpStatus: "pass",
-      estimatedEmployees: LEAD.company.estimatedEmployees,
-      industry: LEAD.company.industry,
+      estimatedEmployees: lead.company.estimatedEmployees,
+      industry: lead.company.industry,
       // enrichedAt stays null so the lead is still a candidate for an enrich
       // run; the contact below is already complete enough to enroll without one.
-      sourceMarket: LEAD.company.market,
+      sourceMarket: lead.company.market,
     })
     .returning({ id: companies.id });
 
   // imessage_capable drives channel_plan at enrollment: true plus a number
-  // gives email_and_text, which is the pair this test is checking.
+  // gives email_and_text, which is the pair these tests are checking. The one
+  // address is written to all three email columns so the work-email-preferred
+  // toggle cannot change which address enrollment picks.
   const [contact] = await db
     .insert(contacts)
     .values({
       companyId: company!.id,
-      name: LEAD.contact.name,
-      title: LEAD.contact.title,
-      email: LEAD.contact.email,
-      workEmail: LEAD.contact.email,
-      personalEmail: LEAD.contact.email,
-      phone: LEAD.contact.phone,
-      personalPhone: LEAD.contact.phone,
+      name: lead.contact.name,
+      title: lead.contact.title,
+      email: lead.contact.email,
+      workEmail: lead.contact.email,
+      personalEmail: lead.contact.email,
+      phone: lead.contact.phone,
+      personalPhone: lead.contact.phone,
       phones: [
-        { number: LEAD.contact.phone, source: "apollo", kind: "mobile" },
+        { number: lead.contact.phone, source: "apollo", kind: "mobile" },
       ],
       sourceProvider: "manual_test",
       imessageCapable: true,
       emailDeliverable: true,
       locationMatched: true,
-      contactLocation: LEAD.contact.location,
-      jobLocation: LEAD.contact.location,
+      contactLocation: lead.contact.location,
+      jobLocation: lead.contact.location,
       revealStatus: "revealed",
       revealChannels: "email_phone",
       isPrimary: true,
@@ -260,15 +339,15 @@ async function seed() {
     .insert(jobListings)
     .values({
       companyId: company!.id,
-      title: LEAD.listing.title,
-      board: "company_careers",
-      url: LEAD.listing.url,
-      location: LEAD.listing.location,
-      searchName: LEAD.listing.title,
+      title: lead.listing.title,
+      board: lead.listing.board,
+      url: lead.listing.url,
+      location: lead.listing.location,
+      searchName: lead.listing.title,
       salaryCurrency: "USD",
       // Same fingerprint ingest would stamp, so a later scrape of this URL
       // resights the row instead of adding a duplicate listing.
-      urlFingerprint: jobUrlFingerprint(LEAD.listing.url),
+      urlFingerprint: jobUrlFingerprint(lead.listing.url),
       sightingsCount: 1,
       firstSeenAt: now,
       lastSeenAt: now,
@@ -283,8 +362,8 @@ async function seed() {
   };
 }
 
-async function verify(companyId: string) {
-  console.log("\n=== verify (the conditions enrollment checks) ===");
+async function verify(lead: Lead, companyId: string) {
+  console.log("  verify (the conditions enrollment checks)");
 
   const [company] = await db
     .select({
@@ -328,12 +407,12 @@ async function verify(companyId: string) {
   );
   check(
     "contact holds the email",
-    contact?.email === LEAD.contact.email,
+    contact?.email === lead.contact.email,
     contact?.email,
   );
   check(
     "contact holds the phone in E.164",
-    contact?.phone === LEAD.contact.phone,
+    contact?.phone === lead.contact.phone,
     contact?.phone,
   );
   check(
@@ -345,8 +424,8 @@ async function verify(companyId: string) {
     contact?.imessageCapable === true,
   );
   check(
-    `the ${LEAD.listing.title} listing exists`,
-    listings.some((l) => l.title === LEAD.listing.title),
+    `the ${lead.listing.title} listing exists`,
+    listings.some((l) => l.title === lead.listing.title),
     listings,
   );
   check(
@@ -361,15 +440,15 @@ async function verify(companyId: string) {
   );
   check(
     "exactly one contact holds this email",
-    (await holdersOfEmail(LEAD.contact.email)).length === 1,
+    (await holdersOfEmail(lead.contact.email)).length === 1,
   );
   check(
     "exactly one contact holds this phone",
-    (await holdersOfPhone(LEAD.contact.phone)).length === 1,
+    (await holdersOfPhone(lead.contact.phone)).length === 1,
   );
 }
 
-/** Where the lead currently stands, for a re-run or before a teardown. */
+/** Where a lead currently stands, for a re-run or before a teardown. */
 async function describe(companyId: string) {
   const [company] = await db
     .select({
@@ -423,13 +502,12 @@ async function describe(companyId: string) {
     .from(callListEntries)
     .where(eq(callListEntries.companyId, companyId));
 
-  console.log("\n=== current state ===");
-  console.log(`  company        ${JSON.stringify(company)}`);
-  console.log(`  contact(s)     ${JSON.stringify(contactRows)}`);
-  console.log(`  listing(s)     ${JSON.stringify(listings)}`);
-  console.log(`  call list      ${JSON.stringify(callList)}`);
-  console.log(`  enrollment(s)  ${JSON.stringify(enrollments)}`);
-  console.log(`  message(s)     ${JSON.stringify(messages)}`);
+  console.log(`    company        ${JSON.stringify(company)}`);
+  console.log(`    contact(s)     ${JSON.stringify(contactRows)}`);
+  console.log(`    listing(s)     ${JSON.stringify(listings)}`);
+  console.log(`    call list      ${JSON.stringify(callList)}`);
+  console.log(`    enrollment(s)  ${JSON.stringify(enrollments)}`);
+  console.log(`    message(s)     ${JSON.stringify(messages)}`);
 }
 
 /**
@@ -438,7 +516,7 @@ async function describe(companyId: string) {
  * anything else that references them, and the inbound delete is keyed on
  * enrollment_id, which is what keeps it away from unattached inbound rows.
  */
-async function remove(companyId: string) {
+async function remove(lead: Lead, companyId: string) {
   const enrollmentIds = (
     await db
       .select({ id: sequenceEnrollments.id })
@@ -446,9 +524,9 @@ async function remove(companyId: string) {
       .where(eq(sequenceEnrollments.companyId, companyId))
   ).map((r) => r.id);
 
-  console.log(`\n  ${enrollmentIds.length} enrollment(s) in scope`);
+  console.log(`    ${enrollmentIds.length} enrollment(s) in scope`);
   if (!APPLY) {
-    console.log("  Dry run only. Re-run with --remove --apply to delete.");
+    console.log("    Dry run only. Re-run with --remove --apply to delete.");
     return;
   }
 
@@ -534,72 +612,72 @@ async function remove(companyId: string) {
     await db
       .delete(suppressions)
       .where(
-        sql`lower(coalesce(${suppressions.email}, '')) = ${LEAD.contact.email.toLowerCase()}
-          or ${suppressions.phone} = ${LEAD.contact.phone}`,
+        sql`lower(coalesce(${suppressions.email}, '')) = ${lead.contact.email.toLowerCase()}
+          or ${suppressions.phone} = ${lead.contact.phone}`,
       )
       .returning({ id: suppressions.id }),
   );
 }
 
-async function main() {
-  console.log(APPLY ? "=== APPLYING ===" : "=== DRY RUN (pass --apply to write) ===");
+async function handle(lead: Lead) {
   console.log(
-    `\n${LEAD.company.name} / ${LEAD.contact.name} ${LEAD.contact.email} ${LEAD.contact.phone}` +
-      `\nlisting: ${LEAD.listing.title}, ${LEAD.listing.location}`,
+    `\n=== ${lead.slug} — ${lead.company.name} / ${lead.contact.name} ` +
+      `${lead.contact.email} ${lead.contact.phone}\n    listing: ${lead.listing.title}, ${lead.listing.location}`,
   );
 
-  const existing = await existingCompany();
+  const existing = await existingCompany(lead);
 
   if (REMOVE) {
     if (!existing) {
-      console.log("\nNothing to remove: this lead is not in the database.");
+      console.log("  Nothing to remove: this lead is not in the database.");
       return;
     }
-    console.log(`\n--- removing ${existing.name} (${existing.id}) ---`);
+    console.log(`  removing ${existing.name} (${existing.id})`);
     await describe(existing.id);
-    await remove(existing.id);
-    const after = await existingCompany();
-    console.log(
-      after
-        ? "\nWARNING: the company row is still there."
-        : "\nGone. Re-run without --remove to seed a fresh copy.",
-    );
-    if (after) process.exitCode = 1;
+    await remove(lead, existing.id);
+    if (await existingCompany(lead)) {
+      failures += 1;
+      console.error("  WARNING: the company row is still there.");
+    } else if (APPLY) {
+      console.log("  Gone. Re-run without --remove to seed a fresh copy.");
+    }
     return;
   }
 
   if (existing) {
-    console.log(
-      `\nAlready seeded: ${existing.name} (${existing.id}). Nothing written.` +
-        "\nPass --remove --apply to tear it down and start the round over.",
-    );
+    console.log(`  Already seeded: ${existing.name} (${existing.id}). Nothing written.`);
     await describe(existing.id);
     return;
   }
 
-  if (!(await preflight())) {
-    console.error("\nPreflight failed. Nothing written.");
-    process.exitCode = 1;
+  if (!(await preflight(lead))) {
+    failures += 1;
+    console.error("  Preflight failed. Nothing written for this lead.");
     return;
   }
 
   if (!APPLY) {
-    console.log("\nDry run only. Re-run with --apply to write these three rows.");
+    console.log("  Dry run only. Re-run with --apply to write these three rows.");
     return;
   }
 
-  const ids = await seed();
-  console.log("\n=== written ===");
-  console.log(`  company_id      ${ids.companyId}`);
-  console.log(`  contact_id      ${ids.contactId}`);
-  console.log(`  job_listing_id  ${ids.jobListingId}`);
+  const ids = await seed(lead);
+  console.log(`    company_id      ${ids.companyId}`);
+  console.log(`    contact_id      ${ids.contactId}`);
+  console.log(`    job_listing_id  ${ids.jobListingId}`);
+  await verify(lead, ids.companyId);
+}
 
-  await verify(ids.companyId);
-
+async function main() {
+  console.log(
+    APPLY ? "=== APPLYING ===" : "=== DRY RUN (pass --apply to write) ===",
+  );
+  for (const lead of selectedLeads()) {
+    await handle(lead);
+  }
   console.log(
     failures === 0
-      ? "\nALL CHECKS PASSED — open the CRM, pick the ABA Therapy Assistant listing, " +
-          "and Add to Call List to enroll and start the sequence."
+      ? "\nALL CHECKS PASSED — open the CRM, pick the listing, and Add to Call List to enroll."
       : `\n${failures} CHECK(S) FAILED`,
   );
   if (failures) process.exitCode = 1;
