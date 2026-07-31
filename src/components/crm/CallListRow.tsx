@@ -26,6 +26,17 @@ import { sectorFromIndustry } from "@/lib/industry-sectors";
 import { formatListingSalary, pickDisplayListing } from "@/lib/salary-format";
 import { parseJobLocation } from "@/lib/location-match";
 import { ensureNotesNewestFirst } from "@/lib/outreach/call-list-notes";
+import {
+  formatActivityClock,
+  formatActivityDay,
+  formatActivityStamp,
+  formatActivityStampLong,
+  latestActivityAt,
+} from "@/lib/call-list-activity";
+import {
+  bookedWindowFromNotes,
+  formatBookedWindow,
+} from "@/lib/call-list-booking";
 
 function formatDate(value: Date | string | null | undefined): string {
   if (!value) return "—";
@@ -112,6 +123,26 @@ export function CallListRow({
   const score = company.leadScore ?? 0;
   const sector = sectorFromIndustry(company.industry);
 
+  // Same value the queue sorts on, so the column can't contradict the order.
+  const lastActivity = latestActivityAt(entry);
+
+  /**
+   * Booked window for Call Booked rows — structured Calendly event first, the
+   * `Call Booked: …` note line only as a fallback. Null renders nothing.
+   */
+  const booked = useMemo((): { short: string; long: string } | null => {
+    if (entry.callStatus !== "meeting_scheduled") return null;
+    if (item.booking) {
+      const short = formatBookedWindow(item.booking.startAt, item.booking.endAt);
+      const long = formatBookedWindow(item.booking.startAt, item.booking.endAt, {
+        includeYear: true,
+      });
+      if (short && long) return { short, long };
+    }
+    const fromNotes = bookedWindowFromNotes(ensureNotesNewestFirst(entry.notes));
+    return fromNotes ? { short: fromNotes, long: fromNotes } : null;
+  }, [entry.callStatus, entry.notes, item.booking]);
+
   async function patch(
     body: Record<string, unknown>,
   ): Promise<CallListEntry | null> {
@@ -181,6 +212,31 @@ export function CallListRow({
     </select>
   );
 
+  const bookedBadge = booked ? (
+    <p
+      className="mt-1 text-[11px] leading-tight font-medium text-emerald-700 dark:text-emerald-400 tabular-nums"
+      title={`Meeting scheduled — ${booked.long}`}
+    >
+      {booked.short}
+    </p>
+  ) : null;
+
+  const lastActivityCell = lastActivity ? (
+    <span
+      className="block text-xs leading-tight tabular-nums text-gray-600 dark:text-gray-400"
+      title={`Last activity — ${formatActivityStampLong(lastActivity)}`}
+    >
+      {formatActivityDay(lastActivity)}
+      <span className="block text-[11px] text-gray-500">
+        {formatActivityClock(lastActivity)}
+      </span>
+    </span>
+  ) : (
+    <span className="text-xs text-gray-400" title="No activity recorded yet">
+      —
+    </span>
+  );
+
   const followUpBadge = followUp ? (
     <span
       className={`text-xs tabular-nums ${
@@ -201,7 +257,7 @@ export function CallListRow({
   return (
     <div className="border-b border-gray-200 dark:border-gray-800 last:border-b-0">
       <div
-        className="grid grid-cols-[3rem_1fr_auto] lg:grid-cols-[3.25rem_minmax(0,1.4fr)_minmax(0,1.2fr)_11.5rem_4.5rem_7rem_minmax(0,0.7fr)_auto] gap-x-3 gap-y-1 items-center px-3 py-4 lg:py-2.5 sm:px-4 hover:bg-gray-50 dark:hover:bg-gray-900/60 transition-colors cursor-pointer"
+        className="grid grid-cols-[3rem_1fr_auto] lg:grid-cols-[3.25rem_minmax(0,1.3fr)_minmax(0,1.1fr)_11.5rem_4rem_6rem_6.5rem_minmax(0,0.7fr)_auto] gap-x-3 gap-y-1 items-center px-3 py-4 lg:py-2.5 sm:px-4 hover:bg-gray-50 dark:hover:bg-gray-900/60 transition-colors cursor-pointer"
         onClick={() => setExpanded((v) => !v)}
       >
         <div
@@ -269,8 +325,12 @@ export function CallListRow({
           )}
         </div>
 
-        <div className="hidden lg:block" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="hidden lg:block min-w-0"
+          onClick={(e) => e.stopPropagation()}
+        >
           {statusSelect}
+          {bookedBadge}
         </div>
 
         <div
@@ -279,6 +339,8 @@ export function CallListRow({
         >
           {entry.attempts}
         </div>
+
+        <div className="hidden lg:block min-w-0">{lastActivityCell}</div>
 
         <div className="hidden lg:block">{followUpBadge}</div>
 
@@ -338,8 +400,18 @@ export function CallListRow({
 
       <div className="lg:hidden px-3 pb-2 pl-[3.75rem] flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
         <span onClick={(e) => e.stopPropagation()}>{statusSelect}</span>
+        {booked && (
+          <span className="font-medium text-emerald-700 dark:text-emerald-400 tabular-nums">
+            {booked.short}
+          </span>
+        )}
         <span>{entry.attempts} attempts</span>
         {followUpBadge}
+        {lastActivity && (
+          <span className="tabular-nums text-gray-500">
+            active {formatActivityStamp(lastActivity)}
+          </span>
+        )}
       </div>
 
       {error && (
@@ -366,7 +438,17 @@ export function CallListRow({
                 {company.enrichedAt ? "" : " (coarse)"}
               </span>
             )}
+            {booked && (
+              <span className="text-emerald-700 dark:text-emerald-400">
+                Meeting:{" "}
+                <span className="font-medium">{booked.long}</span>
+              </span>
+            )}
             <span>Last contact: {formatDate(entry.lastContactAt)}</span>
+            <span>
+              Last activity:{" "}
+              {lastActivity ? formatActivityStampLong(lastActivity) : "—"}
+            </span>
             <span>Added: {formatDate(entry.addedAt)}</span>
           </div>
 

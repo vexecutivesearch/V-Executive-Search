@@ -13,6 +13,7 @@ import {
   callListEntries,
   companies,
   companyIcp,
+  enrollmentEvents,
   jobListings,
   outreachMessages,
   sequenceEnrollments,
@@ -30,6 +31,10 @@ import {
   type MarketIndex,
 } from "@/lib/market-attribution";
 import { parseJobLocation } from "@/lib/location-match";
+import {
+  bookingFromEventPayload,
+  type CallListBooking,
+} from "@/lib/call-list-booking";
 import {
   OTHER_SECTOR,
   allSectorFilterOptions,
@@ -1107,6 +1112,8 @@ export type CallListItem = {
   company: CompanyCardData;
   marketLabel: string | null;
   outreach: CallListOutreachProgress | null;
+  /** Scheduled window from the latest Calendly booking event, if any. */
+  booking: CallListBooking | null;
 };
 
 function outreachProgressLabel(p: Omit<CallListOutreachProgress, "label">): string {
@@ -1182,6 +1189,31 @@ export async function getCallListItems(): Promise<CallListItem[]> {
     messagesByEnrollment.set(m.enrollmentId, list);
   }
 
+  // Booked meeting window (Call Booked rows) — newest Calendly event per
+  // company wins, so a cancellation retires the previous booking.
+  const bookingRows = await db
+    .select({
+      companyId: sequenceEnrollments.companyId,
+      payload: enrollmentEvents.payload,
+    })
+    .from(enrollmentEvents)
+    .innerJoin(
+      sequenceEnrollments,
+      eq(sequenceEnrollments.id, enrollmentEvents.enrollmentId),
+    )
+    .where(
+      and(
+        eq(enrollmentEvents.eventType, "calendly_booking"),
+        inArray(sequenceEnrollments.companyId, companyIds),
+      ),
+    )
+    .orderBy(desc(enrollmentEvents.createdAt));
+  const bookingByCompany = new Map<string, CallListBooking | null>();
+  for (const row of bookingRows) {
+    if (bookingByCompany.has(row.companyId)) continue;
+    bookingByCompany.set(row.companyId, bookingFromEventPayload(row.payload));
+  }
+
   return entries
     .map((entry) => {
       const company = byId.get(entry.companyId);
@@ -1214,6 +1246,7 @@ export async function getCallListItems(): Promise<CallListItem[]> {
         company,
         marketLabel: resolveMarketLabel(company, index),
         outreach,
+        booking: bookingByCompany.get(entry.companyId) ?? null,
       };
     })
     .filter((item): item is CallListItem => item !== null);

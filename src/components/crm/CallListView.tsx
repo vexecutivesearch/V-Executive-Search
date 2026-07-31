@@ -8,21 +8,13 @@ import {
   CALL_STATUSES,
   isTerminalStatus,
 } from "@/lib/call-status";
+import { latestActivityMs } from "@/lib/call-list-activity";
 import { CallListRow } from "./CallListRow";
 
 function businessToday(): string {
   return new Date().toLocaleDateString("en-CA", {
     timeZone: "America/New_York",
   });
-}
-
-/** Most recent touch: outreach notes bump updatedAt; attempts bump lastContactAt. */
-function latestActivityMs(entry: CallListEntry): number {
-  const times = [entry.lastContactAt, entry.callStatusUpdatedAt, entry.updatedAt]
-    .filter((d): d is NonNullable<typeof d> => d != null)
-    .map((d) => new Date(d).getTime())
-    .filter((n) => !Number.isNaN(n));
-  return times.length ? Math.max(...times) : 0;
 }
 
 /** Active call queue: latest activity first, then score. */
@@ -240,12 +232,15 @@ export function CallListView({ items: initialItems }: { items: CallListItem[] })
         </div>
       ) : (
         <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden bg-white dark:bg-gray-950 shadow-sm">
-          <div className="hidden lg:grid grid-cols-[3.25rem_minmax(0,1.4fr)_minmax(0,1.2fr)_11.5rem_4.5rem_7rem_minmax(0,0.7fr)_auto] gap-x-3 px-4 py-2 text-[10px] font-medium uppercase tracking-wide text-gray-500 bg-gray-50 dark:bg-gray-900/80 border-b border-gray-200 dark:border-gray-800">
+          <div className="hidden lg:grid grid-cols-[3.25rem_minmax(0,1.3fr)_minmax(0,1.1fr)_11.5rem_4rem_6rem_6.5rem_minmax(0,0.7fr)_auto] gap-x-3 px-4 py-2 text-[10px] font-medium uppercase tracking-wide text-gray-500 bg-gray-50 dark:bg-gray-900/80 border-b border-gray-200 dark:border-gray-800">
             <span>Score</span>
             <span>Company</span>
             <span>Contact</span>
             <span>Status</span>
             <span>Attempts</span>
+            <span title="Most recent touch — drives the sort order">
+              Last activity
+            </span>
             <span>Follow-up</span>
             <span>Assigned</span>
             <span className="text-right pr-6">Action</span>
