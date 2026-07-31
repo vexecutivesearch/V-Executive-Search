@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   repairDashes,
+  repairSubject,
   sanitizeExemplarForPrompt,
   sanitizeOutreachBody,
   sanitizeSubject,
@@ -188,6 +189,47 @@ describe("sanitizeSubject", () => {
     expect(sanitizeSubject("RE: our chat").ok).toBe(false);
     expect(sanitizeSubject("HIRING HELP NOW").ok).toBe(false);
     expect(sanitizeSubject("Great candidates for you!").ok).toBe(false);
+  });
+
+  it("only calls it a fake prefix when it leads the subject", () => {
+    // Miguel's Roofing, Jul 31: followup_1 was rejected three times for a
+    // "fake RE:/FWD: subject prefix" it never had. The rule was unanchored, so
+    // any colon after a word ending in those letters matched.
+    for (const subject of [
+      "One more thing on the Roofing Technician hire: crews",
+      "Following up here: Roofing Technician",
+      "Where we are: your roofing crew",
+      "Worth a look before: Friday",
+    ]) {
+      const result = sanitizeSubject(subject);
+      expect(result.violations, subject).toEqual([]);
+    }
+    for (const faked of ["Re: your roofing hire", "FWD: roofing crew", "fw : hiring"]) {
+      expect(sanitizeSubject(faked).violations, faked).toContain(
+        "fake RE:/FWD: subject prefix",
+      );
+    }
+  });
+});
+
+describe("repairSubject (what the drafting loop runs before the subject lint)", () => {
+  it("strips a faked prefix instead of losing the draft to it", () => {
+    expect(repairSubject("Re: your roofing hire")).toBe("your roofing hire");
+    expect(repairSubject("RE: FWD: roofing crew")).toBe("roofing crew");
+    expect(sanitizeSubject(repairSubject("Fwd: Roofing Technician in Miami")).ok).toBe(
+      true,
+    );
+  });
+
+  it("repairs dashes in the subject too", () => {
+    expect(repairSubject("Follow-up on your roofing hire")).toBe(
+      "Follow up on your roofing hire",
+    );
+  });
+
+  it("leaves an ordinary subject exactly as written", () => {
+    const subject = "Roofing Technician support in Miami";
+    expect(repairSubject(subject)).toBe(subject);
   });
 });
 
