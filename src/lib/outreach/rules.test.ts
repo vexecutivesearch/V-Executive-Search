@@ -70,7 +70,7 @@ vi.mock("@/lib/db", () => ({
 
 const draftEnrollmentReply = vi.fn(
   async () =>
-    "Great, thanks Miguel. Grab 30 min here:\n\nhttps://calendly.com/odv-vexecutivesearch/30min",
+    "Great, thanks Miguel. Grab 15 min here:\n\nhttps://calendly.com/odv-vexecutivesearch/15m",
 );
 const sendOutreachEmail = vi.fn(async () => ({
   ok: true as const,
@@ -218,7 +218,7 @@ describe("positive reply arriving by text", () => {
       status: "queued",
     });
     expect(texts[0].values.body).toContain(
-      "https://calendly.com/odv-vexecutivesearch/30min",
+      "https://calendly.com/odv-vexecutivesearch/15m",
     );
     // The worker only claims approved messages that are already due.
     expect(texts[0].values.approvedAt).toBeInstanceOf(Date);
