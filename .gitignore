@@ -34,3 +34,6 @@ worker/*.egg-info/
 # Drizzle
 drizzle/
 icp-shadow-report.json
+
+# Untracked audit scratch harnesses (Jul 31 adversarial audit)
+qa-archive/

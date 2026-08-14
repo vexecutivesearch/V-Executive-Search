@@ -15,6 +15,7 @@ import {
   getLastDraftFailureReason,
   type StepSpec,
 } from "@/lib/outreach-draft";
+import { verifyEmailAddress } from "@/lib/email-verify";
 import { buildDraftContext } from "@/lib/outreach/draft-context";
 import { ensureDefaultFlow } from "@/lib/outreach/default-flow";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
@@ -64,7 +65,23 @@ async function ineligibilityReason(
   options?: { bypassIcpFail?: boolean },
 ): Promise<string | null> {
   if (!emailAddress) return "no email address";
-  if (contact.emailDeliverable !== true) return "email not verified deliverable";
+  if (contact.emailDeliverable === false) return "email not deliverable";
+  if (contact.emailDeliverable !== true) {
+    // Never verified — the daily worker pass hasn't reached this contact yet
+    // (fresh imports added to the Call List the same day). MX-check inline and
+    // persist, so a lead is enrollable the moment it's added.
+    const verdict = await verifyEmailAddress(emailAddress);
+    await db
+      .update(contacts)
+      .set({
+        emailDeliverable: verdict.deliverable,
+        emailVerifiedAt: new Date(),
+      })
+      .where(eq(contacts.id, contact.id));
+    if (!verdict.deliverable) {
+      return `email not deliverable (${verdict.reason})`;
+    }
+  }
   if (companyStatus !== "new") return `company status is ${companyStatus}`;
   // Intentional Call List adds skip ICP fail — the recruiter already chose them.
   if (icpStatus === "fail" && !options?.bypassIcpFail) return "ICP fail";

@@ -44,7 +44,15 @@ export async function POST(request: NextRequest) {
 
   for (const { contact } of rows) {
     const result = await verifyContactEmail(contact);
-    if (!result) continue;
+    if (!result) {
+      // Email columns held only empty strings — mark the row checked so it
+      // stops recycling through (and clogging) every future batch.
+      await db
+        .update(contacts)
+        .set({ emailDeliverable: false, emailVerifiedAt: new Date() })
+        .where(eq(contacts.id, contact.id));
+      continue;
+    }
 
     await db
       .update(contacts)

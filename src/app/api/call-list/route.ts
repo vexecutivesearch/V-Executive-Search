@@ -6,6 +6,7 @@ import {
   companies,
   companyActivities,
   contacts,
+  sequenceEnrollments,
 } from "@/lib/db/schema";
 import { isCallStatus } from "@/lib/call-status";
 import { contactIsCallable } from "@/lib/lead-score";
@@ -40,6 +41,41 @@ export async function GET(request: NextRequest) {
       ) DESC`,
     );
   return NextResponse.json({ entries });
+}
+
+type OutreachAttempt = {
+  enrolled: boolean;
+  enrollmentId?: string;
+  channelPlan?: string;
+  reason?: string;
+  dispatched?: boolean;
+};
+
+/** Enroll a call-list contact in outreach; never throws. */
+async function attemptOutreachEnroll(
+  contactId: string,
+  jobListingId: string | null,
+): Promise<OutreachAttempt> {
+  try {
+    const { getOrCreateOutreachSettings } = await import(
+      "@/lib/outreach/settings"
+    );
+    const settings = await getOrCreateOutreachSettings();
+    if (!settings.autoEnroll) {
+      return { enrolled: false, reason: "auto_enroll disabled" };
+    }
+    const { enrollContact } = await import("@/lib/outreach/enroll");
+    const result = await enrollContact(contactId, {
+      actor: "call_list",
+      autoApprove: true,
+      advanceNow: true,
+      jobListingId,
+    });
+    return { ...result };
+  } catch (error) {
+    console.error("[call-list] outreach enroll failed (non-fatal):", error);
+    return { enrolled: false, reason: "enroll_error" };
+  }
 }
 
 /** Approve a company onto the call list ("Add to Call List: Yes"). */
@@ -79,7 +115,25 @@ export async function POST(request: NextRequest) {
     .where(eq(callListEntries.companyId, companyId))
     .limit(1);
   if (existing) {
-    return NextResponse.json({ entry: existing, already_on_list: true });
+    // Re-adding is the natural retry after a failed enroll (e.g. the email
+    // hadn't been verified yet when the row was first added). If the primary
+    // contact never got an enrollment, attempt outreach again now.
+    let outreach: OutreachAttempt | null = null;
+    const retryContactId = existing.primaryContactId;
+    if (retryContactId) {
+      const [prior] = await db
+        .select({ id: sequenceEnrollments.id })
+        .from(sequenceEnrollments)
+        .where(eq(sequenceEnrollments.contactId, retryContactId))
+        .limit(1);
+      if (!prior) {
+        outreach = await attemptOutreachEnroll(
+          retryContactId,
+          jobListingId ?? existing.jobListingId,
+        );
+      }
+    }
+    return NextResponse.json({ entry: existing, already_on_list: true, outreach });
   }
 
   // Primary contact: explicit pick, else best callable by outreach priority.
@@ -136,35 +190,9 @@ export async function POST(request: NextRequest) {
   // and advance so day-0 email + SMS are queued. Actual send still respects
   // Master send + dry-run on the Outreach Overview tab (enroll runs dispatch
   // when enabled && !dryRun).
-  let outreach: {
-    enrolled: boolean;
-    enrollmentId?: string;
-    channelPlan?: string;
-    reason?: string;
-    dispatched?: boolean;
-  } | null = null;
+  let outreach: OutreachAttempt | null = null;
   if (primaryContactId) {
-    try {
-      const { enrollContact } = await import("@/lib/outreach/enroll");
-      const { getOrCreateOutreachSettings } = await import(
-        "@/lib/outreach/settings"
-      );
-      const settings = await getOrCreateOutreachSettings();
-      if (settings.autoEnroll) {
-        const result = await enrollContact(primaryContactId, {
-          actor: "call_list",
-          autoApprove: true,
-          advanceNow: true,
-          jobListingId,
-        });
-        outreach = { ...result };
-      } else {
-        outreach = { enrolled: false, reason: "auto_enroll disabled" };
-      }
-    } catch (error) {
-      console.error("[call-list] outreach enroll failed (non-fatal):", error);
-      outreach = { enrolled: false, reason: "enroll_error" };
-    }
+    outreach = await attemptOutreachEnroll(primaryContactId, jobListingId);
   } else {
     outreach = { enrolled: false, reason: "no primary contact" };
   }
