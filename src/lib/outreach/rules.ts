@@ -29,18 +29,10 @@ import {
   resolveProfileApiKey,
   sendOutreachEmail,
 } from "@/lib/outreach/resend-send";
+import { resolveSchedulingLink } from "@/lib/outreach/scheduling-link";
 import { getOrCreateOutreachSettings } from "@/lib/outreach/settings";
-import { addSuppression } from "@/lib/outreach/suppression";
+import { addSuppression, isSuppressed } from "@/lib/outreach/suppression";
 import { addBusinessDays } from "@/lib/outreach/timezone-infer";
-
-/** Default Calendly booking URL when OUTREACH_SCHEDULING_LINK is unset. */
-const DEFAULT_SCHEDULING_LINK =
-  "https://calendly.com/odv-vexecutivesearch/30min";
-
-function resolveSchedulingLink(): string {
-  const fromEnv = process.env.OUTREACH_SCHEDULING_LINK?.trim();
-  return fromEnv || DEFAULT_SCHEDULING_LINK;
-}
 
 /**
  * Rule engine — channel-agnostic. A text reply and an email reply hit
@@ -217,6 +209,28 @@ async function sendThreadedAutoReply(options: {
   const preferSms =
     inbound.channel === "imessage" && Boolean(enrollment.phoneNumber);
   const channel: "email" | "imessage" = preferSms ? "imessage" : "email";
+
+  // A suppressed contact who writes again gets no answer, because the queue and
+  // the dispatcher both re-check suppression and drop the message. Catching it
+  // here instead means the audit trail and the inbound row say so: on
+  // 2026-07-31 an epoxy lead texted "Never", which suppressed the contact, then
+  // texted "Id like to learn more" forty seconds later. The ack was queued,
+  // silently skipped, and the activity feed read as though it had been handled.
+  const suppression = await isSuppressed(
+    channel === "imessage"
+      ? { channel: "imessage", phone: enrollment.phoneNumber }
+      : { channel: "email", email: enrollment.emailAddress },
+  );
+  if (suppression.suppressed) {
+    return failAutoReply({
+      enrollmentId: enrollment.id,
+      replyKind,
+      channel,
+      reason:
+        `contact is suppressed (${suppression.reason ?? "unknown reason"}), so nothing can go out on ` +
+        `${channel}. Clear the suppression to answer this reply.`,
+    });
+  }
 
   const existing = await recentAutoReply(enrollment.id, channel);
   if (existing) {

@@ -67,6 +67,18 @@ const BANNED_PHRASES = [
   "unsubscribe",
 ];
 
+/**
+ * A faked reply prefix, which is only a fake when it LEADS the subject.
+ *
+ * Unanchored, this rule read "re:" anywhere in the line, so an ordinary subject
+ * whose colon happens to follow a word ending in those letters was rejected as
+ * a fake thread: "One more thing on the Roofing Technician hire: crews" and
+ * "Following up here: Roofing Technician" both tripped it. The retry guidance
+ * then told the model to fix a prefix it had never written, so all three
+ * attempts failed the same way and the enrollment was lost.
+ */
+const FAKE_REPLY_PREFIX = /^\s*(?:re|fwd|fw)\s*:\s*/i;
+
 export const EMAIL_BODY_MAX_CHARS = 1600;
 export const EMAIL_BODY_MIN_CHARS = 200;
 export const EMAIL_SUBJECT_MAX_CHARS = 80;
@@ -97,6 +109,63 @@ const HTTPS_URL_PATTERN = /https?:\/\/\S+/gi;
 
 function withoutHttpUrls(text: string): string {
   return text.replace(HTTPS_URL_PATTERN, " ");
+}
+
+/** ASCII hyphen plus every unicode dash, for the repair passes below. */
+const ANY_DASH = "\\u002D\\u2010-\\u2015\\u2212";
+
+/**
+ * Rewrite dashes the way a human editor would, so the house style is reached by
+ * repair rather than by rejection.
+ *
+ * The no dash rule is absolute, and some vocabularies are simply written with
+ * hyphens: an ABA Therapy Assistant listing pulls "one-on-one", "full-time",
+ * "RBT-certified" and "BCBA-supervised" out of the model no matter how the
+ * prompt is worded. Rejecting those drafts does not cost one sentence, it costs
+ * the whole enrollment, because drafting is transactional: the first step that
+ * cannot come back clean after its retries takes the entire sequence with it,
+ * and the recruiter is left with a lead on the Call List that never sends.
+ *
+ * The lint still owns the guarantee. This only removes the reason a draft would
+ * trip it, and it leaves http(s) URLs alone because a Calendly path keeps its
+ * hyphens.
+ */
+export function repairDashes(text: string): string {
+  const urls: string[] = [];
+  const parked = (text ?? "").replace(HTTPS_URL_PATTERN, (url) => {
+    urls.push(url);
+    return `__URL_${urls.length - 1}__`;
+  });
+  const repaired = parked
+    // A range is read out as words: "9 to 5", "$80,000 to $100,000".
+    .replace(
+      new RegExp(`(\\d)\\s*[${ANY_DASH}]\\s*([$£€]?\\d)`, "g"),
+      "$1 to $2",
+    )
+    // A leading dash is a bullet, and plain text outreach has no bullets.
+    .replace(new RegExp(`^[ \\t]*[${ANY_DASH}]+[ \\t]+`, "gm"), "")
+    // A dash with air around it separates clauses, which is a comma here.
+    .replace(new RegExp(`[ \\t]*[${ANY_DASH}]+[ \\t]+`, "g"), ", ")
+    .replace(new RegExp(`[ \\t]+[${ANY_DASH}]+[ \\t]*`, "g"), ", ")
+    // A dash inside a word is a compound, which loses the hyphen entirely.
+    .replace(new RegExp(`(\\w)[${ANY_DASH}](\\w)`, "g"), "$1 $2")
+    .replace(new RegExp(`[${ANY_DASH}]`, "g"), " ")
+    .replace(/ ,/g, ",")
+    .replace(/,(\s*,)+/g, ",")
+    .replace(/[ \t]{2,}/g, " ");
+  return repaired.replace(/__URL_(\d+)__/g, (_, i) => urls[Number(i)] ?? "");
+}
+
+/**
+ * Subject repair the drafting loop runs before the lint: dashes, plus any
+ * stacked faked reply prefixes ("Re: Fwd: ...") the model put in front.
+ */
+export function repairSubject(subject: string): string {
+  let out = repairDashes(subject ?? "");
+  for (let i = 0; i < 3 && FAKE_REPLY_PREFIX.test(out); i += 1) {
+    out = out.replace(FAKE_REPLY_PREFIX, "");
+  }
+  return out.trim();
 }
 
 function pushDashViolation(violations: string[], text: string) {
@@ -179,7 +248,7 @@ export function sanitizeSubject(subject: string): SanitizeResult {
   }
   if (LINK_PATTERN.test(cleaned)) violations.push("subject contains a link");
   pushDashViolation(violations, cleaned);
-  if (/re:|fwd:/i.test(cleaned)) {
+  if (FAKE_REPLY_PREFIX.test(cleaned)) {
     violations.push("fake RE:/FWD: subject prefix");
   }
   const lower = cleaned.toLowerCase();
@@ -201,26 +270,14 @@ export function sanitizeSubject(subject: string): SanitizeResult {
  * while preserving https:// URLs (scheduling links in reply exemplars).
  */
 export function sanitizeExemplarForPrompt(text: string, maxChars = 2400): string {
-  const urls: string[] = [];
-  const withPlaceholders = normalize(text ?? "").replace(HTTPS_URL_PATTERN, (url) => {
-    urls.push(url);
-    return `__URL_${urls.length - 1}__`;
-  });
-  const cleaned = withPlaceholders
+  const cleaned = normalize(text ?? "")
     .replace(/```/g, "'''")
     .replace(/<\/?[a-z][^>]*>/gi, "")
     .replace(/^\s*(system|assistant|user)\s*:/gim, "[$1]")
     .replace(
       /\b(ignore|disregard|forget)\b[\w\s,]{0,40}\b(instructions?|prompts?|rules?)\b[^.\n]*/gi,
       "[removed]",
-    )
-    // House style: no dashes in exemplars shown to the model.
-    .replace(/[\u2010-\u2015\u2212]/g, ", ")
-    .replace(/--+/g, ", ")
-    .replace(/(\w)-(\w)/g, "$1 $2")
-    .replace(/ -/g, ",")
-    .replace(/- /g, ", ")
-    .replace(/-/g, " ")
-    .replace(/__URL_(\d+)__/g, (_, i) => urls[Number(i)] ?? "");
-  return cleaned.slice(0, maxChars);
+    );
+  // Same repair the drafts get, so no few-shot ever teaches hyphenated copy.
+  return repairDashes(cleaned).slice(0, maxChars);
 }

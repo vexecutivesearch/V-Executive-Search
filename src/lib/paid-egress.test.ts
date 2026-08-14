@@ -73,4 +73,59 @@ describe("paid egress guard", () => {
       ),
     ).rejects.toBeInstanceOf(PaidEgressBlockedError);
   });
+
+  it("allows contactout manual enrich up to the 150-credit default cap", async () => {
+    where.mockResolvedValueOnce([{ total: 149 }]);
+    const { assertPaidEgressAllowed } = await import("@/lib/paid-egress");
+
+    await expect(
+      assertPaidEgressAllowed(
+        "contactout",
+        "people/linkedin",
+        "manual_enrich:company-1",
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("blocks at the cap with an actionable message naming the guardrail", async () => {
+    where.mockResolvedValueOnce([{ total: 150 }]);
+    const { assertPaidEgressAllowed } = await import("@/lib/paid-egress");
+
+    await expect(
+      assertPaidEgressAllowed(
+        "contactout",
+        "people/linkedin",
+        "manual_enrich:company-1",
+      ),
+    ).rejects.toThrow(
+      /daily safety cap reached — 150\/150 .* not your contactout balance.*CONTACTOUT_DAILY_CREDIT_CAP/,
+    );
+
+    expect(insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "contactout",
+        blocked: true,
+        estimatedCost: 0,
+        metadata: expect.objectContaining({
+          reason: "daily_cap_reached",
+          cap: 150,
+          usedToday: 150,
+        }),
+      }),
+    );
+  });
+
+  it("respects the CONTACTOUT_DAILY_CREDIT_CAP override", async () => {
+    process.env.CONTACTOUT_DAILY_CREDIT_CAP = "500";
+    where.mockResolvedValueOnce([{ total: 400 }]);
+    const { assertPaidEgressAllowed } = await import("@/lib/paid-egress");
+
+    await expect(
+      assertPaidEgressAllowed(
+        "contactout",
+        "people/linkedin",
+        "manual_enrich:company-1",
+      ),
+    ).resolves.toBeUndefined();
+  });
 });

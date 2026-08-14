@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { REPLY_TEMPLATE_KINDS } from "@/lib/outreach/reply-playbook";
 import { sanitizeOutreachBody } from "@/lib/outreach/sanitizer";
+import {
+  resolveSchedulingLink,
+  schedulingCallLength,
+} from "@/lib/outreach/scheduling-link";
 import { SEED_TEMPLATES } from "@/lib/outreach/seed-templates";
 import { templateKindLabel } from "@/lib/outreach/template-labels";
 
@@ -39,8 +43,31 @@ describe("seeded reply exemplars", () => {
       (t) => t.kind === "reply_positive" && t.channel === "imessage",
     );
     expect(positive?.exampleBody).toContain(
-      "https://calendly.com/odv-vexecutivesearch/30min",
+      "https://calendly.com/odv-vexecutivesearch/15m",
     );
+  });
+
+  it("shows the same link in both positive exemplars as the replies send", () => {
+    const positives = SEED_TEMPLATES.filter((t) => t.kind === "reply_positive");
+    expect(positives).toHaveLength(2);
+    for (const t of positives) {
+      expect(t.exampleBody, t.name).toContain(resolveSchedulingLink());
+    }
+  });
+
+  it("never invites a call length the booking link does not offer", () => {
+    // A link swap from a 30 minute event type to a 15 minute one used to leave
+    // "grab any 30 min" sitting directly above the new URL.
+    const linkMinutes = Number(schedulingCallLength()?.match(/\d+/)?.[0]);
+    for (const t of SEED_TEMPLATES) {
+      for (const match of t.exampleBody.matchAll(
+        /(\d+)\s*(?:min|mins|minute|minutes)\b/gi,
+      )) {
+        expect(Number(match[1]), `${t.name} offers ${match[0]}`).toBe(
+          linkMinutes,
+        );
+      }
+    }
   });
 
   it("keeps every seeded name and body free of dashes outside URLs", () => {

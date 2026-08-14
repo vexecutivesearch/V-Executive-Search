@@ -207,6 +207,29 @@ function addDays(date: Date, days: number): Date {
   return new Date(date.getTime() + days * 86_400_000);
 }
 
+/** First minute of the window on the next day it is open (weekdays only). */
+function nextWindowOpen(
+  base: Date,
+  timeZone: string,
+  windowStartHour: number,
+): Date {
+  const here = wallClock(base, timeZone);
+  const opensLaterToday =
+    here.weekday !== 0 && here.weekday !== 6 && here.hour < windowStartHour;
+
+  let target = base;
+  if (!opensLaterToday) {
+    target = addDays(base, 1);
+    for (let i = 0; i < 3; i += 1) {
+      const wc = wallClock(target, timeZone);
+      if (wc.weekday !== 0 && wc.weekday !== 6) break;
+      target = addDays(target, 1);
+    }
+  }
+  const wc = wallClock(target, timeZone);
+  return dateInTimezone(wc.year, wc.month, wc.day, windowStartHour, 0, timeZone);
+}
+
 /**
  * Schedule a send N days after a base instant, landing on a WEEKDAY inside
  * the contact's local business window with random jitter. If the target day
@@ -261,9 +284,14 @@ export function scheduleSendAt(options: {
       // and costs a whole cron window (email) or worker poll (iMessage).
       return new Date(base.getTime() - DUE_NOW_BACKDATE_MS);
     }
-    if (scheduled <= base) {
-      return scheduleSendAt({ ...options, offsetDays: 1 });
-    }
+    // Outside the window the day-0 steps wait for it to open, and they wait
+    // TOGETHER. Drawing a random slot per step scattered the pair across the
+    // whole window: on 2026-07-31 an enroll at 7:39 AM ET put the intro email
+    // at 6:57 PM and the text that says "just emailed you" at 1:17 PM, five
+    // hours in front of the email it announces. The open is also the earliest
+    // moment the send is allowed, which is what "goes out when I add it" means
+    // for an out of hours add.
+    return nextWindowOpen(base, timeZone, windowStartHour);
   }
   return scheduled;
 }

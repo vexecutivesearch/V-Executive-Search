@@ -648,7 +648,7 @@ export async function buildPipelineConfig() {
         10,
       ),
       contactout_daily_credit_cap: Number.parseInt(
-        process.env.CONTACTOUT_DAILY_CREDIT_CAP ?? "50",
+        process.env.CONTACTOUT_DAILY_CREDIT_CAP ?? "150",
         10,
       ),
       paid_egress_enabled:

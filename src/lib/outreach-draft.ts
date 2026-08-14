@@ -13,13 +13,20 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { outreachTemplates, type OutreachTemplate, type OutreachTemplateKind } from "@/lib/db/schema";
 import {
+  repairDashes,
+  repairSubject,
   sanitizeExemplarForPrompt,
   sanitizeOutreachBody,
   sanitizeSubject,
 } from "@/lib/outreach/sanitizer";
+import { schedulingCallLength } from "@/lib/outreach/scheduling-link";
 
 const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 const MAX_DRAFT_ATTEMPTS = 3;
+
+/** How the prompts name the meeting, taken from the booking link itself. */
+const CALL_LENGTH = schedulingCallLength();
+const BOOKABLE_LENGTH = CALL_LENGTH ?? "a time";
 
 export type DraftContext = {
   contactName: string | null;
@@ -76,10 +83,39 @@ export type DraftFailureReason =
   | "sanitizer_rejected";
 
 let lastDraftFailure: DraftFailureReason | null = null;
+let lastDraftViolations: string[] = [];
+let lastDraftStep: string | null = null;
 
 /** Last failure reason from draftStep/draftSequence (for enroll error payloads). */
 export function getLastDraftFailureReason(): DraftFailureReason | null {
   return lastDraftFailure;
+}
+
+/**
+ * The lint violations behind the last rejection, and the step that hit them.
+ *
+ * "sanitizer_rejected" on its own sends whoever is debugging to the Vercel
+ * function logs to find out what was actually wrong. Carrying the violations
+ * into the enrollment event and the Call List note puts the answer where the
+ * failure is visible.
+ */
+export function getLastDraftViolations(): {
+  step: string | null;
+  violations: string[];
+} {
+  return { step: lastDraftStep, violations: [...lastDraftViolations] };
+}
+
+function noteRejection(step: string, violations: string[]) {
+  lastDraftFailure = "sanitizer_rejected";
+  lastDraftStep = step;
+  lastDraftViolations = violations;
+}
+
+function clearRejection() {
+  lastDraftFailure = null;
+  lastDraftStep = null;
+  lastDraftViolations = [];
 }
 
 async function anthropic(prompt: string, maxTokens = 900): Promise<string | null> {
@@ -145,7 +181,7 @@ const STEP_GUIDANCE: Record<string, string> = {
   text_3:
     "Final SMS. Warm goodbye that leaves the door open. Under 220 characters.",
   reply_positive:
-    "Reply to a positive response. Warm, confirms interest. When a scheduling link is provided, put it on its own line so they can book 30 min; otherwise propose the given availability windows verbatim. Short.",
+    `Reply to a positive response. Warm, confirms interest. When a scheduling link is provided, put it on its own line so they can book ${BOOKABLE_LENGTH}; otherwise propose the given availability windows verbatim. Short.`,
   reply_info_request:
     "Reply acknowledging their question, promising a substantive follow up. Do not invent fees, process details, or candidate names. Short.",
   reply_decline:
@@ -284,7 +320,8 @@ export async function draftStep(options: {
   context: DraftContext;
   priorSteps: DraftedStep[];
 }): Promise<DraftedStep | null> {
-  lastDraftFailure = null;
+  clearRejection();
+  const step = `${options.spec.stepKind}/${options.spec.channel}`;
   const exemplars = await activeTemplatesForKind(options.spec.stepKind);
   let extraGuidance: string | undefined;
 
@@ -298,13 +335,16 @@ export async function draftStep(options: {
       const parsed = parseEmailDraft(raw);
       if (!parsed) {
         lastDraftFailure = "parse_failed";
+        lastDraftStep = step;
         extraGuidance = "Your previous answer was malformed. Use the exact SUBJECT:/BODY: format.";
         continue;
       }
-      const subjectCheck = sanitizeSubject(parsed.subject);
-      const bodyCheck = sanitizeOutreachBody(parsed.body, { channel: "email" });
+      const subjectCheck = sanitizeSubject(repairSubject(parsed.subject));
+      const bodyCheck = sanitizeOutreachBody(repairDashes(parsed.body), {
+        channel: "email",
+      });
       if (subjectCheck.ok && bodyCheck.ok) {
-        lastDraftFailure = null;
+        clearRejection();
         return {
           stepKind: options.spec.stepKind,
           channel: "email",
@@ -313,12 +353,18 @@ export async function draftStep(options: {
           templateId: exemplars[0]?.id ?? null,
         };
       }
-      lastDraftFailure = "sanitizer_rejected";
-      extraGuidance = `Your previous draft was rejected: ${[...subjectCheck.violations, ...bodyCheck.violations].join("; ")}. Fix these problems.`;
+      const violations = [...subjectCheck.violations, ...bodyCheck.violations];
+      noteRejection(step, violations);
+      extraGuidance = `Your previous draft was rejected: ${violations.join("; ")}. Fix these problems.`;
+      console.error(
+        `[outreach] draft attempt ${attempt} rejected (${step}): ${violations.join("; ")}`,
+      );
     } else {
-      const bodyCheck = sanitizeOutreachBody(raw, { channel: "imessage" });
+      const bodyCheck = sanitizeOutreachBody(repairDashes(raw), {
+        channel: "imessage",
+      });
       if (bodyCheck.ok) {
-        lastDraftFailure = null;
+        clearRejection();
         return {
           stepKind: options.spec.stepKind,
           channel: "imessage",
@@ -327,8 +373,11 @@ export async function draftStep(options: {
           templateId: exemplars[0]?.id ?? null,
         };
       }
-      lastDraftFailure = "sanitizer_rejected";
+      noteRejection(step, bodyCheck.violations);
       extraGuidance = `Your previous draft was rejected: ${bodyCheck.violations.join("; ")}. Fix these problems.`;
+      console.error(
+        `[outreach] draft attempt ${attempt} rejected (${step}): ${bodyCheck.violations.join("; ")}`,
+      );
     }
   }
   return null;
@@ -365,7 +414,7 @@ export async function draftEnrollmentReply(options: {
   /** Match the inbound channel — SMS replies must stay short. */
   channel?: "email" | "imessage";
 }): Promise<string | null> {
-  lastDraftFailure = null;
+  clearRejection();
   const channel = options.channel ?? "email";
   const isSms = channel === "imessage";
   const exemplars = await activeTemplatesForKind(options.replyKind);
@@ -384,7 +433,9 @@ export async function draftEnrollmentReply(options: {
       ? "You are replying by SMS / iMessage to a POSITIVE text. Keep it to 1 to 3 short sentences."
       : "You are replying to a POSITIVE response to a recruiter's outreach email. Keep the thread going naturally.";
     extraRules = options.includeSchedulingLink
-      ? `Include this scheduling link on its own line so they can book a 30 min call (do not invent other URLs):\n${options.includeSchedulingLink}`
+      ? `Include this scheduling link on its own line so they can book ${
+          CALL_LENGTH ? `a ${CALL_LENGTH} call` : "a call"
+        } (do not invent other URLs):\n${options.includeSchedulingLink}`
       : isSms
         ? `Offer one clear next step. Availability windows if given:\n${(options.availabilityLines ?? []).slice(0, 3).join("\n") || "(none — ask when works)"}`
         : `Offer EXACTLY these availability windows, as a short plain-text list, verbatim:\n${(options.availabilityLines ?? []).join("\n")}`;
@@ -430,17 +481,17 @@ Respond with ONLY the reply body (no subject, no signature).`;
   for (let attempt = 1; attempt <= MAX_DRAFT_ATTEMPTS; attempt += 1) {
     const raw = await anthropic(`${prompt}${extraGuidance}`);
     if (!raw) return null;
-    const check = sanitizeOutreachBody(raw, {
+    const check = sanitizeOutreachBody(repairDashes(raw), {
       channel: isSms ? "imessage" : "email",
       allowLinks: Boolean(options.includeSchedulingLink),
     });
     if (check.ok) {
-      lastDraftFailure = null;
+      clearRejection();
       return check.cleaned;
     }
     // Feed the violations back, otherwise all three attempts repeat the same
     // prompt and fail the same way.
-    lastDraftFailure = "sanitizer_rejected";
+    noteRejection(`${options.replyKind}/${channel}`, check.violations);
     extraGuidance = `\n\nYour previous draft was rejected: ${check.violations.join(
       "; ",
     )}. Fix these problems.`;

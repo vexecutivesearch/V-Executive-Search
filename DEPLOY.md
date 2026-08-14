@@ -307,8 +307,11 @@ Setup checklist:
 2. Vercel env: `ANTHROPIC_API_KEY` (drafting + reply classification),
    `OUTREACH_FROM_EMAIL` (fallback sender until domain profiles exist),
    optional `OUTREACH_SENDER_NAME/TITLE/FIRM/PHONE`,
-   `OUTREACH_SCHEDULING_LINK` (defaults to the ODV Calendly 30 min link when unset;
-   included on all positive / positive_link_request auto-replies),
+   `OUTREACH_SCHEDULING_LINK` (defaults to the ODV Calendly 15 min link
+   `https://calendly.com/odv-vexecutivesearch/15m` when unset; included on all
+   positive / positive_link_request auto-replies. If this var is already set on
+   Vercel it wins over the default, so change it there too when the booking link
+   changes — the reply copy takes its call length from the slug),
    `RESEND_WEBHOOK_SECRET`, Google Calendar free/busy
    (`GOOGLE_CALENDAR_CLIENT_ID/SECRET/REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID`).
 3. Resend dashboard: add a webhook → `https://<crm>/api/webhooks/resend?token=<RESEND_WEBHOOK_SECRET>`
@@ -486,6 +489,8 @@ Older installs used a single 6 AM / 6 PM job (`com.vexecsearch.daily`). Re-run b
 | `ADMIN_PASSWORD` | Recommended | Admin login (defaults to `WORKER_API_KEY` if unset) |
 | `APOLLO_API_KEY` | Yes | Enrich button + Apollo on company cards |
 | `CONTACTOUT_API_KEY` | Recommended | Personal email/mobile on Enrich button |
+| `APOLLO_DAILY_CREDIT_CAP` | Optional | Internal daily safety cap on estimated Apollo credits (default `200`, resets midnight ET) — app guardrail, not the Apollo balance |
+| `CONTACTOUT_DAILY_CREDIT_CAP` | Optional | Internal daily safety cap on estimated ContactOut credits (default `150`, resets midnight ET; each enriched contact ≈ 2 credits) — app guardrail, not the ContactOut balance |
 | `SERPAPI_API_KEY` | Optional | Google Jobs via SerpApi (when wiring API path; JobSpy Google is broken) |
 | `RESEND_API_KEY` | Optional | Daily email if sent from Vercel routes |
 | `NEXT_PUBLIC_APP_URL` | Optional | Public URL (Vercel sets `VERCEL_URL` automatically) |
@@ -508,6 +513,7 @@ npm run dev
 | `RESEND_API_KEY` | Yes | Daily HTML report from worker |
 | `REPORT_FROM_EMAIL` | Yes | Resend-verified sender |
 | `CONTACTOUT_API_KEY` | Recommended | Personal email/mobile via LinkedIn URL |
+| `APOLLO_DAILY_CREDIT_CAP` / `CONTACTOUT_DAILY_CREDIT_CAP` | Optional | Worker-side internal daily safety caps (defaults `200` / `150`, reset midnight ET) — guardrails, not provider balances |
 | `SERPAPI_API_KEY` | Optional | Google Jobs via SerpApi on the Mac worker (auto-enables Google board) |
 | `EMAIL_WAIT_FOR_SCRAPE_SECONDS` | Optional | Default `7200` — 07:45 waits for ingest |
 | `EMAIL_WAIT_POLL_SECONDS` | Optional | Default `60` |

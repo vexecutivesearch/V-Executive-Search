@@ -70,7 +70,7 @@ vi.mock("@/lib/db", () => ({
 
 const draftEnrollmentReply = vi.fn(
   async () =>
-    "Great, thanks Miguel. Grab 30 min here:\n\nhttps://calendly.com/odv-vexecutivesearch/30min",
+    "Great, thanks Miguel. Grab 15 min here:\n\nhttps://calendly.com/odv-vexecutivesearch/15m",
 );
 const sendOutreachEmail = vi.fn(async () => ({
   ok: true as const,
@@ -107,7 +107,14 @@ vi.mock("@/lib/outreach/enroll", () => ({
   cancelSiblingEnrollments: async () => 0,
 }));
 vi.mock("@/lib/outreach/notifications", () => ({ notifyReply: async () => {} }));
-vi.mock("@/lib/outreach/suppression", () => ({ addSuppression: async () => {} }));
+const isSuppressed = vi.fn(async () => ({
+  suppressed: false as boolean,
+  reason: null as string | null,
+}));
+vi.mock("@/lib/outreach/suppression", () => ({
+  addSuppression: async () => {},
+  isSuppressed: () => isSuppressed(),
+}));
 vi.mock("@/lib/outreach/profiles", () => ({
   pickSendingProfile: async () => ({ profile: null }),
 }));
@@ -160,6 +167,7 @@ function sentEmailReply(createdAt: Date): Row {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  isSuppressed.mockResolvedValue({ suppressed: false, reason: null });
   selectResults.clear();
   updateReturning.clear();
   inserts.length = 0;
@@ -218,7 +226,7 @@ describe("positive reply arriving by text", () => {
       status: "queued",
     });
     expect(texts[0].values.body).toContain(
-      "https://calendly.com/odv-vexecutivesearch/30min",
+      "https://calendly.com/odv-vexecutivesearch/15m",
     );
     // The worker only claims approved messages that are already due.
     expect(texts[0].values.approvedAt).toBeInstanceOf(Date);
@@ -254,6 +262,52 @@ describe("positive reply arriving by text", () => {
     const { applyReplyRules } = await import("@/lib/outreach/rules");
     await applyReplyRules(enrollment, inboundOn("email"), "positive");
     expect(sendOutreachEmail).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * A contact who declines is suppressed, and a suppressed contact cannot be
+ * answered. Florida Elite Epoxy texted "Never" at 13:59:05, which suppressed
+ * the contact on both channels, then texted "Id like to learn more" at 13:59:53.
+ * The ack was queued, the iMessage queue dropped it on its own suppression
+ * re-check, and the activity feed still read "Outreach reply (info_request)" as
+ * though it had been handled. Nothing anywhere said why the lead went quiet.
+ */
+describe("a reply from a contact who is already suppressed", () => {
+  it("says so instead of queueing a text the worker will drop", async () => {
+    isSuppressed.mockResolvedValue({
+      suppressed: true,
+      reason: "negative reply",
+    });
+    const { applyReplyRules } = await import("@/lib/outreach/rules");
+
+    const outcome = await applyReplyRules(
+      enrollment,
+      inboundOn("imessage"),
+      "info_request",
+    );
+
+    expect(queuedTexts()).toHaveLength(0);
+    expect(outcome.actionTaken).toContain("FAILED");
+    expect(outcome.actionTaken).toContain("suppressed");
+    expect(outcome.actionTaken).toContain("negative reply");
+
+    const error = events().find((e) => e.eventType === "error");
+    expect(error?.payload.auto_reply_failed).toBe(true);
+    expect(String(error?.payload.reason)).toContain("Clear the suppression");
+    expect(error?.payload.manual_note).toBeTruthy();
+  });
+
+  it("does not try to email a contact whose email is suppressed", async () => {
+    isSuppressed.mockResolvedValue({
+      suppressed: true,
+      reason: "negative reply",
+    });
+    const { applyReplyRules } = await import("@/lib/outreach/rules");
+
+    await applyReplyRules(enrollment, inboundOn("email"), "positive");
+
+    expect(sendOutreachEmail).not.toHaveBeenCalled();
   });
 });
 
