@@ -3,6 +3,19 @@
 import { useState } from "react";
 import Link from "next/link";
 import type { CallListEntry } from "@/lib/db/schema";
+import { channelPlanLabel } from "@/lib/outreach/channel-plan";
+
+/** "email + SMS ×2, text only ×1" — or a single plan's label. */
+function summarizePlans(plans: string[]): string {
+  const counts = new Map<string, number>();
+  for (const plan of plans) {
+    const label = channelPlanLabel(plan);
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([label, n]) => (plans.length > 1 && n > 1 ? `${label} ×${n}` : label))
+    .join(", ");
+}
 
 type OnListState = "unknown" | "on" | "off";
 
@@ -81,6 +94,8 @@ export function AddToCallListButton({
           channelPlan?: string;
           reason?: string;
           dispatched?: boolean;
+          contactsEnrolled?: number;
+          contactPlans?: string[];
         };
       };
       if (!res.ok || !data.entry) {
@@ -89,14 +104,18 @@ export function AddToCallListButton({
       }
       setState("on");
       if (data.outreach?.enrolled) {
-        const plan =
-          data.outreach.channelPlan === "email_and_text"
-            ? "email + SMS drafted"
-            : "email sequence drafted";
+        const plans =
+          data.outreach.contactPlans?.filter(Boolean) ??
+          (data.outreach.channelPlan ? [data.outreach.channelPlan] : []);
+        const n = data.outreach.contactsEnrolled ?? (plans.length || 1);
+        const what =
+          n > 1
+            ? `drafted for ${n} contacts (${summarizePlans(plans)})`
+            : `${summarizePlans(plans) || "sequence"} drafted`;
         setOutreachNote(
           data.outreach.dispatched
-            ? `Outreach ${plan}, send queued`
-            : `Outreach ${plan} (Admin → Outreach: turn Master send On, Dry-run Off, Approval Off to auto-send)`,
+            ? `Outreach ${what}, send queued`
+            : `Outreach ${what} (Admin → Outreach: turn Master send On, Dry-run Off, Approval Off to auto-send)`,
         );
       } else if (data.outreach?.reason) {
         setOutreachNote(`Outreach skipped: ${data.outreach.reason}`);

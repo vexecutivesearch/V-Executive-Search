@@ -1098,7 +1098,7 @@ export async function getCrmKpis(todayDate: string): Promise<CrmKpis> {
 export type CallListOutreachProgress = {
   enrollmentId: string;
   status: string;
-  channelPlan: "email_and_text" | "email_only";
+  channelPlan: "email_and_text" | "email_only" | "text_only";
   stepsTotal: number;
   stepsSent: number;
   stepsQueued: number;
@@ -1230,9 +1230,11 @@ export async function getCallListItems(): Promise<CallListItem[]> {
         const base = {
           enrollmentId: enr.id,
           status: enr.status,
-          channelPlan: (enr.phoneNumber
-            ? "email_and_text"
-            : "email_only") as "email_and_text" | "email_only",
+          channelPlan: (enr.emailAddress
+            ? enr.phoneNumber
+              ? "email_and_text"
+              : "email_only"
+            : "text_only") as "email_and_text" | "email_only" | "text_only",
           stepsTotal: msgs.length,
           stepsSent: sent.length,
           stepsQueued: msgs.filter((m) => m.status === "queued").length,

@@ -38,6 +38,12 @@ import {
   formatBookedWindow,
 } from "@/lib/call-list-booking";
 
+function channelPlanDisplay(plan: string): string {
+  if (plan === "email_and_text") return "email + iMessage";
+  if (plan === "text_only") return "iMessage/SMS only";
+  return "email only";
+}
+
 function formatDate(value: Date | string | null | undefined): string {
   if (!value) return "—";
   const d = typeof value === "string" ? new Date(`${value}T12:00:00`) : new Date(value);
@@ -284,7 +290,7 @@ export function CallListRow({
             {item.outreach && (
               <span
                 className="shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded bg-violet-100 text-violet-900 dark:bg-violet-950/50 dark:text-violet-200"
-                title={`Outreach sequencer · ${item.outreach.channelPlan.replace("_", " + ")} · ${item.outreach.status}`}
+                title={`Outreach sequencer · ${channelPlanDisplay(item.outreach.channelPlan)} · ${item.outreach.status}`}
               >
                 {item.outreach.label}
               </span>
@@ -470,9 +476,7 @@ export function CallListRow({
                 {item.outreach.label}
                 <span className="text-violet-700/80 dark:text-violet-300/80">
                   {" "}
-                  · {item.outreach.channelPlan === "email_and_text"
-                    ? "email + iMessage"
-                    : "email only"}{" "}
+                  · {channelPlanDisplay(item.outreach.channelPlan)}{" "}
                   · status {item.outreach.status}
                 </span>
               </p>

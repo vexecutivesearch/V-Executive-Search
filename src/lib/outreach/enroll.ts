@@ -17,6 +17,14 @@ import {
   type StepSpec,
 } from "@/lib/outreach-draft";
 import { verifyEmailAddress } from "@/lib/email-verify";
+import { contactIsCallable } from "@/lib/lead-score";
+import { compareContactsForOutreach } from "@/lib/contact-title-priority";
+import {
+  channelPlanLabel,
+  filterStepSpecsForPlan,
+  resolveChannelPlan,
+  type ChannelPlan,
+} from "@/lib/outreach/channel-plan";
 import { buildDraftContext } from "@/lib/outreach/draft-context";
 import { ensureDefaultFlow } from "@/lib/outreach/default-flow";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
@@ -29,7 +37,7 @@ export type EnrollmentResult =
   | {
       enrolled: true;
       enrollmentId: string;
-      channelPlan: "email_and_text" | "email_only";
+      channelPlan: ChannelPlan;
       /** True when a live dispatch pass ran after enroll (email may send in-window). */
       dispatched?: boolean;
     }
@@ -57,20 +65,19 @@ function pickPhone(contact: Contact): string | null {
   );
 }
 
-/** Eligibility per the confirmed enrollment rules. Returns null when OK. */
-async function ineligibilityReason(
+/**
+ * Why the picked email cannot carry the sequence, or null when it can.
+ * Unverified emails are MX-checked inline and persisted, so a lead is
+ * enrollable the moment it's added (the daily verify pass may not have
+ * reached a same-day import yet).
+ */
+async function emailUnusableReason(
   contact: Contact,
-  companyStatus: string,
-  icpStatus: string,
   emailAddress: string | null,
-  options?: { bypassIcpFail?: boolean },
 ): Promise<string | null> {
   if (!emailAddress) return "no email address";
   if (contact.emailDeliverable === false) return "email not deliverable";
   if (contact.emailDeliverable !== true) {
-    // Never verified — the daily worker pass hasn't reached this contact yet
-    // (fresh imports added to the Call List the same day). MX-check inline and
-    // persist, so a lead is enrollable the moment it's added.
     const verdict = await verifyEmailAddress(emailAddress);
     await db
       .update(contacts)
@@ -83,6 +90,22 @@ async function ineligibilityReason(
       return `email not deliverable (${verdict.reason})`;
     }
   }
+  return null;
+}
+
+/** Eligibility per the confirmed enrollment rules. Returns null when OK. */
+async function ineligibilityReason(
+  contact: Contact,
+  companyStatus: string,
+  icpStatus: string,
+  channels: {
+    /** Email that will carry the sequence, or null for text-only plans. */
+    emailAddress: string | null;
+    /** Phone that will carry a text-only sequence, or null. */
+    textOnlyPhone: string | null;
+  },
+  options?: { bypassIcpFail?: boolean },
+): Promise<string | null> {
   if (companyStatus !== "new") return `company status is ${companyStatus}`;
   // Intentional Call List adds skip ICP fail — the recruiter already chose them.
   if (icpStatus === "fail" && !options?.bypassIcpFail) return "ICP fail";
@@ -103,8 +126,21 @@ async function ineligibilityReason(
     .limit(1);
   if (prior) return "already enrolled previously";
 
-  const emailSupp = await isSuppressed({ channel: "email", email: emailAddress });
-  if (emailSupp.suppressed) return `email suppressed (${emailSupp.reason})`;
+  if (channels.emailAddress) {
+    const emailSupp = await isSuppressed({
+      channel: "email",
+      email: channels.emailAddress,
+    });
+    if (emailSupp.suppressed) return `email suppressed (${emailSupp.reason})`;
+  }
+  if (channels.textOnlyPhone) {
+    // A text-only plan lives or dies on this one number.
+    const phoneSupp = await isSuppressed({
+      channel: "imessage",
+      phone: channels.textOnlyPhone,
+    });
+    if (phoneSupp.suppressed) return `phone suppressed (${phoneSupp.reason})`;
+  }
 
   return null;
 }
@@ -130,6 +166,13 @@ export async function enrollContact(
     advanceNow?: boolean;
     /** Job listing the user selected — Claude personalizes off this role. */
     jobListingId?: string | null;
+    /**
+     * Skip the internal dispatch pass. Multi-contact callers must enroll
+     * every contact first and dispatch once at the end: the first send flips
+     * the company to "contacted", which would make every later enroll refuse
+     * with "company status is contacted".
+     */
+    deferDispatch?: boolean;
   },
 ): Promise<EnrollmentResult> {
   const settings = await getOrCreateOutreachSettings();
@@ -140,7 +183,11 @@ export async function enrollContact(
   // Advance whenever messages are approved (approval off, or call-list
   // auto-approve) so day-0 steps queue even in dry-run for preview.
   const advanceNow = Boolean(options?.advanceNow) || autoApprove;
-  const shouldDispatch = settings.enabled && !settings.dryRun && autoApprove;
+  const shouldDispatch =
+    settings.enabled &&
+    !settings.dryRun &&
+    autoApprove &&
+    !options?.deferDispatch;
 
   const [contact] = await db
     .select()
@@ -156,13 +203,39 @@ export async function enrollContact(
     .limit(1);
   if (!company) return { enrolled: false, reason: "company not found" };
 
-  const emailAddress = pickEmail(contact, settings.workEmailPreferred);
+  const pickedEmail = pickEmail(contact, settings.workEmailPreferred);
+  const phone = pickPhone(contact);
   const fromCallList = options?.actor === "call_list";
+
+  // A missing or undeliverable email is only fatal when there is no phone to
+  // fall back to — otherwise the contact enrolls with a text-only plan (the
+  // Mac worker's IDS check + SMS fallback can text any number).
+  const emailReason = await emailUnusableReason(contact, pickedEmail);
+  if (emailReason && !phone) {
+    if (fromCallList) {
+      try {
+        const { recordCallListOutreachEvent } = await import(
+          "@/lib/outreach/call-list-sync"
+        );
+        await recordCallListOutreachEvent({
+          companyId: company.id,
+          contactId: contact.id,
+          summary: `Outreach enroll failed: ${emailReason} (and no phone number)`,
+        });
+      } catch {
+        /* non-fatal */
+      }
+    }
+    return { enrolled: false, reason: emailReason };
+  }
+  const textOnly = Boolean(emailReason);
+  const emailAddress = textOnly ? null : pickedEmail;
+
   const reason = await ineligibilityReason(
     contact,
     company.status,
     company.icpStatus,
-    emailAddress,
+    { emailAddress, textOnlyPhone: textOnly ? phone : null },
     { bypassIcpFail: fromCallList },
   );
   if (reason) {
@@ -191,11 +264,21 @@ export async function enrollContact(
     return { enrolled: false, reason: "company contact cap reached" };
   }
 
-  const phone = pickPhone(contact);
+  // Email plans only add text steps for verified iMessage numbers; text-only
+  // plans take any phone (worker falls back to SMS when IDS says no iMessage).
   let textEligible = contact.imessageCapable === true && Boolean(phone);
-  if (textEligible && phone) {
+  if (!textOnly && textEligible && phone) {
     const phoneSupp = await isSuppressed({ channel: "imessage", phone });
     if (phoneSupp.suppressed) textEligible = false;
+  }
+  const channelPlan = resolveChannelPlan({
+    emailUsable: !textOnly,
+    hasPhone: Boolean(phone),
+    textEligible,
+  });
+  if (!channelPlan) {
+    // Unreachable in practice: no-email-no-phone already failed above.
+    return { enrolled: false, reason: "no reachable channel" };
   }
 
   const listings = await db
@@ -231,8 +314,9 @@ export async function enrollContact(
     companyLocation: company.sourceMarket,
   });
 
-  const specs: StepSpec[] = DEFAULT_STEP_SPECS.filter(
-    (spec) => spec.channel === "email" || textEligible,
+  const specs: StepSpec[] = filterStepSpecsForPlan(
+    channelPlan,
+    DEFAULT_STEP_SPECS,
   );
 
   const context = buildDraftContext({
@@ -299,7 +383,7 @@ export async function enrollContact(
       status: "active",
       timezone,
       emailAddress,
-      phoneNumber: textEligible ? phone : null,
+      phoneNumber: textOnly || textEligible ? phone : null,
       flowVersionId: versionId,
       currentNodeId: null,
       nodeState: options?.staggerDays
@@ -339,7 +423,7 @@ export async function enrollContact(
       job_listing_id: focusListing?.id ?? null,
       primary_job_title: context.primaryJobTitle,
       timezone,
-      channel_plan: textEligible ? "email_and_text" : "email_only",
+      channel_plan: channelPlan,
       steps: drafted.map((s) => s.stepKind),
       stagger_days: options?.staggerDays ?? 0,
       job_titles: context.jobTitles,
@@ -373,7 +457,7 @@ export async function enrollContact(
     const { recordCallListOutreachEvent } = await import(
       "@/lib/outreach/call-list-sync"
     );
-    const plan = textEligible ? "email + SMS" : "email-only";
+    const plan = channelPlanLabel(channelPlan);
     const roleBit = context.primaryJobTitle
       ? ` about "${context.primaryJobTitle}"`
       : "";
@@ -417,9 +501,107 @@ export async function enrollContact(
   return {
     enrolled: true,
     enrollmentId: enrollment.id,
-    channelPlan: textEligible ? "email_and_text" : "email_only",
+    channelPlan,
     dispatched,
   };
+}
+
+export type CompanyEnrollmentOutcome = {
+  contactId: string;
+  contactName: string;
+  result: EnrollmentResult;
+};
+
+export type CompanyEnrollmentSummary = {
+  /** One outcome per contact attempted (empty when nothing was eligible). */
+  outcomes: CompanyEnrollmentOutcome[];
+  enrolledCount: number;
+  /** True when a single live dispatch pass ran after ALL enrolls. */
+  dispatched: boolean;
+};
+
+/**
+ * Enroll every reachable contact at a company (capped by
+ * maxContactsPerCompany, ordered by outreach title priority, the given
+ * primary first), then run ONE dispatch pass at the end.
+ *
+ * Drafting runs in parallel across contacts — each Claude sequence takes
+ * ~15–25s and the call-list route has a hard time budget. Dispatch MUST stay
+ * deferred until every contact is enrolled: the first send flips the company
+ * to "contacted", after which enrollContact refuses new enrollments.
+ */
+export async function enrollCompanyContacts(options: {
+  companyId: string;
+  /** Stays first in the enroll order; falls back to title priority. */
+  primaryContactId?: string | null;
+  jobListingId?: string | null;
+  actor?: string;
+  autoApprove?: boolean;
+  advanceNow?: boolean;
+}): Promise<CompanyEnrollmentSummary> {
+  const settings = await getOrCreateOutreachSettings();
+
+  const companyContacts = await db
+    .select()
+    .from(contacts)
+    .where(eq(contacts.companyId, options.companyId));
+
+  const priorEnrollments = await db
+    .select({ contactId: sequenceEnrollments.contactId })
+    .from(sequenceEnrollments)
+    .where(eq(sequenceEnrollments.companyId, options.companyId));
+  const alreadyEnrolled = new Set(priorEnrollments.map((r) => r.contactId));
+  const capRemaining = Math.max(
+    0,
+    settings.maxContactsPerCompany - priorEnrollments.length,
+  );
+
+  const ordered = companyContacts
+    .filter(contactIsCallable)
+    .filter((c) => !alreadyEnrolled.has(c.id))
+    .sort(compareContactsForOutreach);
+  if (options.primaryContactId) {
+    const idx = ordered.findIndex((c) => c.id === options.primaryContactId);
+    if (idx > 0) ordered.unshift(...ordered.splice(idx, 1));
+  }
+  const targets = ordered.slice(0, capRemaining);
+  if (!targets.length) {
+    return { outcomes: [], enrolledCount: 0, dispatched: false };
+  }
+
+  // Pre-warm shared idempotent state once so the parallel enrolls below can
+  // only ever hit the row-exists path (no first-insert races).
+  await seedOutreachTemplates();
+  await ensureDefaultFlow();
+
+  const outcomes: CompanyEnrollmentOutcome[] = await Promise.all(
+    targets.map(async (contact) => ({
+      contactId: contact.id,
+      contactName: contact.name,
+      result: await enrollContact(contact.id, {
+        actor: options.actor,
+        autoApprove: options.autoApprove,
+        advanceNow: options.advanceNow,
+        jobListingId: options.jobListingId ?? null,
+        deferDispatch: true,
+      }),
+    })),
+  );
+
+  const enrolledCount = outcomes.filter((o) => o.result.enrolled).length;
+  let dispatched = false;
+  const autoApprove = Boolean(options.autoApprove) || !settings.requireApproval;
+  if (enrolledCount > 0 && settings.enabled && !settings.dryRun && autoApprove) {
+    try {
+      const { runOutreachDispatch } = await import("@/lib/outreach/dispatch");
+      await runOutreachDispatch(new Date());
+      dispatched = true;
+    } catch (error) {
+      console.error("[outreach] dispatch after multi-enroll failed", error);
+    }
+  }
+
+  return { outcomes, enrolledCount, dispatched };
 }
 
 /**

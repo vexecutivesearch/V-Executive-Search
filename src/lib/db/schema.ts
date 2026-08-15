@@ -782,7 +782,7 @@ export const outreachSettings = pgTable("outreach_settings", {
   /** Approval gate: every message needs approvedAt before dispatch. */
   requireApproval: boolean("require_approval").default(true).notNull(),
   /** System-level daily cap across all profiles (0 = no extra cap). */
-  dailySendCap: integer("daily_send_cap").default(50).notNull(),
+  dailySendCap: integer("daily_send_cap").default(100).notNull(),
   /** Auto-enroll on call-list add (+ enrich ingest). Manual enroll always available. */
   autoEnroll: boolean("auto_enroll").default(true).notNull(),
   maxContactsPerCompany: integer("max_contacts_per_company").default(3).notNull(),

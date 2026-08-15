@@ -161,6 +161,35 @@ async function handleSendNode(
   const settings = await getOrCreateOutreachSettings();
   const sendWindow = resolveSendWindow(settings, now);
 
+  if (config.channel === "email" && !enrollment.emailAddress) {
+    // Text-only enrollments never draft email steps, but the flow graph
+    // still walks through email send nodes — skip them, and never fall into
+    // the draft-at-node-entry path (dispatch cannot send to a NULL address).
+    const [existing] = await db
+      .select()
+      .from(outreachMessages)
+      .where(
+        and(
+          eq(outreachMessages.enrollmentId, enrollment.id),
+          eq(outreachMessages.stepKind, config.stepKind as OutreachTemplateKind),
+          inArray(outreachMessages.status, ["drafted", "queued"]),
+        ),
+      )
+      .limit(1);
+    if (existing) {
+      await db
+        .update(outreachMessages)
+        .set({ status: "skipped", updatedAt: now })
+        .where(eq(outreachMessages.id, existing.id));
+    }
+    await logEnrollmentEvent({
+      enrollmentId: enrollment.id,
+      eventType: "rule_action",
+      payload: { node: node.id, action: "skip_email_step", reason: "no email address (text-only enrollment)" },
+    });
+    return "advance";
+  }
+
   if (config.channel === "imessage" && !enrollment.phoneNumber) {
     // Text steps are skipped for contacts without a verified iMessage number.
     const [existing] = await db

@@ -6,7 +6,6 @@ import {
   companies,
   companyActivities,
   contacts,
-  sequenceEnrollments,
 } from "@/lib/db/schema";
 import { isCallStatus } from "@/lib/call-status";
 import { contactIsCallable } from "@/lib/lead-score";
@@ -14,8 +13,13 @@ import { compareContactsForOutreach } from "@/lib/contact-title-priority";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-/** Call-list add may LLM-draft a full outreach sequence. */
-export const maxDuration = 60;
+/**
+ * Call-list add LLM-drafts a full outreach sequence for EVERY enriched
+ * contact at the company (up to maxContactsPerCompany, in parallel — each
+ * contact's sequence takes ~15–25s of Claude drafting, worst case more when
+ * the sanitizer forces retries).
+ */
+export const maxDuration = 120;
 
 /** List entries, or check membership for one company (?company_id=). */
 export async function GET(request: NextRequest) {
@@ -44,18 +48,30 @@ export async function GET(request: NextRequest) {
 }
 
 type OutreachAttempt = {
+  /** True when at least one contact enrolled (primary's result leads). */
   enrolled: boolean;
   enrollmentId?: string;
   channelPlan?: string;
   reason?: string;
   dispatched?: boolean;
+  /** Multi-contact detail (companies typically have 2–3 enriched contacts). */
+  contactsEnrolled?: number;
+  contactsAttempted?: number;
+  /** Channel plan per enrolled contact, primary first. */
+  contactPlans?: string[];
 };
 
-/** Enroll a call-list contact in outreach; never throws. */
-async function attemptOutreachEnroll(
-  contactId: string,
+/**
+ * Enroll every reachable contact at the company in outreach; never throws.
+ * All contacts are enrolled (and drafted) BEFORE the single dispatch pass —
+ * the first send flips the company to "contacted", which would make any
+ * later enroll refuse.
+ */
+async function attemptCompanyOutreach(
+  companyId: string,
+  primaryContactId: string | null,
   jobListingId: string | null,
-): Promise<OutreachAttempt> {
+): Promise<OutreachAttempt | null> {
   try {
     const { getOrCreateOutreachSettings } = await import(
       "@/lib/outreach/settings"
@@ -64,14 +80,42 @@ async function attemptOutreachEnroll(
     if (!settings.autoEnroll) {
       return { enrolled: false, reason: "auto_enroll disabled" };
     }
-    const { enrollContact } = await import("@/lib/outreach/enroll");
-    const result = await enrollContact(contactId, {
+    const { enrollCompanyContacts } = await import("@/lib/outreach/enroll");
+    const summary = await enrollCompanyContacts({
+      companyId,
+      primaryContactId,
+      jobListingId,
       actor: "call_list",
       autoApprove: true,
       advanceNow: true,
-      jobListingId,
     });
-    return { ...result };
+    // Nothing eligible (cap reached / everyone already enrolled): stay quiet,
+    // like the old single-contact retry did.
+    if (!summary.outcomes.length) return null;
+
+    const enrolledOutcomes = summary.outcomes.filter((o) => o.result.enrolled);
+    const primary =
+      summary.outcomes.find((o) => o.contactId === primaryContactId) ??
+      summary.outcomes[0];
+    const lead = primary.result.enrolled
+      ? primary.result
+      : enrolledOutcomes[0]?.result;
+
+    return {
+      enrolled: enrolledOutcomes.length > 0,
+      ...(lead?.enrolled
+        ? { enrollmentId: lead.enrollmentId, channelPlan: lead.channelPlan }
+        : {}),
+      ...(!enrolledOutcomes.length && !primary.result.enrolled
+        ? { reason: primary.result.reason }
+        : {}),
+      dispatched: summary.dispatched,
+      contactsEnrolled: enrolledOutcomes.length,
+      contactsAttempted: summary.outcomes.length,
+      contactPlans: enrolledOutcomes.map((o) =>
+        o.result.enrolled ? o.result.channelPlan : "",
+      ),
+    };
   } catch (error) {
     console.error("[call-list] outreach enroll failed (non-fatal):", error);
     return { enrolled: false, reason: "enroll_error" };
@@ -116,23 +160,15 @@ export async function POST(request: NextRequest) {
     .limit(1);
   if (existing) {
     // Re-adding is the natural retry after a failed enroll (e.g. the email
-    // hadn't been verified yet when the row was first added). If the primary
-    // contact never got an enrollment, attempt outreach again now.
-    let outreach: OutreachAttempt | null = null;
-    const retryContactId = existing.primaryContactId;
-    if (retryContactId) {
-      const [prior] = await db
-        .select({ id: sequenceEnrollments.id })
-        .from(sequenceEnrollments)
-        .where(eq(sequenceEnrollments.contactId, retryContactId))
-        .limit(1);
-      if (!prior) {
-        outreach = await attemptOutreachEnroll(
-          retryContactId,
-          jobListingId ?? existing.jobListingId,
-        );
-      }
-    }
+    // hadn't been verified yet when the row was first added). Retry every
+    // eligible contact still missing an enrollment; when everyone is already
+    // enrolled (or the company cap is reached) this returns null and stays
+    // quiet.
+    const outreach = await attemptCompanyOutreach(
+      companyId,
+      existing.primaryContactId,
+      jobListingId ?? existing.jobListingId,
+    );
     return NextResponse.json({ entry: existing, already_on_list: true, outreach });
   }
 
@@ -186,13 +222,17 @@ export async function POST(request: NextRequest) {
   });
 
   // Outreach: adding to the call list is the intentional trigger — draft a
-  // personalized email+SMS sequence off the selected job listing, auto-approve,
-  // and advance so day-0 email + SMS are queued. Actual send still respects
-  // Master send + dry-run on the Outreach Overview tab (enroll runs dispatch
-  // when enabled && !dryRun).
+  // personalized sequence for EVERY reachable contact off the selected job
+  // listing, auto-approve, and advance so day-0 steps are queued. One
+  // dispatch pass runs after all contacts are enrolled; actual send still
+  // respects Master send + dry-run on the Outreach Overview tab.
   let outreach: OutreachAttempt | null = null;
   if (primaryContactId) {
-    outreach = await attemptOutreachEnroll(primaryContactId, jobListingId);
+    outreach = await attemptCompanyOutreach(
+      companyId,
+      primaryContactId,
+      jobListingId,
+    );
   } else {
     outreach = { enrolled: false, reason: "no primary contact" };
   }

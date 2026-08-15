@@ -16,6 +16,7 @@ export function contactIsCallable(contact: Contact): boolean {
   return Boolean(
     contact.personalPhone ||
       contact.phone ||
+      (contact.phones ?? []).some((p) => p.number) ||
       contact.personalEmail ||
       contact.email ||
       contact.workEmail,
