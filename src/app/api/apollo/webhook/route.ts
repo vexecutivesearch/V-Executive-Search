@@ -6,8 +6,10 @@ import {
   syncContactPhoneFields,
   contactPhonesForDisplay,
 } from "@/lib/contact-phones";
+import { APOLLO_MOBILE_SURCHARGE } from "@/lib/apollo-enrich";
 import { db } from "@/lib/db";
 import { contacts } from "@/lib/db/schema";
+import { recordProviderUsageEvent } from "@/lib/paid-egress";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,6 +72,23 @@ export async function POST(request: NextRequest) {
         companyPhone: synced.companyPhone,
       })
       .where(eq(contacts.apolloId, apolloId));
+
+    // Apollo charges the 8-credit mobile surcharge only when it actually
+    // returns a phone, and that is decided here rather than at request time.
+    // Booking it against the day's budget now keeps the guardrail honest
+    // without charging for reveals that came back empty.
+    await recordProviderUsageEvent(
+      "apollo",
+      "people/match:mobile",
+      "manual_enrich:webhook",
+      {
+        companyId: existing.companyId,
+        contactId: existing.id,
+        recordsReturned: apolloPhones.length,
+        estimatedCost: APOLLO_MOBILE_SURCHARGE,
+        metadata: { apolloId, phones: apolloPhones.length },
+      },
+    );
 
     updated += 1;
   }
