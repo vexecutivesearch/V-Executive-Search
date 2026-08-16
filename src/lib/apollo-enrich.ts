@@ -228,16 +228,21 @@ export async function matchPerson(
 ): Promise<Record<string, unknown> | null> {
   const params = new URLSearchParams({ id: personId });
   const hook = webhookUrl();
+  const phoneRequested = enrichPhone && hook !== null;
   if (enrichPhone && hook) {
     params.set("reveal_phone_number", "true");
     params.set("webhook_url", hook);
   }
 
-  const estimatedCost = enrichPhone ? 8 : 1;
+  // A mobile reveal is 8x an email match, so it must only be charged when the
+  // request actually asks for one. Without a webhook URL Apollo cannot deliver
+  // a phone, so the call goes out as a plain match — charging 8 for it burned
+  // the daily guardrail eight times faster than needed for no phone in return.
+  const estimatedCost = phoneRequested ? 8 : 1;
   await assertPaidEgressAllowed("apollo", "people/match", context, {
     companyId,
     estimatedCost,
-    metadata: { personId, enrichPhone },
+    metadata: { personId, enrichPhone, phoneRequested },
   });
   const resp = await fetch(`${APOLLO_BASE}/people/match?${params}`, {
     method: "POST",
@@ -257,7 +262,7 @@ export async function matchPerson(
     contactId: undefined,
     recordsReturned: data.person ? 1 : 0,
     estimatedCost,
-    metadata: { personId, enrichPhone },
+    metadata: { personId, enrichPhone, phoneRequested },
   });
   return data.person ?? null;
 }
