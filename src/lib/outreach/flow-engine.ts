@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import {
   companies,
   companyActivities,
+  contacts,
   inboundMessages,
   outreachFlowVersions,
   outreachMessages,
@@ -11,6 +12,7 @@ import {
   type OutreachTemplateKind,
   type SequenceEnrollment,
 } from "@/lib/db/schema";
+import { pickPhone } from "@/lib/outreach/contact-handles";
 import type {
   ActionNodeConfig,
   ConditionNodeConfig,
@@ -157,6 +159,49 @@ async function inheritedApprovalAt(enrollmentId: string): Promise<Date | null> {
   return row?.approvedAt ?? null;
 }
 
+/** How long to sit on a text step while the capability check is outstanding. */
+const TEXT_CHECK_RETRY_MS = 15 * 60_000;
+
+/**
+ * Is this text step still worth waiting for rather than skipping?
+ *
+ * True only for the genuine race: the contact HAS a phone, the Mac worker has
+ * not answered the capability check, and the day-0 email has not gone out. It
+ * is self-limiting — once the intro sends, the day-0 window has closed and
+ * the step skips as before, so a contact with no phone or a dead worker can
+ * never stall a sequence indefinitely.
+ */
+async function dayZeroTextStillPossible(
+  enrollment: SequenceEnrollment,
+): Promise<boolean> {
+  const [contact] = await db
+    .select({
+      phone: contacts.phone,
+      personalPhone: contacts.personalPhone,
+      phones: contacts.phones,
+      imessageCapable: contacts.imessageCapable,
+    })
+    .from(contacts)
+    .where(eq(contacts.id, enrollment.contactId))
+    .limit(1);
+  // An answered check is a decision, not a race.
+  if (!contact || contact.imessageCapable !== null) return false;
+  if (!pickPhone(contact)) return false;
+
+  const [sentEmail] = await db
+    .select({ id: outreachMessages.id })
+    .from(outreachMessages)
+    .where(
+      and(
+        eq(outreachMessages.enrollmentId, enrollment.id),
+        eq(outreachMessages.channel, "email"),
+        eq(outreachMessages.status, "sent"),
+      ),
+    )
+    .limit(1);
+  return !sentEmail;
+}
+
 async function lastSentAt(enrollmentId: string): Promise<Date | null> {
   const [row] = await db
     .select({ sentAt: outreachMessages.sentAt })
@@ -214,6 +259,29 @@ async function handleSendNode(
   }
 
   if (config.channel === "imessage" && !enrollment.phoneNumber) {
+    // Not hopeless just because no number is attached yet: the contact may
+    // have a phone whose Mac worker text check has not come back. Enrolling
+    // straight after enrichment loses that race every time, and skipping here
+    // would drop the day-0 text permanently. Hold while the day-0 email is
+    // still unsent — the window the text is meant to share with it — and let
+    // the phone backfill attach the number in the meantime.
+    if (await dayZeroTextStillPossible(enrollment)) {
+      await saveState(enrollment, {
+        nextStepAt: new Date(now.getTime() + TEXT_CHECK_RETRY_MS),
+      });
+      await logEnrollmentEvent({
+        enrollmentId: enrollment.id,
+        eventType: "rule_action",
+        payload: {
+          node: node.id,
+          action: "await_text_check",
+          reason:
+            "contact has a phone but no text-capability answer yet — holding the day-0 text until the intro sends",
+        },
+      });
+      return "waiting";
+    }
+
     // Text steps are skipped for contacts without a verified iMessage number.
     const [existing] = await db
       .select()
