@@ -21,6 +21,16 @@ export async function POST() {
   const summary = await backfillEnrollmentPhones({ actor: "admin" });
 
   const parts = [`${summary.attached} enrollment(s) upgraded to email + text`];
+  if (summary.dayZeroTextRestored > 0) {
+    parts.push(
+      `${summary.dayZeroTextRestored} had the intro text restored — it leads their text sequence`,
+    );
+  }
+  if (summary.dayZeroTextMissed > 0) {
+    parts.push(
+      `${summary.dayZeroTextMissed} had already sent their intro email, so they resume at the next text step rather than a stale "just emailed you"`,
+    );
+  }
   if (summary.skippedNoPhone > 0) {
     parts.push(`${summary.skippedNoPhone} still have no phone number`);
   }
