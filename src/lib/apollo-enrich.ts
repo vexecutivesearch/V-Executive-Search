@@ -459,7 +459,9 @@ export async function enrichCompanyContacts(options: {
 
     if (useContactOut && linkedinUrl && contactOutApiKey) {
       const co = await enrichFromContactOut(linkedinUrl, contactOutApiKey, {}, context, companyId);
-      if (co?.phoneApiLocked) {
+      if (co?.apiError) {
+        // Already logged and audited by the client — skip the merge.
+      } else if (co?.phoneApiLocked) {
         await markContactOutCreditsExhausted();
       } else if (co && !co.phoneApiLocked) {
         phones = mergeSourcedPhones(phones, co.phones);

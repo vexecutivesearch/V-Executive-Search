@@ -160,11 +160,13 @@ export async function POST(
       contactout_checked: refresh.checked,
       contactout_phone_locked: refresh.phoneApiLocked || !contactOutAvailable,
       contactout_available: contactOutAvailable,
+      contactout_error: refresh.apiError,
       company: updatedCompany,
       message:
-        refresh.updated > 0
+        refresh.apiError ??
+        (refresh.updated > 0
           ? `Enriched ${refresh.updated} LinkedIn job poster contact(s) via ContactOut`
-          : `ContactOut checked ${refresh.checked} job poster(s) — no new personal data`,
+          : `ContactOut checked ${refresh.checked} job poster(s) — no new personal data`),
     });
   }
 

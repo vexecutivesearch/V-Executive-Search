@@ -1,5 +1,8 @@
 import { eq } from "drizzle-orm";
-import { enrichFromContactOut } from "@/lib/contactout-enrich";
+import {
+  describeContactOutError,
+  enrichFromContactOut,
+} from "@/lib/contactout-enrich";
 import {
   contactNeedsContactOutEnrichment,
   getContactOutEnrichNeeds,
@@ -18,9 +21,14 @@ export async function refreshCompanyContactsFromContactOut(
   companyId: string,
   contactOutKey: string,
   options?: { contactOutAvailable?: boolean; context?: PaidEgressContext },
-): Promise<{ updated: number; checked: number; phoneApiLocked: boolean }> {
+): Promise<{
+  updated: number;
+  checked: number;
+  phoneApiLocked: boolean;
+  apiError: string | null;
+}> {
   if (options?.contactOutAvailable === false) {
-    return { updated: 0, checked: 0, phoneApiLocked: true };
+    return { updated: 0, checked: 0, phoneApiLocked: true, apiError: null };
   }
 
   const rows = await db
@@ -31,6 +39,7 @@ export async function refreshCompanyContactsFromContactOut(
   const withLinkedIn = rows.filter((c) => c.linkedinUrl);
   let updated = 0;
   let phoneApiLocked = false;
+  let apiError: string | null = null;
 
   for (const contact of withLinkedIn) {
     if (!contactNeedsContactOutEnrichment(contact)) continue;
@@ -42,6 +51,11 @@ export async function refreshCompanyContactsFromContactOut(
       needPhone: needs.needPhone,
     }, options?.context, companyId);
     if (!co) continue;
+    if (co.apiError) {
+      // Account-wide fault — the next contact would fail identically.
+      apiError = describeContactOutError(co.apiError);
+      break;
+    }
     if (co.phoneApiLocked) {
       await markContactOutCreditsExhausted();
       phoneApiLocked = true;
@@ -83,5 +97,5 @@ export async function refreshCompanyContactsFromContactOut(
     await new Promise((r) => setTimeout(r, 400));
   }
 
-  return { updated, checked: withLinkedIn.length, phoneApiLocked };
+  return { updated, checked: withLinkedIn.length, phoneApiLocked, apiError };
 }

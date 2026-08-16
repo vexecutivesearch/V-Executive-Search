@@ -97,4 +97,82 @@ describe("ContactOut reveal waterfall", () => {
     expect(calls[0]).toContain("include_phone=true");
     expect(result!.phones.length).toBeGreaterThan(0);
   });
+
+  it("a 404 stays a clean miss — no apiError", async () => {
+    stubFetch(() => ({ status: 404 }));
+
+    const result = await enrichFromContactOut(
+      "https://www.linkedin.com/in/test-person",
+      "test-key",
+      { needPersonalEmail: true, needWorkEmail: true, needPhone: true },
+      "manual_enrich:test",
+      "test",
+    );
+
+    expect(result).toBeNull();
+  });
+
+  /*
+   * These four used to be indistinguishable from "no data": every non-404
+   * status returned null, so a bad key or a rate limit silently reported
+   * "0 phones found" forever.
+   */
+  it.each([
+    [401, "auth"],
+    [402, "out_of_credits"],
+    [429, "rate_limited"],
+  ])("surfaces HTTP %i as an apiError and skips the doomed phone call", async (
+    status,
+    reason,
+  ) => {
+    stubFetch(() => ({ status }));
+
+    const result = await enrichFromContactOut(
+      "https://www.linkedin.com/in/test-person",
+      "test-key",
+      { needPersonalEmail: true, needWorkEmail: true, needPhone: true },
+      "manual_enrich:test",
+      "test",
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(result?.apiError).toEqual({ status, reason });
+  });
+
+  it("still tries the phone after a transient 5xx on the email call", async () => {
+    stubFetch((url) => {
+      if (url.includes("include_phone=true")) {
+        return { status: 200, body: PHONE_PAYLOAD };
+      }
+      return { status: 500 };
+    });
+
+    const result = await enrichFromContactOut(
+      "https://www.linkedin.com/in/test-person",
+      "test-key",
+      { needPersonalEmail: true, needWorkEmail: true, needPhone: true },
+      "manual_enrich:test",
+      "test",
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(result!.phones.length).toBeGreaterThan(0);
+  });
+
+  it("reports the phone-call failure when the email call found nothing", async () => {
+    stubFetch((url) =>
+      url.includes("include_phone=true") ? { status: 429 } : { status: 404 },
+    );
+
+    const result = await enrichFromContactOut(
+      "https://www.linkedin.com/in/test-person",
+      "test-key",
+      { needPersonalEmail: true, needWorkEmail: true, needPhone: true },
+      "manual_enrich:test",
+      "test",
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(result?.apiError?.reason).toBe("rate_limited");
+  });
 });
