@@ -26,6 +26,7 @@ import {
   filterStepSpecsForPlan,
   type ChannelPlan,
 } from "@/lib/outreach/channel-plan";
+import { pickPhone } from "@/lib/outreach/contact-handles";
 import { buildDraftContext } from "@/lib/outreach/draft-context";
 import { ensureDefaultFlow } from "@/lib/outreach/default-flow";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
@@ -55,15 +56,6 @@ function pickEmail(
     ? [work, generic, personal]
     : [personal, generic, work];
   return ordered.find(Boolean) ?? null;
-}
-
-function pickPhone(contact: Contact): string | null {
-  return (
-    contact.personalPhone?.trim() ||
-    contact.phone?.trim() ||
-    (contact.phones ?? []).find((p) => p.kind === "mobile")?.number ||
-    null
-  );
 }
 
 /**

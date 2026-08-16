@@ -1,8 +1,9 @@
-import { and, eq, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { isAdminAuthenticated } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { contacts, sequenceEnrollments } from "@/lib/db/schema";
+import { LIVE_ENROLLMENT_STATUSES } from "@/lib/outreach/phone-backfill";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,18 +49,22 @@ export async function GET() {
     })
     .from(sequenceEnrollments);
 
-  // Enrollments that are email-only even though the contact now has a phone —
-  // these were enrolled before the number arrived and will not pick it up,
-  // because the channel plan is fixed at enroll time.
+  // Live email-only enrollments whose contact has since gained a phone. The
+  // dispatch pass backfills these automatically; split out the ones still
+  // waiting on a Mac worker capability answer, which it cannot attach yet.
   const [staleEmailOnly] = await db
-    .select({ count: sql<number>`count(*)` })
+    .select({
+      total: sql<number>`count(*)`,
+      upgradable: sql<number>`count(*) filter (where ${contacts.imessageCapable} = true)`,
+      awaitingCapability: sql<number>`count(*) filter (where ${contacts.imessageCapable} is null)`,
+    })
     .from(sequenceEnrollments)
     .innerJoin(contacts, eq(contacts.id, sequenceEnrollments.contactId))
     .where(
       and(
         isNull(sequenceEnrollments.phoneNumber),
         hasPhone,
-        ne(sequenceEnrollments.status, "stopped"),
+        inArray(sequenceEnrollments.status, [...LIVE_ENROLLMENT_STATUSES]),
       ),
     );
 
@@ -81,9 +86,14 @@ export async function GET() {
       `${n(contactStats.phoneButNoCapability)} contact(s) have a phone but no iMessage capability answer — the Mac worker check has not run for them, so they enroll email-only despite being textable.`,
     );
   }
-  if (n(staleEmailOnly?.count) > 0) {
+  if (n(staleEmailOnly?.upgradable) > 0) {
     problems.push(
-      `${n(staleEmailOnly.count)} active enrollment(s) are email-only but their contact now has a phone. The channel plan is fixed at enroll time, so these will never text — re-enroll them to pick up the number.`,
+      `${n(staleEmailOnly.upgradable)} live email-only enrollment(s) have a phone ready to attach — the next dispatch pass will upgrade them automatically, or POST /api/admin/outreach/backfill-phones to do it now.`,
+    );
+  }
+  if (n(staleEmailOnly?.awaitingCapability) > 0) {
+    problems.push(
+      `${n(staleEmailOnly.awaitingCapability)} live email-only enrollment(s) have a phone but no iMessage capability answer — they upgrade once the Mac worker check runs.`,
     );
   }
 
@@ -104,10 +114,13 @@ export async function GET() {
       email_and_text: n(enrollmentStats?.withPhone),
       email_only: n(enrollmentStats?.emailOnly),
       text_only: n(enrollmentStats?.textOnly),
-      email_only_but_contact_now_has_phone: n(staleEmailOnly?.count),
+      email_only_but_contact_now_has_phone: n(staleEmailOnly?.total),
+      upgradable_now: n(staleEmailOnly?.upgradable),
+      awaiting_imessage_capability_check: n(staleEmailOnly?.awaitingCapability),
     },
     notes: [
       "An enrollment's CHANNELS column is derived purely from whether a phone number was attached at enroll time.",
+      "Live email-only enrollments whose contact has since gained a phone are upgraded in place at the top of every dispatch pass — no re-enrollment, and already-sent emails are untouched. Text steps the flow has already walked past are not revived.",
       "contacts.imessage_capable is an address well-formedness check, NOT a verified Apple ID match — it returns true for effectively any valid address. The real iMessage-vs-SMS decision happens at send time against Apple's IDS registry, which is keyed on phone numbers.",
       "Because of that, sending iMessage to an email handle is not currently supported anywhere in the send path: enrollments store only a phone number, and the worker queue filters on it.",
     ],
