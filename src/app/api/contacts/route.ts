@@ -53,10 +53,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ contacts: rows });
   }
 
-  // iMessage checks only apply to contacts that have a personal email — the
-  // only ones the UI shows an iMessage badge for. Excluding email-less
-  // "discovered" contacts keeps them from flooding the 50-row batch and
-  // starving real candidates (which left badges stuck on "Checking…").
+  // Check anything with a real handle — a personal email (what the badge
+  // reads) OR a phone number. Restricting this to personal emails left every
+  // work-email-plus-mobile contact permanently unanswered. Email-less,
+  // phone-less "discovered" contacts are still excluded so they cannot flood
+  // the batch and starve real candidates.
   const rows = await db
     .select({
       id: contacts.id,
@@ -72,7 +73,14 @@ export async function GET(request: NextRequest) {
     .from(contacts)
     .innerJoin(companies, eq(companies.id, contacts.companyId))
     .where(
-      and(isNull(contacts.imessageCapable), isNotNull(contacts.personalEmail)),
+      and(
+        isNull(contacts.imessageCapable),
+        or(
+          isNotNull(contacts.personalEmail),
+          isNotNull(contacts.personalPhone),
+          isNotNull(contacts.phone),
+        ),
+      ),
     )
     .orderBy(desc(contacts.createdAt))
     .limit(limit);

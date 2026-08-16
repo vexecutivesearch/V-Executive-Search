@@ -25,6 +25,7 @@ import {
   explainChannelPlan,
   filterStepSpecsForPlan,
   type ChannelPlan,
+  type ChannelPlanReason,
 } from "@/lib/outreach/channel-plan";
 import { pickPhone } from "@/lib/outreach/contact-handles";
 import { buildDraftContext } from "@/lib/outreach/draft-context";
@@ -84,6 +85,87 @@ async function emailUnusableReason(
     }
   }
   return null;
+}
+
+/** "Aug 16, 2:15 PM ET" in the contact's own timezone. */
+function formatSendTime(when: Date, timezone: string): string {
+  const stamp = when.toLocaleString("en-US", {
+    timeZone: timezone,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const zone =
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      timeZoneName: "short",
+    })
+      .formatToParts(when)
+      .find((p) => p.type === "timeZoneName")?.value ?? timezone;
+  return `${stamp} ${zone}`;
+}
+
+/**
+ * The Call List note for a new enrollment.
+ *
+ * Names the contact (several contacts enroll per company, and without a name
+ * the lines are indistinguishable) and quotes when the first message actually
+ * goes out, read back from the queued row rather than guessed.
+ */
+async function buildEnrollSummary(input: {
+  enrollmentId: string;
+  contactName: string;
+  channelPlan: ChannelPlan;
+  channelPlanReason: ChannelPlanReason;
+  stepCount: number;
+  jobTitle: string | null;
+  viaCallList: boolean;
+  firstStepKind: string;
+  timezone: string;
+  requiresApproval: boolean;
+}): Promise<string> {
+  const [next] = await db
+    .select({
+      stepKind: outreachMessages.stepKind,
+      status: outreachMessages.status,
+      scheduledFor: outreachMessages.scheduledFor,
+    })
+    .from(outreachMessages)
+    .where(
+      and(
+        eq(outreachMessages.enrollmentId, input.enrollmentId),
+        inArray(outreachMessages.status, ["queued", "sent"]),
+      ),
+    )
+    .orderBy(outreachMessages.scheduledFor)
+    .limit(1);
+
+  const plan = channelPlanLabel(input.channelPlan);
+  // Name why text steps were left off — otherwise "email only" reads as a
+  // sequencer fault rather than missing contact data.
+  const planBit =
+    input.channelPlan === "email_only"
+      ? `${plan} — ${channelPlanReasonLabel(input.channelPlanReason)}`
+      : plan;
+  const roleBit = input.jobTitle ? ` about "${input.jobTitle}"` : "";
+
+  let nextBit: string;
+  if (next?.status === "sent") {
+    nextBit = `${next.stepKind} already sent`;
+  } else if (next?.scheduledFor) {
+    nextBit = `${next.stepKind} sends ${formatSendTime(next.scheduledFor, input.timezone)}`;
+  } else if (input.requiresApproval) {
+    nextBit = `${input.firstStepKind} waiting on approval — nothing sends until it is approved`;
+  } else {
+    nextBit = `${input.firstStepKind} queues on the next dispatch pass`;
+  }
+
+  return (
+    `Outreach sequence enrolled for ${input.contactName} ` +
+    `(${planBit}, ${input.stepCount} steps)${roleBit}` +
+    `${input.viaCallList ? " via Call List" : ""}. Next: ${nextBit}.`
+  );
 }
 
 /** Eligibility per the confirmed enrollment rules. Returns null when OK. */
@@ -257,10 +339,10 @@ export async function enrollContact(
     return { enrolled: false, reason: "company contact cap reached" };
   }
 
-  // Email plans only add text steps for verified iMessage numbers; text-only
-  // plans take any phone (worker falls back to SMS when IDS says no iMessage).
+  // Suppression is the only thing that can rule a phone out here — the worker
+  // decides iMessage vs SMS at send time.
   let phoneSuppressed = false;
-  if (!textOnly && contact.imessageCapable === true && phone) {
+  if (!textOnly && phone) {
     const phoneSupp = await isSuppressed({ channel: "imessage", phone });
     phoneSuppressed = phoneSupp.suppressed;
   }
@@ -451,32 +533,6 @@ export async function enrollContact(
     });
   }
 
-  try {
-    const { recordCallListOutreachEvent } = await import(
-      "@/lib/outreach/call-list-sync"
-    );
-    const plan = channelPlanLabel(channelPlan);
-    // Name why text steps were left off — otherwise "email only" reads as a
-    // sequencer fault rather than missing contact data.
-    const planBit =
-      channelPlan === "email_only"
-        ? `${plan} — ${channelPlanReasonLabel(channelPlanReason)}`
-        : plan;
-    const roleBit = context.primaryJobTitle
-      ? ` about "${context.primaryJobTitle}"`
-      : "";
-    await recordCallListOutreachEvent({
-      companyId: company.id,
-      contactId: contact.id,
-      bumpAttempt: false,
-      summary: `Outreach sequence enrolled (${planBit}, ${drafted.length} steps)${roleBit}${
-        options?.actor === "call_list" ? " via Call List" : ""
-      }. Next: ${drafted[0]?.stepKind ?? "intro"}.`,
-    });
-  } catch (error) {
-    console.error("[outreach] call-list enroll note failed", error);
-  }
-
   if (advanceNow) {
     try {
       const { advanceEnrollment } = await import("@/lib/outreach/flow-engine");
@@ -489,6 +545,33 @@ export async function enrollContact(
     } catch (error) {
       console.error("[outreach] advance after enroll failed", error);
     }
+  }
+
+  // Written AFTER the advance so the note can quote the real scheduled send
+  // time rather than just naming the next step.
+  try {
+    const { recordCallListOutreachEvent } = await import(
+      "@/lib/outreach/call-list-sync"
+    );
+    await recordCallListOutreachEvent({
+      companyId: company.id,
+      contactId: contact.id,
+      bumpAttempt: false,
+      summary: await buildEnrollSummary({
+        enrollmentId: enrollment.id,
+        contactName: contact.name,
+        channelPlan,
+        channelPlanReason,
+        stepCount: drafted.length,
+        jobTitle: context.primaryJobTitle,
+        viaCallList: options?.actor === "call_list",
+        firstStepKind: drafted[0]?.stepKind ?? "intro",
+        timezone,
+        requiresApproval: !autoApprove,
+      }),
+    });
+  } catch (error) {
+    console.error("[outreach] call-list enroll note failed", error);
   }
 
   let dispatched = false;

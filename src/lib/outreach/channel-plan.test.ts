@@ -3,6 +3,7 @@ import {
   channelPlanLabel,
   explainChannelPlan,
   filterStepSpecsForPlan,
+  phoneIsTextEligible,
   resolveChannelPlan,
 } from "@/lib/outreach/channel-plan";
 import { DEFAULT_STEP_SPECS } from "@/lib/outreach-draft";
@@ -99,14 +100,24 @@ describe("explainChannelPlan", () => {
     ).toBe("no_phone");
   });
 
-  it("distinguishes a missing capability answer from a negative one", () => {
-    expect(
-      explainChannelPlan({ ...base, imessageCapable: null }),
-    ).toEqual({ plan: "email_only", reason: "imessage_capability_unknown" });
+  /*
+   * The bug this replaced: imessage_capable is only ever populated for
+   * contacts that have a personal email, so a work-email-plus-mobile contact
+   * sat at null forever and could never earn a text step. A phone is textable
+   * unless we positively know otherwise — the worker falls back to SMS.
+   */
+  it("texts a phone whose capability answer never arrived", () => {
+    expect(explainChannelPlan({ ...base, imessageCapable: null })).toEqual({
+      plan: "email_and_text",
+      reason: "text_added",
+    });
+  });
 
-    expect(
-      explainChannelPlan({ ...base, imessageCapable: false }),
-    ).toEqual({ plan: "email_only", reason: "imessage_capability_false" });
+  it("still refuses a number that came back not textable", () => {
+    expect(explainChannelPlan({ ...base, imessageCapable: false })).toEqual({
+      plan: "email_only",
+      reason: "not_textable",
+    });
   });
 
   it("names a suppressed phone rather than reporting it as uncheckable", () => {
@@ -137,19 +148,19 @@ describe("explainChannelPlan", () => {
       for (const hasPhone of [true, false]) {
         for (const imessageCapable of [true, false, null]) {
           for (const phoneSuppressed of [true, false]) {
-            const decision = explainChannelPlan({
+            const input = {
               emailUsable,
               hasPhone,
               imessageCapable,
               phoneSuppressed,
-            });
-            const expected = resolveChannelPlan({
-              emailUsable,
-              hasPhone,
-              textEligible:
-                imessageCapable === true && hasPhone && !phoneSuppressed,
-            });
-            expect(decision.plan).toBe(expected);
+            };
+            expect(explainChannelPlan(input).plan).toBe(
+              resolveChannelPlan({
+                emailUsable,
+                hasPhone,
+                textEligible: phoneIsTextEligible(input),
+              }),
+            );
           }
         }
       }
