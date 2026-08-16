@@ -2,6 +2,7 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   contacts,
+  outreachMessages,
   sequenceEnrollments,
   type SequenceEnrollment,
 } from "@/lib/db/schema";
@@ -9,6 +10,8 @@ import { requestImessageCheck } from "@/lib/imessage-check";
 import { phoneIsTextEligible } from "@/lib/outreach/channel-plan";
 import { pickPhone } from "@/lib/outreach/contact-handles";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
+import type { SendNodeConfig } from "@/lib/outreach/flow-types";
+import { nextNodeId, triggerNode } from "@/lib/outreach/flow-types";
 import { isSuppressed } from "@/lib/outreach/suppression";
 
 /**
@@ -31,6 +34,74 @@ import { isSuppressed } from "@/lib/outreach/suppression";
  * a day-0 text should not go out on day six.
  */
 
+/**
+ * Put a just-upgraded enrollment back on the day-0 text step it skipped.
+ *
+ * Resuming at the next remaining text is not an option: text_1 is the
+ * introduction ("my name is Alejandro... I've just emailed you"), and text_2
+ * opens with "Alejandro again". Jumping straight to text_2 greets a stranger
+ * as a repeat contact.
+ *
+ * Only rewound when the sequence has sent nothing at all, which means we are
+ * still genuinely at day 0 and text_1 goes out alongside the intro exactly as
+ * designed. An enrollment whose intro already went out days ago is left alone
+ * — a "just emailed you" text arriving days late is worse than none.
+ *
+ * `node_state.wait_until` is deliberately left untouched, so re-entering the
+ * wait after the text honours the original day-2 deadline instead of
+ * restarting the cadence.
+ */
+async function rewindToDayZeroText(
+  enrollment: SequenceEnrollment,
+): Promise<boolean> {
+  if (!enrollment.flowVersionId || !enrollment.currentNodeId) return false;
+
+  const [sent] = await db
+    .select({ id: outreachMessages.id })
+    .from(outreachMessages)
+    .where(
+      and(
+        eq(outreachMessages.enrollmentId, enrollment.id),
+        eq(outreachMessages.status, "sent"),
+      ),
+    )
+    .limit(1);
+  if (sent) return false;
+
+  const { loadFlowGraph } = await import("@/lib/outreach/flow-engine");
+  const graph = await loadFlowGraph(enrollment.flowVersionId);
+  if (!graph) return false;
+
+  const textNode = graph.nodes.find(
+    (n) =>
+      n.type === "send" &&
+      (n.config as SendNodeConfig | undefined)?.channel === "imessage",
+  );
+  if (!textNode) return false;
+
+  // Only rewind — never skip the enrollment forward past a step it has not
+  // reached (jumping over an unsent intro would drop the email entirely).
+  const order = new Map<string, number>();
+  let cursor: string | null = triggerNode(graph)?.id ?? null;
+  for (let i = 0; cursor && !order.has(cursor); i += 1) {
+    order.set(cursor, i);
+    cursor = nextNodeId(graph, cursor);
+  }
+  const here = order.get(enrollment.currentNodeId);
+  const target = order.get(textNode.id);
+  if (here === undefined || target === undefined || here <= target) return false;
+
+  await db
+    .update(sequenceEnrollments)
+    .set({
+      currentNodeId: textNode.id,
+      nextStepAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(sequenceEnrollments.id, enrollment.id));
+  return true;
+}
+
 /** Enrollments still walking the graph — completed/stopped can't benefit. */
 export const LIVE_ENROLLMENT_STATUSES = [
   "active",
@@ -49,6 +120,10 @@ export type PhoneBackfillSummary = {
   skippedNotTextable: number;
   /** Upgraded but still missing a capability answer — a check was requested. */
   pendingCapabilityCheck: number;
+  /** Upgraded and put back on the day-0 text they had skipped. */
+  dayZeroTextRestored: number;
+  /** Upgraded too late to restore text_1 — the intro had already gone out. */
+  dayZeroTextMissed: number;
 };
 
 export async function backfillEnrollmentPhones(options?: {
@@ -64,6 +139,8 @@ export async function backfillEnrollmentPhones(options?: {
     skippedSuppressed: 0,
     skippedNotTextable: 0,
     pendingCapabilityCheck: 0,
+    dayZeroTextRestored: 0,
+    dayZeroTextMissed: 0,
   };
 
   const rows = await db
@@ -133,6 +210,11 @@ export async function backfillEnrollmentPhones(options?: {
       );
 
     summary.attached += 1;
+
+    const restored = await rewindToDayZeroText(enrollment);
+    if (restored) summary.dayZeroTextRestored += 1;
+    else summary.dayZeroTextMissed += 1;
+
     await logEnrollmentEvent({
       enrollmentId: enrollment.id,
       eventType: "channel_upgraded",
@@ -143,8 +225,10 @@ export async function backfillEnrollmentPhones(options?: {
         from_plan: "email_only",
         to_plan: "email_and_text",
         phone,
-        detail:
-          "phone found after enrollment — remaining text steps will draft at node entry",
+        day_zero_text_restored: restored,
+        detail: restored
+          ? "phone found before the intro went out — rewound to the day-0 text so it leads the text sequence"
+          : "phone found after the intro had sent — text_1 would be stale, so the sequence resumes at its next text step",
       },
     });
 
@@ -158,8 +242,11 @@ export async function backfillEnrollmentPhones(options?: {
         bumpAttempt: false,
         summary:
           `Phone found for ${contact.name} after enrollment (${phone}) — ` +
-          "sequence upgraded to email + SMS. Remaining text steps send on " +
-          "their existing schedule; already-sent emails are unaffected.",
+          "sequence upgraded to email + SMS. " +
+          (restored
+            ? "Nothing had sent yet, so the intro text was restored and leads the text sequence."
+            : "The intro email had already gone out, so the sequence resumes at its next text step.") +
+          " Already-sent emails are unaffected.",
       });
     } catch (error) {
       console.error("[outreach] backfill call-list note failed", error);
