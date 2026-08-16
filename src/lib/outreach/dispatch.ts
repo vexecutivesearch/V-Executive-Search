@@ -13,6 +13,7 @@ import {
 import { sendAlertEmail } from "@/lib/alert-email";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
 import { advanceEnrollment } from "@/lib/outreach/flow-engine";
+import { backfillEnrollmentPhones } from "@/lib/outreach/phone-backfill";
 import {
   bumpProfileCounters,
   pickSendingProfile,
@@ -53,6 +54,8 @@ export type DispatchSummary = {
   suppressed: number;
   failed: number;
   halted: boolean;
+  /** Email-only enrollments that gained a phone number this pass. */
+  phonesAttached: number;
   skippedReason?: string;
 };
 
@@ -109,6 +112,7 @@ export async function runOutreachDispatch(now = new Date()): Promise<DispatchSum
     suppressed: 0,
     failed: 0,
     halted: false,
+    phonesAttached: 0,
   };
 
   const settings = await getOrCreateOutreachSettings();
@@ -118,6 +122,15 @@ export async function runOutreachDispatch(now = new Date()): Promise<DispatchSum
     await tickWarmupStateMachine(now);
   } catch (error) {
     console.error("[outreach] warmup tick failed", error);
+  }
+
+  // 0. Attach phones found since enroll, BEFORE advancing — an enrollment
+  //    reaching a text node this pass should already have its number.
+  try {
+    const backfill = await backfillEnrollmentPhones();
+    summary.phonesAttached = backfill.attached;
+  } catch (error) {
+    console.error("[outreach] phone backfill failed", error);
   }
 
   // 1. Advance flows (even while disabled — advancing only schedules; the

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   companies,
@@ -132,6 +132,29 @@ async function latestIntent(enrollmentId: string): Promise<string | null> {
     .orderBy(desc(inboundMessages.receivedAt))
     .limit(1);
   return row?.intent ?? null;
+}
+
+/**
+ * Approval already granted for this enrollment's other steps.
+ *
+ * A step drafted at node entry has no approval of its own, but it belongs to
+ * a sequence the recruiter already approved — without inheriting that, a text
+ * step added after enrollment (see phone-backfill) would queue and then sit
+ * forever behind the approval gate.
+ */
+async function inheritedApprovalAt(enrollmentId: string): Promise<Date | null> {
+  const [row] = await db
+    .select({ approvedAt: outreachMessages.approvedAt })
+    .from(outreachMessages)
+    .where(
+      and(
+        eq(outreachMessages.enrollmentId, enrollmentId),
+        isNotNull(outreachMessages.approvedAt),
+      ),
+    )
+    .orderBy(desc(outreachMessages.approvedAt))
+    .limit(1);
+  return row?.approvedAt ?? null;
 }
 
 async function lastSentAt(enrollmentId: string): Promise<Date | null> {
@@ -298,6 +321,7 @@ async function handleSendNode(
       subject: drafted.subject,
       body: drafted.body,
       templateId: config.templateId ?? drafted.templateId,
+      approvedAt: await inheritedApprovalAt(enrollment.id),
     });
     state.retry_count = 0;
     await saveState(enrollment, { nodeState: state, nextStepAt: scheduledFor });
