@@ -37,20 +37,14 @@ describe("enrollmentCanUpgrade", () => {
   });
 
   /*
-   * imessage_capable is only populated for contacts with a personal email, so
-   * gating on `=== true` would skip exactly the work-email-plus-mobile
-   * contacts this backfill exists to rescue.
+   * Idempotent and conservative: an unchecked contact is skipped this pass and
+   * picked up on a later one, once the Mac worker answers. The backfill nudges
+   * that check rather than assuming the number is textable.
    */
-  it("upgrades even when the capability answer never arrived", () => {
+  it("waits for the capability answer rather than assuming", () => {
     expect(
       enrollmentCanUpgrade(live, { ...textable, imessageCapable: null }),
-    ).toBe(true);
-    expect(
-      enrollmentCanUpgrade(live, { ...textable, imessageCapable: undefined }),
-    ).toBe(true);
-  });
-
-  it("respects a positive not-textable answer", () => {
+    ).toBe(false);
     expect(
       enrollmentCanUpgrade(live, { ...textable, imessageCapable: false }),
     ).toBe(false);
