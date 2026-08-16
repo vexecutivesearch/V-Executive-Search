@@ -101,19 +101,20 @@ describe("explainChannelPlan", () => {
   });
 
   /*
-   * The bug this replaced: imessage_capable is only ever populated for
-   * contacts that have a personal email, so a work-email-plus-mobile contact
-   * sat at null forever and could never earn a text step. A phone is textable
-   * unless we positively know otherwise — the worker falls back to SMS.
+   * A null answer waits rather than assuming. It used to be indistinguishable
+   * from a real "no", which is what made a work-email-plus-mobile contact look
+   * permanently email-only — the contacts check queue never asked about it.
+   * The queue was widened to cover phone-only contacts; the gate itself stays
+   * conservative.
    */
-  it("texts a phone whose capability answer never arrived", () => {
+  it("waits for the capability answer instead of assuming", () => {
     expect(explainChannelPlan({ ...base, imessageCapable: null })).toEqual({
-      plan: "email_and_text",
-      reason: "text_added",
+      plan: "email_only",
+      reason: "capability_unchecked",
     });
   });
 
-  it("still refuses a number that came back not textable", () => {
+  it("refuses a number that came back not textable", () => {
     expect(explainChannelPlan({ ...base, imessageCapable: false })).toEqual({
       plan: "email_only",
       reason: "not_textable",

@@ -66,7 +66,44 @@ export async function GET(request: NextRequest) {
     .orderBy(desc(sequenceEnrollments.enrolledAt))
     .limit(200);
 
-  return NextResponse.json({ enrollments: rows });
+  // enrollment.next_step_at is the flow's own wake-up time — after a day-0
+  // intro is queued it already points at the day-2 follow-up, which reads as
+  // "nothing happens until Tuesday" when the intro is in fact going out
+  // tomorrow morning. Send the actual next queued message alongside it.
+  const ids = rows.map((r) => r.enrollment.id);
+  const nextSends = new Map<string, { stepKind: string; scheduledFor: Date | null }>();
+  if (ids.length) {
+    const queued = await db
+      .select({
+        enrollmentId: outreachMessages.enrollmentId,
+        stepKind: outreachMessages.stepKind,
+        channel: outreachMessages.channel,
+        scheduledFor: outreachMessages.scheduledFor,
+      })
+      .from(outreachMessages)
+      .where(
+        and(
+          inArray(outreachMessages.enrollmentId, ids),
+          eq(outreachMessages.status, "queued"),
+        ),
+      )
+      .orderBy(outreachMessages.scheduledFor);
+    for (const row of queued) {
+      // Ordered soonest-first, so the first hit per enrollment wins.
+      if (nextSends.has(row.enrollmentId)) continue;
+      nextSends.set(row.enrollmentId, {
+        stepKind: `${row.stepKind} (${row.channel === "imessage" ? "text" : "email"})`,
+        scheduledFor: row.scheduledFor,
+      });
+    }
+  }
+
+  return NextResponse.json({
+    enrollments: rows.map((row) => ({
+      ...row,
+      nextSend: nextSends.get(row.enrollment.id) ?? null,
+    })),
+  });
 }
 
 export async function POST(request: NextRequest) {

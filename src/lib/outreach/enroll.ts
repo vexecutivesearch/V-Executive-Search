@@ -339,10 +339,10 @@ export async function enrollContact(
     return { enrolled: false, reason: "company contact cap reached" };
   }
 
-  // Suppression is the only thing that can rule a phone out here — the worker
-  // decides iMessage vs SMS at send time.
+  // Email plans only add text steps for checked, unsuppressed numbers;
+  // text-only plans take any phone (worker falls back to SMS).
   let phoneSuppressed = false;
-  if (!textOnly && phone) {
+  if (!textOnly && contact.imessageCapable === true && phone) {
     const phoneSupp = await isSuppressed({ channel: "imessage", phone });
     phoneSuppressed = phoneSupp.suppressed;
   }

@@ -89,6 +89,21 @@ export async function backfillEnrollmentPhones(options?: {
       continue;
     }
 
+    // An unchecked contact waits for the Mac worker rather than being
+    // assumed textable — nudge the check and pick it up on a later pass.
+    if (contact.imessageCapable === null) {
+      summary.pendingCapabilityCheck += 1;
+      if (!capabilityCheckRequested) {
+        capabilityCheckRequested = true;
+        try {
+          await requestImessageCheck();
+        } catch (error) {
+          console.error("[outreach] imessage check request failed", error);
+        }
+      }
+      continue;
+    }
+
     const suppression = await isSuppressed({ channel: "imessage", phone });
 
     // Same gate enrollment uses, so a backfilled enrollment is never in a
@@ -103,20 +118,6 @@ export async function backfillEnrollmentPhones(options?: {
       if (suppression.suppressed) summary.skippedSuppressed += 1;
       else summary.skippedNotTextable += 1;
       continue;
-    }
-
-    // Not a gate any more, but still worth collecting for the badge and the
-    // lead score — nudge the worker once per pass.
-    if (contact.imessageCapable === null) {
-      summary.pendingCapabilityCheck += 1;
-      if (!capabilityCheckRequested) {
-        capabilityCheckRequested = true;
-        try {
-          await requestImessageCheck();
-        } catch (error) {
-          console.error("[outreach] imessage check request failed", error);
-        }
-      }
     }
 
     await db

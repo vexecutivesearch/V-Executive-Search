@@ -13,6 +13,8 @@ type Row = {
   contactName: string;
   contactTitle: string | null;
   companyName: string;
+  /** Soonest queued message — what actually goes out next. */
+  nextSend: { stepKind: string; scheduledFor: string | null } | null;
 };
 
 export function EnrollmentsTab() {
@@ -98,12 +100,12 @@ export function EnrollmentsTab() {
                   <th className="py-2 pr-3">Status</th>
                   <th className="py-2 pr-3">Channels</th>
                   <th className="py-2 pr-3">Timezone</th>
-                  <th className="py-2 pr-3">Next step</th>
+                  <th className="py-2 pr-3">Next send</th>
                   <th className="py-2">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map(({ enrollment, contactName, contactTitle, companyName }) => (
+                {rows.map(({ enrollment, contactName, contactTitle, companyName, nextSend }) => (
                   <tr
                     key={enrollment.id}
                     className="border-b border-gray-100 dark:border-gray-900 last:border-b-0 align-top"
@@ -147,9 +149,25 @@ export function EnrollmentsTab() {
                       </button>
                     </td>
                     <td className="py-2 pr-3 text-xs text-gray-500">
-                      {enrollment.nextStepAt
-                        ? new Date(enrollment.nextStepAt).toLocaleString()
-                        : "—"}
+                      {nextSend?.scheduledFor ? (
+                        <>
+                          <span className="text-gray-800 dark:text-gray-200">
+                            {new Date(nextSend.scheduledFor).toLocaleString()}
+                          </span>
+                          <span className="block text-[10px] text-gray-400">
+                            {nextSend.stepKind}
+                          </span>
+                        </>
+                      ) : (
+                        <span title="Nothing queued yet — this is when the flow next wakes up, not a send.">
+                          {enrollment.nextStepAt
+                            ? new Date(enrollment.nextStepAt).toLocaleString()
+                            : "—"}
+                          <span className="block text-[10px] text-gray-400">
+                            flow wake-up
+                          </span>
+                        </span>
+                      )}
                     </td>
                     <td className="py-2">
                       <div className="flex gap-1.5">
