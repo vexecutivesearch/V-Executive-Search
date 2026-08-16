@@ -41,6 +41,25 @@ import {
 
 const APOLLO_BASE = "https://api.apollo.io/api/v1";
 
+/*
+ * Apollo's published credit model, so the daily guardrail counts the same
+ * thing Apollo bills for. Previously every one of these was charged a flat 1
+ * (or a flat 8 for any phone attempt), which made the guardrail fire long
+ * before real spend justified it.
+ *
+ * People API Search .... 0 credits — "Credit usage: 0 credits"
+ * People Enrichment .... 1-9 credits, "charged only if credit-consuming data
+ *                        is found: 1 credit for demographics or email, plus 8
+ *                        credits if a mobile phone is returned. If no
+ *                        credit-consuming data is found, the request consumes
+ *                        0 credits."
+ * https://docs.apollo.io/docs/api-pricing
+ */
+const APOLLO_SEARCH_COST = 0;
+const APOLLO_MATCH_COST = 1;
+/** Booked by the phone webhook, which is where we learn a mobile arrived. */
+export const APOLLO_MOBILE_SURCHARGE = 8;
+
 export type EnrichedContact = {
   name: string;
   title: string;
@@ -157,7 +176,7 @@ export async function searchPeopleByCompanyName(
 
   await assertPaidEgressAllowed("apollo", "mixed_people/api_search", context, {
     companyId,
-    estimatedCost: 1,
+    estimatedCost: APOLLO_SEARCH_COST,
     metadata: { companyName, personLocations },
   });
   const resp = await fetch(`${APOLLO_BASE}/mixed_people/api_search`, {
@@ -170,7 +189,7 @@ export async function searchPeopleByCompanyName(
   await recordProviderUsageEvent("apollo", "mixed_people/api_search", context ?? "automated_scrape", {
     companyId,
     recordsReturned: data.people?.length ?? 0,
-    estimatedCost: 1,
+    estimatedCost: APOLLO_SEARCH_COST,
     metadata: { companyName, personLocations },
   });
   return data.people ?? [];
@@ -200,7 +219,7 @@ export async function searchPeople(
 
   await assertPaidEgressAllowed("apollo", "mixed_people/api_search", context, {
     companyId,
-    estimatedCost: 1,
+    estimatedCost: APOLLO_SEARCH_COST,
     metadata: { domain, personLocations },
   });
   const resp = await fetch(`${APOLLO_BASE}/mixed_people/api_search`, {
@@ -213,7 +232,7 @@ export async function searchPeople(
   await recordProviderUsageEvent("apollo", "mixed_people/api_search", context ?? "automated_scrape", {
     companyId,
     recordsReturned: data.people?.length ?? 0,
-    estimatedCost: 1,
+    estimatedCost: APOLLO_SEARCH_COST,
     metadata: { domain, personLocations },
   });
   return data.people ?? [];
@@ -234,14 +253,15 @@ export async function matchPerson(
     params.set("webhook_url", hook);
   }
 
-  // A mobile reveal is 8x an email match, so it must only be charged when the
-  // request actually asks for one. Without a webhook URL Apollo cannot deliver
-  // a phone, so the call goes out as a plain match — charging 8 for it burned
-  // the daily guardrail eight times faster than needed for no phone in return.
-  const estimatedCost = phoneRequested ? 8 : 1;
+  // Reserve the worst case up front so a burst cannot overrun the cap: a
+  // mobile reveal needs a webhook, and without one Apollo cannot return a
+  // phone at all, so the call is a plain match no matter what was asked for.
+  const worstCaseCost = phoneRequested
+    ? APOLLO_MATCH_COST + APOLLO_MOBILE_SURCHARGE
+    : APOLLO_MATCH_COST;
   await assertPaidEgressAllowed("apollo", "people/match", context, {
     companyId,
-    estimatedCost,
+    estimatedCost: worstCaseCost,
     metadata: { personId, enrichPhone, phoneRequested },
   });
   const resp = await fetch(`${APOLLO_BASE}/people/match?${params}`, {
@@ -257,12 +277,21 @@ export async function matchPerson(
     return null;
   }
   const data = (await resp.json()) as { person?: Record<string, unknown> };
+  // Apollo bills nothing when it finds nobody, so neither do we. The mobile
+  // surcharge is deliberately NOT booked here: the phone arrives later on the
+  // webhook and is only charged if one is actually returned.
+  const actualCost = data.person ? APOLLO_MATCH_COST : 0;
   await recordProviderUsageEvent("apollo", "people/match", context ?? "automated_scrape", {
     companyId,
     contactId: undefined,
     recordsReturned: data.person ? 1 : 0,
-    estimatedCost,
-    metadata: { personId, enrichPhone, phoneRequested },
+    estimatedCost: actualCost,
+    metadata: {
+      personId,
+      enrichPhone,
+      phoneRequested,
+      mobile_surcharge_pending: phoneRequested && Boolean(data.person),
+    },
   });
   return data.person ?? null;
 }
