@@ -161,18 +161,35 @@ async function inheritedApprovalAt(enrollmentId: string): Promise<Date | null> {
 
 /** How long to sit on a text step while the capability check is outstanding. */
 const TEXT_CHECK_RETRY_MS = 15 * 60_000;
+/**
+ * How long past enrollment the day-0 text is still worth waiting for. The Mac
+ * worker polls every ~5 minutes and answers in batches, and the dispatch cron
+ * runs every 15, so this allows roughly three attempts.
+ */
+const TEXT_CHECK_GRACE_MS = 45 * 60_000;
 
 /**
  * Is this text step still worth waiting for rather than skipping?
  *
- * True only for the genuine race: the contact HAS a phone, the Mac worker has
- * not answered the capability check, and the day-0 email has not gone out. It
- * is self-limiting — once the intro sends, the day-0 window has closed and
- * the step skips as before, so a contact with no phone or a dead worker can
- * never stall a sequence indefinitely.
+ * True only for the genuine race: the contact HAS a phone and the Mac worker
+ * has not answered the capability check yet.
+ *
+ * Two independent deadlines keep it bounded, and it needs both because the
+ * day-0 email lands very differently in and out of hours:
+ *  - In-window enrolls dispatch the intro milliseconds later, so "has the
+ *    intro sent" is already false by the next pass; the grace window is what
+ *    holds the text open, and it arrives minutes after the email.
+ *  - Out-of-hours enrolls (an add on a Sunday) sit unsent until the window
+ *    opens, which can be well past any grace period; "intro not yet sent" is
+ *    what carries the text across, and both steps then take the same window
+ *    open instant.
+ *
+ * The text can never overtake the email: it is scheduled from a later base,
+ * so it lands either at the same window open or after the intro has gone.
  */
 async function dayZeroTextStillPossible(
   enrollment: SequenceEnrollment,
+  now: Date,
 ): Promise<boolean> {
   const [contact] = await db
     .select({
@@ -187,6 +204,10 @@ async function dayZeroTextStillPossible(
   // An answered check is a decision, not a race.
   if (!contact || contact.imessageCapable !== null) return false;
   if (!pickPhone(contact)) return false;
+
+  const withinGrace =
+    now.getTime() - enrollment.enrolledAt.getTime() < TEXT_CHECK_GRACE_MS;
+  if (withinGrace) return true;
 
   const [sentEmail] = await db
     .select({ id: outreachMessages.id })
@@ -265,7 +286,7 @@ async function handleSendNode(
     // would drop the day-0 text permanently. Hold while the day-0 email is
     // still unsent — the window the text is meant to share with it — and let
     // the phone backfill attach the number in the meantime.
-    if (await dayZeroTextStillPossible(enrollment)) {
+    if (await dayZeroTextStillPossible(enrollment, now)) {
       await saveState(enrollment, {
         nextStepAt: new Date(now.getTime() + TEXT_CHECK_RETRY_MS),
       });
