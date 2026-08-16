@@ -21,8 +21,9 @@ import { contactIsCallable } from "@/lib/lead-score";
 import { compareContactsForOutreach } from "@/lib/contact-title-priority";
 import {
   channelPlanLabel,
+  channelPlanReasonLabel,
+  explainChannelPlan,
   filterStepSpecsForPlan,
-  resolveChannelPlan,
   type ChannelPlan,
 } from "@/lib/outreach/channel-plan";
 import { buildDraftContext } from "@/lib/outreach/draft-context";
@@ -266,20 +267,22 @@ export async function enrollContact(
 
   // Email plans only add text steps for verified iMessage numbers; text-only
   // plans take any phone (worker falls back to SMS when IDS says no iMessage).
-  let textEligible = contact.imessageCapable === true && Boolean(phone);
-  if (!textOnly && textEligible && phone) {
+  let phoneSuppressed = false;
+  if (!textOnly && contact.imessageCapable === true && phone) {
     const phoneSupp = await isSuppressed({ channel: "imessage", phone });
-    if (phoneSupp.suppressed) textEligible = false;
+    phoneSuppressed = phoneSupp.suppressed;
   }
-  const channelPlan = resolveChannelPlan({
+  const { plan: channelPlan, reason: channelPlanReason } = explainChannelPlan({
     emailUsable: !textOnly,
     hasPhone: Boolean(phone),
-    textEligible,
+    imessageCapable: contact.imessageCapable,
+    phoneSuppressed,
   });
   if (!channelPlan) {
     // Unreachable in practice: no-email-no-phone already failed above.
     return { enrolled: false, reason: "no reachable channel" };
   }
+  const textEligible = channelPlan === "email_and_text";
 
   const listings = await db
     .select()
@@ -424,6 +427,9 @@ export async function enrollContact(
       primary_job_title: context.primaryJobTitle,
       timezone,
       channel_plan: channelPlan,
+      channel_plan_reason: channelPlanReason,
+      imessage_capable: contact.imessageCapable,
+      has_phone: Boolean(phone),
       steps: drafted.map((s) => s.stepKind),
       stagger_days: options?.staggerDays ?? 0,
       job_titles: context.jobTitles,
@@ -458,6 +464,12 @@ export async function enrollContact(
       "@/lib/outreach/call-list-sync"
     );
     const plan = channelPlanLabel(channelPlan);
+    // Name why text steps were left off — otherwise "email only" reads as a
+    // sequencer fault rather than missing contact data.
+    const planBit =
+      channelPlan === "email_only"
+        ? `${plan} — ${channelPlanReasonLabel(channelPlanReason)}`
+        : plan;
     const roleBit = context.primaryJobTitle
       ? ` about "${context.primaryJobTitle}"`
       : "";
@@ -465,7 +477,7 @@ export async function enrollContact(
       companyId: company.id,
       contactId: contact.id,
       bumpAttempt: false,
-      summary: `Outreach sequence enrolled (${plan}, ${drafted.length} steps)${roleBit}${
+      summary: `Outreach sequence enrolled (${planBit}, ${drafted.length} steps)${roleBit}${
         options?.actor === "call_list" ? " via Call List" : ""
       }. Next: ${drafted[0]?.stepKind ?? "intro"}.`,
     });

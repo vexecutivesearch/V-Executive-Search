@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   channelPlanLabel,
+  explainChannelPlan,
   filterStepSpecsForPlan,
   resolveChannelPlan,
 } from "@/lib/outreach/channel-plan";
@@ -61,6 +62,98 @@ describe("filterStepSpecsForPlan", () => {
     expect(specs.length).toBeGreaterThan(0);
     expect(specs.every((s) => s.channel === "imessage")).toBe(true);
     expect(specs.map((s) => s.stepKind)).toEqual(["text_1", "text_2", "text_3"]);
+  });
+});
+
+describe("explainChannelPlan", () => {
+  const base = {
+    emailUsable: true,
+    hasPhone: true,
+    imessageCapable: true as boolean | null,
+    phoneSuppressed: false,
+  };
+
+  it("adds text steps when the contact has a textable phone", () => {
+    expect(explainChannelPlan(base)).toEqual({
+      plan: "email_and_text",
+      reason: "text_added",
+    });
+  });
+
+  /*
+   * The common case behind a wall of "email only" enrollments: the contact
+   * simply has no phone number. An iMessage-capable EMAIL does not change
+   * this — the whole send path is keyed on a phone number.
+   */
+  it("blames the missing phone, not iMessage, when there is no number", () => {
+    expect(
+      explainChannelPlan({ ...base, hasPhone: false }),
+    ).toEqual({ plan: "email_only", reason: "no_phone" });
+
+    expect(
+      explainChannelPlan({
+        ...base,
+        hasPhone: false,
+        imessageCapable: true,
+      }).reason,
+    ).toBe("no_phone");
+  });
+
+  it("distinguishes a missing capability answer from a negative one", () => {
+    expect(
+      explainChannelPlan({ ...base, imessageCapable: null }),
+    ).toEqual({ plan: "email_only", reason: "imessage_capability_unknown" });
+
+    expect(
+      explainChannelPlan({ ...base, imessageCapable: false }),
+    ).toEqual({ plan: "email_only", reason: "imessage_capability_false" });
+  });
+
+  it("names a suppressed phone rather than reporting it as uncheckable", () => {
+    expect(
+      explainChannelPlan({ ...base, phoneSuppressed: true }),
+    ).toEqual({ plan: "email_only", reason: "phone_suppressed" });
+  });
+
+  it("falls back to text_only when the email cannot carry the sequence", () => {
+    expect(
+      explainChannelPlan({ ...base, emailUsable: false }),
+    ).toEqual({ plan: "text_only", reason: "email_unusable_text_only" });
+  });
+
+  it("reports unreachable when there is neither channel", () => {
+    expect(
+      explainChannelPlan({
+        emailUsable: false,
+        hasPhone: false,
+        imessageCapable: true,
+        phoneSuppressed: false,
+      }),
+    ).toEqual({ plan: null, reason: "unreachable" });
+  });
+
+  it("agrees with resolveChannelPlan on the plan itself", () => {
+    for (const emailUsable of [true, false]) {
+      for (const hasPhone of [true, false]) {
+        for (const imessageCapable of [true, false, null]) {
+          for (const phoneSuppressed of [true, false]) {
+            const decision = explainChannelPlan({
+              emailUsable,
+              hasPhone,
+              imessageCapable,
+              phoneSuppressed,
+            });
+            const expected = resolveChannelPlan({
+              emailUsable,
+              hasPhone,
+              textEligible:
+                imessageCapable === true && hasPhone && !phoneSuppressed,
+            });
+            expect(decision.plan).toBe(expected);
+          }
+        }
+      }
+    }
   });
 });
 

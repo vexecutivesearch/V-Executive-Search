@@ -68,14 +68,17 @@ export function ImessageIndicator({
 
   if (capable === true) {
     return (
-      <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200 font-medium">
-        iMessage ✓
+      <span
+        className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200 font-medium"
+        title="Address is well-formed and textable. This is NOT a verified Apple ID match — Messages exposes no synchronous capability lookup, so the real iMessage-vs-SMS decision happens at send time against a phone number. Texting still requires a phone number on the contact."
+      >
+        Textable
       </span>
     );
   }
 
   if (capable === false) {
-    return <span className="text-[10px] text-gray-400">SMS only</span>;
+    return <span className="text-[10px] text-gray-400">not textable</span>;
   }
 
   if (checking) {
