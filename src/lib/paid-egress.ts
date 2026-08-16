@@ -50,7 +50,7 @@ function envFlag(value: string | undefined, defaultValue: boolean): boolean {
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 
-function paidEgressEnabled(provider: PaidProvider): boolean {
+export function paidEgressEnabled(provider: PaidProvider): boolean {
   const prefix = providerEnvPrefix(provider);
   if (!envFlag(process.env.PAID_EGRESS_ENABLED, true)) return false;
   if (!envFlag(process.env[`${prefix}_EGRESS_ENABLED`], true)) return false;
@@ -63,7 +63,7 @@ function paidEgressEnabled(provider: PaidProvider): boolean {
  * ContactOut default follows the credit-governance formula in the playbook:
  * daily enrich quota (25) × contacts per company (3) × credits per contact (2).
  */
-function providerDailyCap(provider: PaidProvider): number {
+export function providerDailyCap(provider: PaidProvider): number {
   const prefix = providerEnvPrefix(provider);
   const raw = process.env[`${prefix}_DAILY_CREDIT_CAP`];
   const parsed = raw ? Number.parseInt(raw, 10) : NaN;
@@ -71,7 +71,7 @@ function providerDailyCap(provider: PaidProvider): number {
   return provider === "apollo" ? 200 : 150;
 }
 
-async function dailyUsage(provider: PaidProvider): Promise<number> {
+export async function dailyUsage(provider: PaidProvider): Promise<number> {
   const [row] = await db
     .select({
       total: sql<number>`coalesce(sum(${providerUsageEvents.estimatedCost}), 0)`,

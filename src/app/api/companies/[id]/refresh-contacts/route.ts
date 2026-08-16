@@ -44,17 +44,18 @@ export async function POST(
     sampleContact?.linkedinUrl ?? null,
   );
 
-  const { updated, checked } = await refreshCompanyContactsFromContactOut(
-    id,
-    contactOutKey,
-    { contactOutAvailable, context: manualEnrichContext(id) },
-  );
+  const { updated, checked, apiError } =
+    await refreshCompanyContactsFromContactOut(id, contactOutKey, {
+      contactOutAvailable,
+      context: manualEnrichContext(id),
+    });
 
   return NextResponse.json({
     ok: true,
     updated,
     checked,
     contactout_available: contactOutAvailable,
+    contactout_error: apiError,
     company: company.name,
   });
 }

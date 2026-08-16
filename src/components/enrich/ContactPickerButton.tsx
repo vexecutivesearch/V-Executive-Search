@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { CompanyCardData } from "@/components/CompanyCard";
+import { shouldDefaultPhoneOn } from "@/lib/enrich/reveal-defaults";
 
 type Candidate = {
   contactId: string;
@@ -109,7 +110,11 @@ export function ContactPickerButton({
           (c) => c.isPrimary && c.revealStatus === "discovered",
         ) ?? (data.candidates ?? []).find((c) => c.revealStatus === "discovered");
       setSelected(best ? new Set([best.contactId]) : new Set());
-      setPhoneFor(new Set());
+      setPhoneFor(
+        best && shouldDefaultPhoneOn(best)
+          ? new Set([best.contactId])
+          : new Set(),
+      );
     } catch {
       setError("Network error — could not reach discovery API");
     } finally {
@@ -136,7 +141,9 @@ export function ContactPickerButton({
         });
       } else {
         next.add(contactId);
-        // Pure phone-upgrade selections default to including phone.
+        // A contact with no direct number defaults to including the phone —
+        // otherwise ContactOut is never asked for one and the reveal reports
+        // "0 phones found" without having looked.
         if (autoPhone) {
           setPhoneFor((p) => new Set(p).add(contactId));
         }
@@ -290,8 +297,6 @@ export function ContactPickerButton({
               {candidates.map((c) => {
                 const discovered = isDiscovered(c);
                 const refreshable = canRefresh(c);
-                // A saved contact still missing a direct mobile can add phone.
-                const phoneUpgrade = refreshable && c.hasEmail && !c.hasPhone;
                 const isSelectable = discovered || refreshable;
                 const isChecked = selected.has(c.contactId);
                 return (
@@ -309,7 +314,7 @@ export function ContactPickerButton({
                           type="checkbox"
                           checked={isChecked}
                           onChange={() =>
-                            toggleSelected(c.contactId, phoneUpgrade && !c.hasEmail)
+                            toggleSelected(c.contactId, shouldDefaultPhoneOn(c))
                           }
                           className="mt-1 rounded border-gray-300"
                           aria-label={`Select ${c.name}`}

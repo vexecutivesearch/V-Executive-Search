@@ -17,6 +17,23 @@ import {
 
 const CONTACTOUT_LINKEDIN_URL = "https://api.contactout.com/v1/people/linkedin";
 
+/**
+ * Why a ContactOut call failed. A 404 is NOT a failure — it means ContactOut
+ * genuinely has no profile for that LinkedIn URL. Everything else is a fault
+ * we must surface, because an unreported 401/429 looks identical to
+ * "no phone found" and silently degrades every reveal.
+ */
+export type ContactOutFailureReason =
+  | "auth"
+  | "out_of_credits"
+  | "rate_limited"
+  | "provider_error";
+
+export type ContactOutApiError = {
+  status: number;
+  reason: ContactOutFailureReason;
+};
+
 export type ContactOutData = {
   personalEmail: string | null;
   /** Top personal emails ContactOut found (up to 2), best first. */
@@ -25,7 +42,22 @@ export type ContactOutData = {
   personalPhone: string | null;
   phones: SourcedPhone[];
   phoneApiLocked: boolean;
+  /** Set when ContactOut errored rather than simply having no data. */
+  apiError: ContactOutApiError | null;
 };
+
+export function describeContactOutError(error: ContactOutApiError): string {
+  switch (error.reason) {
+    case "auth":
+      return `ContactOut rejected the API key (HTTP ${error.status}) — check CONTACTOUT_API_KEY`;
+    case "out_of_credits":
+      return `ContactOut is out of credits (HTTP ${error.status})`;
+    case "rate_limited":
+      return `ContactOut rate-limited the request (HTTP ${error.status}) — retry shortly`;
+    default:
+      return `ContactOut request failed (HTTP ${error.status})`;
+  }
+}
 
 export type ContactOutEnrichOptions = {
   needPersonalEmail?: boolean;
@@ -91,16 +123,24 @@ function collectProfileLists(
   return out;
 }
 
+function emptyContactOutData(
+  overrides: Partial<ContactOutData> = {},
+): ContactOutData {
+  return {
+    personalEmail: null,
+    personalEmails: [],
+    workEmail: null,
+    personalPhone: null,
+    phones: [],
+    phoneApiLocked: false,
+    apiError: null,
+    ...overrides,
+  };
+}
+
 function parseContactOutPayload(data: Record<string, unknown>): ContactOutData {
   if (isContactOutSampleResponse(data)) {
-    return {
-      personalEmail: null,
-      personalEmails: [],
-      workEmail: null,
-      personalPhone: null,
-      phones: [],
-      phoneApiLocked: true,
-    };
+    return emptyContactOutData({ phoneApiLocked: true });
   }
 
   const profile = (data.profile ?? data.data ?? data) as Record<string, unknown>;
@@ -126,14 +166,13 @@ function parseContactOutPayload(data: Record<string, unknown>): ContactOutData {
     phones.find((p) => p.kind === "mobile")?.number ?? phones[0]?.number ?? null;
 
   const personalEmails = collectPersonalEmails(emailsRaw, 2);
-  return {
+  return emptyContactOutData({
     personalEmail: pickPersonalEmail(emailsRaw) ?? personalEmails[0] ?? null,
     personalEmails,
     workEmail: pickWorkEmail(workEmailsRaw),
     personalPhone,
     phones,
-    phoneApiLocked: false,
-  };
+  });
 }
 
 function mergeContactOutData(
@@ -149,15 +188,29 @@ function mergeContactOutData(
     personalPhone: phones.personalPhone ?? base.personalPhone,
     phones: mergeSourcedPhones(base.phones, phones.phones),
     phoneApiLocked: base.phoneApiLocked || phones.phoneApiLocked,
+    apiError: base.apiError ?? phones.apiError,
   };
 }
+
+/** A 404 is a genuine "ContactOut has no profile", not a fault. */
+function classifyFailure(status: number): ContactOutFailureReason | null {
+  if (status === 404) return null;
+  if (status === 401 || status === 403) return "auth";
+  if (status === 402) return "out_of_credits";
+  if (status === 429) return "rate_limited";
+  return "provider_error";
+}
+
+type ContactOutFetch =
+  | { ok: true; data: Record<string, unknown> }
+  | { ok: false; error: ContactOutApiError | null };
 
 async function contactOutGet(
   apiKey: string,
   params: Record<string, string>,
   context?: PaidEgressContext,
   companyId?: string,
-): Promise<Record<string, unknown> | null> {
+): Promise<ContactOutFetch> {
   await assertPaidEgressAllowed("contactout", "people/linkedin", context, {
     companyId,
     estimatedCost: 1,
@@ -173,8 +226,35 @@ async function contactOutGet(
       },
     },
   );
-  if (resp.status === 404) return null;
-  if (!resp.ok) return null;
+  if (!resp.ok) {
+    const reason = classifyFailure(resp.status);
+    if (!reason) return { ok: false, error: null };
+    const body = await resp.text().catch(() => "");
+    const error = { status: resp.status, reason };
+    console.error(
+      `ContactOut people/linkedin failed — ${describeContactOutError(error)}: ${body.slice(0, 300)}`,
+    );
+    // Logged as blocked/zero-cost so it shows up in the audit trail without
+    // eating the daily safety cap.
+    await recordProviderUsageEvent(
+      "contactout",
+      "people/linkedin",
+      context ?? "automated_scrape",
+      {
+        companyId,
+        recordsReturned: 0,
+        estimatedCost: 0,
+        blocked: true,
+        metadata: {
+          params,
+          reason,
+          status: resp.status,
+          body: body.slice(0, 300),
+        },
+      },
+    );
+    return { ok: false, error };
+  }
   const data = (await resp.json()) as Record<string, unknown>;
   await recordProviderUsageEvent("contactout", "people/linkedin", context ?? "automated_scrape", {
     companyId,
@@ -182,7 +262,7 @@ async function contactOutGet(
     estimatedCost: 1,
     metadata: { params },
   });
-  return data;
+  return { ok: true, data };
 }
 
 export async function enrichFromContactOut(
@@ -202,21 +282,30 @@ export async function enrichFromContactOut(
 
   const profile = normalizeLinkedIn(linkedinUrl);
   let base: ContactOutData | null = null;
+  let apiError: ContactOutApiError | null = null;
 
   if (needPersonalEmail || needWorkEmail) {
     const emailTypes: string[] = [];
     if (needPersonalEmail) emailTypes.push("personal");
     if (needWorkEmail) emailTypes.push("work");
-    const emailData = await contactOutGet(apiKey, {
+    const emailRes = await contactOutGet(apiKey, {
       profile,
       email_type: emailTypes.join(","),
     }, context, companyId);
-    if (emailData) {
-      base = parseContactOutPayload(emailData);
+    if (emailRes.ok) {
+      base = parseContactOutPayload(emailRes.data);
       if (base.phoneApiLocked) return base;
-    } else if (!needPhone) {
-      // Email miss and no phone wanted — nothing left to fetch.
-      return null;
+    } else {
+      apiError = emailRes.error;
+      // A bad key, an empty balance or a rate limit will fail the phone call
+      // in exactly the same way — don't burn a second request to prove it.
+      if (apiError && apiError.reason !== "provider_error") {
+        return emptyContactOutData({ apiError });
+      }
+      if (!needPhone) {
+        // Email miss and no phone wanted — nothing left to fetch.
+        return apiError ? emptyContactOutData({ apiError }) : null;
+      }
     }
     // Email miss must NOT abort the phone lookup: ContactOut frequently has
     // a mobile for a person it has no email for.
@@ -224,20 +313,21 @@ export async function enrichFromContactOut(
 
   if (!needPhone) {
     if (base?.personalEmail || base?.workEmail) return base;
-    return null;
+    return apiError ? emptyContactOutData({ apiError }) : null;
   }
 
-  const phoneData = await contactOutGet(apiKey, {
+  const phoneRes = await contactOutGet(apiKey, {
     profile,
     include_phone: "true",
     email_type: "none",
   }, context, companyId);
-  if (!phoneData) {
-    if (base?.personalEmail || base?.workEmail) return base;
-    return null;
+  if (!phoneRes.ok) {
+    apiError = phoneRes.error ?? apiError;
+    if (base?.personalEmail || base?.workEmail) return { ...base, apiError };
+    return apiError ? emptyContactOutData({ apiError }) : null;
   }
 
-  const phoneResult = parseContactOutPayload(phoneData);
+  const phoneResult = parseContactOutPayload(phoneRes.data);
   if (phoneResult.phoneApiLocked) {
     if (base?.personalEmail || base?.workEmail) {
       return { ...base, phoneApiLocked: true };
@@ -247,12 +337,12 @@ export async function enrichFromContactOut(
 
   const merged = base
     ? mergeContactOutData(base, phoneResult)
-    : phoneResult;
+    : { ...phoneResult, apiError };
 
   if (merged.personalEmail || merged.workEmail || merged.phones.length) {
     return merged;
   }
-  return null;
+  return merged.apiError ? merged : null;
 }
 
 // Re-export for apollo-enrich company-level dedupe

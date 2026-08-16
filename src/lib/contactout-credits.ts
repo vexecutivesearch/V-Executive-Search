@@ -3,13 +3,16 @@ import { db } from "@/lib/db";
 import { pipelineSettings } from "@/lib/db/schema";
 import { getOrCreateSettings } from "@/lib/pipeline-config";
 
+export const CONTACTOUT_LOCK_MS = 24 * 60 * 60 * 1000;
+
 let cachedApiKey: string | null = null;
-let creditsAvailable: boolean | null = null;
+/** Timestamp the in-process lock was taken; null when not locked. */
+let lockedAtMs: number | null = null;
 
 function syncCacheForApiKey(apiKey: string): void {
   if (cachedApiKey !== apiKey) {
     cachedApiKey = apiKey;
-    creditsAvailable = null;
+    lockedAtMs = null;
   }
 }
 
@@ -19,22 +22,25 @@ export async function isContactOutCreditsAvailable(
   _sampleLinkedIn?: string | null,
 ): Promise<boolean> {
   syncCacheForApiKey(apiKey);
-  if (creditsAvailable !== null) return creditsAvailable;
+  // The in-process lock must expire on the same 24h clock as the stored one,
+  // or a warm serverless instance keeps ContactOut switched off indefinitely.
+  if (lockedAtMs !== null) {
+    if (Date.now() - lockedAtMs < CONTACTOUT_LOCK_MS) return false;
+    lockedAtMs = null;
+  }
   const settings = await getOrCreateSettings();
   if (settings.contactoutCreditsExhaustedAt) {
     const exhaustedMs = settings.contactoutCreditsExhaustedAt.getTime();
-    const lockedForMs = Date.now() - exhaustedMs;
-    if (lockedForMs < 24 * 60 * 60 * 1000) {
-      creditsAvailable = false;
-      return creditsAvailable;
+    if (Date.now() - exhaustedMs < CONTACTOUT_LOCK_MS) {
+      lockedAtMs = exhaustedMs;
+      return false;
     }
   }
-  creditsAvailable = Boolean(apiKey);
-  return creditsAvailable;
+  return Boolean(apiKey);
 }
 
 export async function markContactOutCreditsExhausted(): Promise<void> {
-  creditsAvailable = false;
+  lockedAtMs = Date.now();
   const settings = await getOrCreateSettings();
   await db
     .update(pipelineSettings)
@@ -43,7 +49,7 @@ export async function markContactOutCreditsExhausted(): Promise<void> {
 }
 
 export async function resetContactOutCreditsCache(): Promise<void> {
-  creditsAvailable = null;
+  lockedAtMs = null;
   const settings = await getOrCreateSettings();
   await db
     .update(pipelineSettings)

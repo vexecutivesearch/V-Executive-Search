@@ -23,7 +23,10 @@ import {
   searchPeople,
   searchPeopleByCompanyName,
 } from "@/lib/apollo-enrich";
-import { enrichFromContactOut } from "@/lib/contactout-enrich";
+import {
+  describeContactOutError,
+  enrichFromContactOut,
+} from "@/lib/contactout-enrich";
 import { markContactOutCreditsExhausted } from "@/lib/contactout-credits";
 import { normalizeContactChannels } from "@/lib/contact-enrichment-limits";
 import {
@@ -445,8 +448,12 @@ export type RevealResult = {
   phonesFound: number;
   /** Apollo phone reveals still in flight via webhook (arrive in seconds). */
   phonesPending: number;
+  /** Contacts this reveal actually asked a phone lookup for. */
+  phonesRequested: number;
   /** Whether the ContactOut leg of the waterfall ran for this reveal. */
   contactOutUsed: boolean;
+  /** Set when ContactOut errored (bad key, no credits, rate limit, 5xx). */
+  contactOutError: string | null;
 };
 
 /**
@@ -478,7 +485,9 @@ export async function revealSelectedContacts(options: {
       emailsFound: 0,
       phonesFound: 0,
       phonesPending: 0,
+      phonesRequested: 0,
       contactOutUsed: false,
+      contactOutError: null,
     };
   }
 
@@ -492,7 +501,9 @@ export async function revealSelectedContacts(options: {
   let skippedAlreadyRevealed = 0;
   let emailsFound = 0;
   let phonesFound = 0;
+  let phonesRequested = 0;
   let contactOutUsed = false;
+  let contactOutError: string | null = null;
   const pendingApolloPhoneIds: string[] = [];
 
   for (const selection of selections) {
@@ -500,6 +511,7 @@ export async function revealSelectedContacts(options: {
     if (!contact || contact.companyId !== companyId) continue;
 
     const wantsPhone = selection.channels === "email_phone";
+    if (wantsPhone) phonesRequested += 1;
     const contactOutReady = Boolean(contactOutApiKey) && contactOutAvailable;
 
     // Current state — company/HQ lines are NOT a direct phone.
@@ -637,7 +649,12 @@ export async function revealSelectedContacts(options: {
         context,
         companyId,
       );
-      if (co?.phoneApiLocked) {
+      if (co?.apiError) {
+        // A key/credit/rate-limit fault is account-wide — record it once and
+        // let the reveal fall through to Apollo instead of reporting an
+        // honest-looking "no phone found".
+        contactOutError ??= describeContactOutError(co.apiError);
+      } else if (co?.phoneApiLocked) {
         contactOutLocked = true;
         await markContactOutCreditsExhausted();
       } else if (co) {
@@ -763,6 +780,8 @@ export async function revealSelectedContacts(options: {
     emailsFound,
     phonesFound,
     phonesPending,
+    phonesRequested,
     contactOutUsed,
+    contactOutError,
   };
 }

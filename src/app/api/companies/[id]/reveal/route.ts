@@ -114,15 +114,23 @@ export async function POST(
     const company = await getCompanyById(id, { skipGeoFilter: true });
     const parts: string[] = [];
     if (result.revealed > 0) {
+      // Never report "0 phones found" for a reveal that never asked for one —
+      // that reads as a ContactOut failure when phone was simply not selected.
+      const phonePart =
+        result.phonesRequested === 0
+          ? "phone not requested"
+          : `${result.phonesFound} phone${result.phonesFound === 1 ? "" : "s"} found`;
       parts.push(
-        `Revealed ${result.revealed} contact${result.revealed === 1 ? "" : "s"} — ${result.emailsFound} email${result.emailsFound === 1 ? "" : "s"}, ${result.phonesFound} phone${result.phonesFound === 1 ? "" : "s"} found`,
+        `Revealed ${result.revealed} contact${result.revealed === 1 ? "" : "s"} — ${result.emailsFound} email${result.emailsFound === 1 ? "" : "s"}, ${phonePart}`,
       );
       if (result.phonesPending > 0) {
         parts.push(
           `${result.phonesPending} phone${result.phonesPending === 1 ? "" : "s"} still loading from Apollo — reopen in a few seconds`,
         );
       }
-      if (contactOutKey && !contactOutAvailable) {
+      if (result.contactOutError) {
+        parts.push(result.contactOutError);
+      } else if (contactOutKey && !contactOutAvailable) {
         parts.push("ContactOut locked/out of credits — Apollo fallback used");
       } else if (!contactOutKey) {
         parts.push("ContactOut not configured — Apollo fallback used");
