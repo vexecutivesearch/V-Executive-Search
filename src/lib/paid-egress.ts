@@ -1,4 +1,4 @@
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, eq, gte, notInArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { providerUsageEvents } from "@/lib/db/schema";
 import { businessDayStartUtc } from "@/lib/timezone";
@@ -71,7 +71,34 @@ export function providerDailyCap(provider: PaidProvider): number {
   return provider === "apollo" ? 200 : 150;
 }
 
+/**
+ * Endpoints the provider documents as costing nothing, so they can never
+ * consume a credit cap no matter what an older row happened to record.
+ *
+ * Apollo's People API Search is explicitly "Credit usage: 0 credits"
+ * (https://docs.apollo.io/docs/api-pricing). It used to be logged at 1 credit
+ * a call, and discovery makes up to four per company, so a normal batch could
+ * exhaust a day's budget on calls that were never billed. Excluding the
+ * endpoint here — rather than only fixing what new rows record — also
+ * discounts the rows already written under the old accounting.
+ *
+ * ContactOut's people/search is NOT free: it is sent with `reveal_info: true`
+ * and bills per revealed profile, so it stays counted.
+ */
+const ZERO_COST_ENDPOINTS: Record<PaidProvider, readonly string[]> = {
+  apollo: ["mixed_people/api_search"],
+  contactout: [],
+};
+
+export function endpointConsumesCredits(
+  provider: PaidProvider,
+  endpoint: string,
+): boolean {
+  return !ZERO_COST_ENDPOINTS[provider].includes(endpoint);
+}
+
 export async function dailyUsage(provider: PaidProvider): Promise<number> {
+  const free = ZERO_COST_ENDPOINTS[provider];
   const [row] = await db
     .select({
       total: sql<number>`coalesce(sum(${providerUsageEvents.estimatedCost}), 0)`,
@@ -84,6 +111,9 @@ export async function dailyUsage(provider: PaidProvider): Promise<number> {
         // Business-day window (midnight ET) — a UTC window rolls at 8 PM ET
         // and charges evening usage against the next day's budget.
         gte(providerUsageEvents.createdAt, businessDayStartUtc()),
+        ...(free.length
+          ? [notInArray(providerUsageEvents.endpoint, [...free])]
+          : []),
       ),
     );
   return Number(row?.total ?? 0);

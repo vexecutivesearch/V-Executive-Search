@@ -205,13 +205,15 @@ export function ContactPickerButton({
     return c ? isDiscovered(c) && !c.hasEmail : false;
   }).length;
 
+  // Apollo bills People Search at 0 credits, so discovery is free however many
+  // passes the title/location fallthrough needed. Only the reveal costs.
   const costPreview = discovery
     ? [
         discovery.cached
-          ? "Discovery: cached — search credit already spent, none charged"
-          : `Discovery: ${discovery.searchesSpent ?? 1} search credit${(discovery.searchesSpent ?? 1) === 1 ? "" : "s"} spent`,
+          ? "Discovery: cached — no search re-run"
+          : `Discovery: ${discovery.searchesSpent ?? 1} Apollo search${(discovery.searchesSpent ?? 1) === 1 ? "" : "es"} — free, searches cost no credits`,
         selected.size > 0
-          ? `Reveal ${selected.size}: up to ${emailCount} email credit${emailCount === 1 ? "" : "s"}${phoneCount > 0 ? `${emailCount > 0 ? " + " : " "}${phoneCount} phone reveal${phoneCount === 1 ? "" : "s"}` : ""} — via ContactOut first, Apollo fallback`
+          ? `Reveal ${selected.size}: up to ${emailCount} email credit${emailCount === 1 ? "" : "s"}${phoneCount > 0 ? `${emailCount > 0 ? " + " : " "}${phoneCount} phone reveal${phoneCount === 1 ? "" : "s"} (ContactOut first; an Apollo fallback mobile is 8 credits)` : ""}`
           : "Reveal: nothing selected — 0 credits",
       ].join(" · ")
     : null;

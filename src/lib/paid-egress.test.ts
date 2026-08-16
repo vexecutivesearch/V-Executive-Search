@@ -115,6 +115,27 @@ describe("paid egress guard", () => {
     );
   });
 
+  /*
+   * Apollo bills People Search at 0 credits, and discovery makes up to four
+   * per company. Logging those at 1 each exhausted a day's budget on calls
+   * that were never billed, so they must not count toward any cap — including
+   * rows already written under the old accounting.
+   */
+  it("never counts Apollo search against the cap", async () => {
+    const { endpointConsumesCredits } = await import("@/lib/paid-egress");
+    expect(endpointConsumesCredits("apollo", "mixed_people/api_search")).toBe(
+      false,
+    );
+  });
+
+  it("still counts the endpoints that do bill", async () => {
+    const { endpointConsumesCredits } = await import("@/lib/paid-egress");
+    expect(endpointConsumesCredits("apollo", "people/match")).toBe(true);
+    // Sent with reveal_info: true, so ContactOut bills per revealed profile.
+    expect(endpointConsumesCredits("contactout", "people/search")).toBe(true);
+    expect(endpointConsumesCredits("contactout", "people/linkedin")).toBe(true);
+  });
+
   it("respects the CONTACTOUT_DAILY_CREDIT_CAP override", async () => {
     process.env.CONTACTOUT_DAILY_CREDIT_CAP = "500";
     where.mockResolvedValueOnce([{ total: 400 }]);
