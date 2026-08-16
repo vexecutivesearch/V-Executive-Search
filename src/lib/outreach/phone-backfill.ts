@@ -6,6 +6,7 @@ import {
   type SequenceEnrollment,
 } from "@/lib/db/schema";
 import { requestImessageCheck } from "@/lib/imessage-check";
+import { phoneIsTextEligible } from "@/lib/outreach/channel-plan";
 import { pickPhone } from "@/lib/outreach/contact-handles";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
 import { isSuppressed } from "@/lib/outreach/suppression";
@@ -46,7 +47,7 @@ export type PhoneBackfillSummary = {
   skippedNoPhone: number;
   skippedSuppressed: number;
   skippedNotTextable: number;
-  /** Had a phone but no capability answer yet — a check was requested. */
+  /** Upgraded but still missing a capability answer — a check was requested. */
   pendingCapabilityCheck: number;
 };
 
@@ -88,31 +89,34 @@ export async function backfillEnrollmentPhones(options?: {
       continue;
     }
 
+    const suppression = await isSuppressed({ channel: "imessage", phone });
+
     // Same gate enrollment uses, so a backfilled enrollment is never in a
     // state a fresh enrollment could not have reached.
-    if (contact.imessageCapable !== true) {
-      if (contact.imessageCapable === null) {
-        summary.pendingCapabilityCheck += 1;
-        // One nudge per pass covers the whole batch — the Mac worker pulls
-        // every unanswered contact, and these become eligible next run.
-        if (!capabilityCheckRequested) {
-          capabilityCheckRequested = true;
-          try {
-            await requestImessageCheck();
-          } catch (error) {
-            console.error("[outreach] imessage check request failed", error);
-          }
-        }
-      } else {
-        summary.skippedNotTextable += 1;
-      }
+    if (
+      !phoneIsTextEligible({
+        hasPhone: true,
+        imessageCapable: contact.imessageCapable,
+        phoneSuppressed: suppression.suppressed,
+      })
+    ) {
+      if (suppression.suppressed) summary.skippedSuppressed += 1;
+      else summary.skippedNotTextable += 1;
       continue;
     }
 
-    const suppression = await isSuppressed({ channel: "imessage", phone });
-    if (suppression.suppressed) {
-      summary.skippedSuppressed += 1;
-      continue;
+    // Not a gate any more, but still worth collecting for the badge and the
+    // lead score — nudge the worker once per pass.
+    if (contact.imessageCapable === null) {
+      summary.pendingCapabilityCheck += 1;
+      if (!capabilityCheckRequested) {
+        capabilityCheckRequested = true;
+        try {
+          await requestImessageCheck();
+        } catch (error) {
+          console.error("[outreach] imessage check request failed", error);
+        }
+      }
     }
 
     await db
@@ -152,7 +156,9 @@ export async function backfillEnrollmentPhones(options?: {
         contactId: contact.id,
         bumpAttempt: false,
         summary:
-          "Phone number found after enrollment — sequence upgraded to email + text; remaining text steps will send on schedule.",
+          `Phone found for ${contact.name} after enrollment (${phone}) — ` +
+          "sequence upgraded to email + SMS. Remaining text steps send on " +
+          "their existing schedule; already-sent emails are unaffected.",
       });
     } catch (error) {
       console.error("[outreach] backfill call-list note failed", error);
@@ -175,6 +181,10 @@ export function enrollmentCanUpgrade(
   if (!(LIVE_STATUSES as readonly string[]).includes(enrollment.status)) {
     return false;
   }
-  if (contact.imessageCapable !== true) return false;
-  return Boolean(pickPhone(contact));
+  return phoneIsTextEligible({
+    hasPhone: Boolean(pickPhone(contact)),
+    imessageCapable: contact.imessageCapable ?? null,
+    // Suppression is checked against the live table in the backfill itself.
+    phoneSuppressed: false,
+  });
 }

@@ -14,8 +14,8 @@ export type ChannelPlan = "email_and_text" | "email_only" | "text_only";
  * Resolve the plan from what we know at enroll time. Returns null when the
  * contact is unreachable on every channel (caller refuses the enrollment).
  *
- * textEligible = phone present AND imessage-capable AND not suppressed; it
- * only widens an email plan. A usable email is never required for text_only.
+ * textEligible = a phone we are allowed to text; it only widens an email
+ * plan. A usable email is never required for text_only.
  */
 export function resolveChannelPlan(input: {
   emailUsable: boolean;
@@ -37,8 +37,7 @@ export function resolveChannelPlan(input: {
 export type ChannelPlanReason =
   | "text_added"
   | "no_phone"
-  | "imessage_capability_unknown"
-  | "imessage_capability_false"
+  | "not_textable"
   | "phone_suppressed"
   | "email_unusable_text_only"
   | "unreachable";
@@ -48,6 +47,30 @@ export type ChannelPlanDecision = {
   reason: ChannelPlanReason;
 };
 
+/**
+ * Can we text this number?
+ *
+ * Any phone can receive a text: the Mac worker runs the real IDS capability
+ * check at send time and falls back to SMS, which is exactly why text_only
+ * plans have never required `imessageCapable`. Email plans used to demand
+ * `imessageCapable === true`, and that quietly cost us most of our text
+ * steps — the flag is only ever populated for contacts that have a personal
+ * email, so a contact with a work email and a good mobile stayed null
+ * forever and could never earn a text step.
+ *
+ * So the rule is symmetric with text_only now: a phone is textable unless we
+ * positively know otherwise (`false` means the handle would not even parse).
+ */
+export function phoneIsTextEligible(input: {
+  hasPhone: boolean;
+  imessageCapable: boolean | null;
+  phoneSuppressed: boolean;
+}): boolean {
+  return (
+    input.hasPhone && input.imessageCapable !== false && !input.phoneSuppressed
+  );
+}
+
 export function explainChannelPlan(input: {
   emailUsable: boolean;
   hasPhone: boolean;
@@ -55,14 +78,10 @@ export function explainChannelPlan(input: {
   imessageCapable: boolean | null;
   phoneSuppressed: boolean;
 }): ChannelPlanDecision {
-  const textEligible =
-    input.imessageCapable === true &&
-    input.hasPhone &&
-    !input.phoneSuppressed;
   const plan = resolveChannelPlan({
     emailUsable: input.emailUsable,
     hasPhone: input.hasPhone,
-    textEligible,
+    textEligible: phoneIsTextEligible(input),
   });
 
   if (plan === null) return { plan, reason: "unreachable" };
@@ -73,10 +92,7 @@ export function explainChannelPlan(input: {
 
   if (!input.hasPhone) return { plan, reason: "no_phone" };
   if (input.phoneSuppressed) return { plan, reason: "phone_suppressed" };
-  if (input.imessageCapable === null) {
-    return { plan, reason: "imessage_capability_unknown" };
-  }
-  return { plan, reason: "imessage_capability_false" };
+  return { plan, reason: "not_textable" };
 }
 
 export function channelPlanReasonLabel(reason: ChannelPlanReason): string {
@@ -85,10 +101,8 @@ export function channelPlanReasonLabel(reason: ChannelPlanReason): string {
       return "text steps added";
     case "no_phone":
       return "no phone number on the contact";
-    case "imessage_capability_unknown":
-      return "iMessage capability not checked yet — the Mac worker has not answered for this contact";
-    case "imessage_capability_false":
-      return "the contact's handle came back not textable";
+    case "not_textable":
+      return "the contact's number came back not textable";
     case "phone_suppressed":
       return "the phone number is suppressed";
     case "email_unusable_text_only":

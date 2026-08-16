@@ -36,10 +36,21 @@ describe("enrollmentCanUpgrade", () => {
     ).toBe(false);
   });
 
-  it("waits for the capability answer rather than guessing", () => {
+  /*
+   * imessage_capable is only populated for contacts with a personal email, so
+   * gating on `=== true` would skip exactly the work-email-plus-mobile
+   * contacts this backfill exists to rescue.
+   */
+  it("upgrades even when the capability answer never arrived", () => {
     expect(
       enrollmentCanUpgrade(live, { ...textable, imessageCapable: null }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      enrollmentCanUpgrade(live, { ...textable, imessageCapable: undefined }),
+    ).toBe(true);
+  });
+
+  it("respects a positive not-textable answer", () => {
     expect(
       enrollmentCanUpgrade(live, { ...textable, imessageCapable: false }),
     ).toBe(false);
