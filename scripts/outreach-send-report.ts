@@ -171,12 +171,19 @@ async function main() {
   }
 
   // --- what has NOT sent, and why ---------------------------------------
+  // A drafted row has no scheduled_for: the flow has not reached that step
+  // yet, so it is a future follow-up rather than a held send. Only queued rows
+  // are actually waiting on the dispatcher.
   const pending = (await sql`
     select m.status,
-           coalesce(m.deferred_reason,
+           case
+             when m.status = 'drafted'
+               then 'later step — flow has not reached it yet (not a backlog)'
+             else coalesce(m.deferred_reason,
                     case when m.scheduled_for > now() then 'waiting for its scheduled slot'
                          when m.approved_at is null then 'waiting on approval'
-                         else 'due now — next dispatch pass' end) as reason,
+                         else 'due now — next dispatch pass' end)
+           end as reason,
            count(*) as n,
            min(m.scheduled_for) as earliest_slot
     from outreach_messages m
@@ -201,22 +208,35 @@ async function main() {
     console.log("Nothing pending — every email on a live enrollment has sent.");
   }
 
+  const queuedTotal = pending
+    .filter((r) => r.status === "queued")
+    .reduce((sum, r) => sum + Number(r.n), 0);
   const deferredTotal = pending
     .filter((r) => String(r.reason).includes("exhausted"))
     .reduce((sum, r) => sum + Number(r.n), 0);
 
-  if (deferredTotal > 0) {
-    const perDay = profiles.length
-      ? profiles.reduce(
-          (sum, p) =>
-            sum + Math.min(Number(p.daily_limit), rampCap(Number(p.ramp_stage))),
-          0,
-        )
-      : Number(settings.daily_send_cap);
+  if (queuedTotal > 0) {
     console.log(
-      `\n${deferredTotal} email(s) are held behind capacity. At ${perDay}/day ` +
-        `that is about ${Math.ceil(deferredTotal / Math.max(1, perDay))} more ` +
-        `sending day(s) to drain, before counting anything added meanwhile.`,
+      `${queuedTotal} email(s) are queued and waiting on the dispatcher. ` +
+        "Drafted rows above are later flow steps, not a backlog.",
+    );
+  }
+
+  if (deferredTotal > 0) {
+    const poolPerDay = profiles.reduce(
+      (sum, p) =>
+        sum + Math.min(Number(p.daily_limit), rampCap(Number(p.ramp_stage))),
+      0,
+    );
+    // Whichever ceiling is lower is the one that actually binds.
+    const cap = Number(settings.daily_send_cap) || Infinity;
+    const perDay = Math.min(poolPerDay || Infinity, cap);
+    const binding = poolPerDay && poolPerDay <= cap ? "sending pool" : "daily_send_cap";
+    console.log(
+      `\n${deferredTotal} email(s) are held behind capacity. The binding ceiling ` +
+        `is the ${binding} at ${perDay}/day (pool ${poolPerDay}, cap ${cap}), so ` +
+        `about ${Math.ceil(deferredTotal / Math.max(1, perDay))} more sending ` +
+        `day(s) to drain, before counting anything added meanwhile.`,
     );
     console.log(
       "They are not lost: each dispatch pass retries them, and they send as " +

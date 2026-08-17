@@ -59,14 +59,28 @@ export type DispatchSummary = {
   skippedReason?: string;
 };
 
-async function sentTodayTotal(): Promise<number> {
+/**
+ * Emails sent today, for the system daily cap.
+ *
+ * Email only. This counted every channel, so iMessage sends — which the Mac
+ * worker dispatches on its own uncapped queue — ate the email budget. On
+ * 2026-08-17 that was 83 emails plus 73 texts against a cap of 100, which
+ * deferred 71 intros with `daily_cap_exhausted` while the sending pool still
+ * had headroom left. The cap is only ever checked in the email loop below, so
+ * counting texts against it was never the intent.
+ */
+async function emailsSentTodayTotal(): Promise<number> {
   const startOfDay = new Date();
   startOfDay.setUTCHours(0, 0, 0, 0);
   const [row] = await db
     .select({ count: sql<number>`count(*)` })
     .from(outreachMessages)
     .where(
-      and(eq(outreachMessages.status, "sent"), gte(outreachMessages.sentAt, startOfDay)),
+      and(
+        eq(outreachMessages.status, "sent"),
+        eq(outreachMessages.channel, "email"),
+        gte(outreachMessages.sentAt, startOfDay),
+      ),
     );
   return Number(row?.count ?? 0);
 }
@@ -191,7 +205,7 @@ export async function runOutreachDispatch(now = new Date()): Promise<DispatchSum
     .limit(50);
 
   let consecutiveFailures = 0;
-  let sentTodayCount = await sentTodayTotal();
+  let sentTodayCount = await emailsSentTodayTotal();
 
   for (const message of dueMessages) {
     if (consecutiveFailures >= CONSECUTIVE_FAILURE_HALT) {
