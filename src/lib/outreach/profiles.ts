@@ -17,7 +17,21 @@ import {
 export const RAMP_BASE = 5;
 export const RAMP_INCREMENT = 5;
 export const RAMP_CEILING = 50;
-export const BOUNCE_VIOLATION_RATE = 0.02;
+/**
+ * Bounce rate that throttles a sending domain.
+ *
+ * 2% is the classic ESP danger line, but it judges LIFETIME totals that never
+ * reset, so on a few dozen sends a single dead address puts a domain over it —
+ * and the rollback costs 5/day of real capacity. On 2026-08-17 all three
+ * domains sat throttled on 1–3 bounces each, two of them from addresses
+ * invented during July testing.
+ *
+ * 5% is the operator's chosen line: still well inside the range mailbox
+ * providers act on, but tolerant of the small-sample noise that dominates
+ * early volume. Complaint rate is untouched — spam reports are a far stronger
+ * signal than a bad address and 0.1% remains the right ceiling.
+ */
+export const BOUNCE_VIOLATION_RATE = 0.05;
 export const COMPLAINT_VIOLATION_RATE = 0.001;
 /** Reply-rate weighting phases in only after this many sends. */
 export const HEALTH_MIN_SENDS_FOR_REPLY_WEIGHT = 200;
