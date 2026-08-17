@@ -41,6 +41,8 @@ type Day0 = {
 
 type Verdict =
   | "SENT"
+  /** Some day-0 channel sent, another is stuck. Needs a human. */
+  | "PARTIAL"
   | "SCHEDULED"
   | "DEFERRED"
   | "DUE NOW"
@@ -119,17 +121,28 @@ function classify(
     };
   }
 
+  const now = Date.now();
+  const queued = day0.filter((m) => m.st === "queued");
+  const deferred = queued.filter((m) => m.defer);
+
   const sent = day0.filter((m) => m.st === "sent");
   if (sent.length) {
+    // A text that went out does not make the email fine. Reporting SENT for a
+    // contact whose intro email is still stuck is how an unsent email hides.
+    if (deferred.length) {
+      return {
+        verdict: "PARTIAL",
+        detail:
+          `${sent.map((m) => `${m.ch} sent ${et(m.sent)}`).join(", ")}; ` +
+          `${deferred.map((m) => `${m.ch} deferred: ${m.defer}`).join(", ")}`,
+      };
+    }
     return {
       verdict: "SENT",
       detail: sent.map((m) => `${m.ch} ${et(m.sent)}`).join(", "),
     };
   }
 
-  const now = Date.now();
-  const queued = day0.filter((m) => m.st === "queued");
-  const deferred = queued.filter((m) => m.defer);
   if (deferred.length) {
     return {
       verdict: "DEFERRED",

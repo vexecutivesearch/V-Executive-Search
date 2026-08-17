@@ -51,10 +51,22 @@ import { isSuppressed } from "@/lib/outreach/suppression";
  * wait after the text honours the original day-2 deadline instead of
  * restarting the cadence.
  */
+export type DayZeroTextOutcome =
+  /** Flow position moved back to the day-0 text step. */
+  | "rewound"
+  /** Already sitting on it — the flow held the step, nothing to do. */
+  | "already_on_step"
+  /** Intro has sent; a "just emailed you" text would be stale. */
+  | "intro_already_sent"
+  /** No graph, no text step, or a position we cannot place. */
+  | "not_applicable";
+
 async function rewindToDayZeroText(
   enrollment: SequenceEnrollment,
-): Promise<boolean> {
-  if (!enrollment.flowVersionId || !enrollment.currentNodeId) return false;
+): Promise<DayZeroTextOutcome> {
+  if (!enrollment.flowVersionId || !enrollment.currentNodeId) {
+    return "not_applicable";
+  }
 
   const [sent] = await db
     .select({ id: outreachMessages.id })
@@ -62,22 +74,24 @@ async function rewindToDayZeroText(
     .where(
       and(
         eq(outreachMessages.enrollmentId, enrollment.id),
+        eq(outreachMessages.channel, "email"),
         eq(outreachMessages.status, "sent"),
       ),
     )
     .limit(1);
-  if (sent) return false;
+  if (sent) return "intro_already_sent";
 
   const { loadFlowGraph } = await import("@/lib/outreach/flow-engine");
   const graph = await loadFlowGraph(enrollment.flowVersionId);
-  if (!graph) return false;
+  if (!graph) return "not_applicable";
 
   const textNode = graph.nodes.find(
     (n) =>
       n.type === "send" &&
       (n.config as SendNodeConfig | undefined)?.channel === "imessage",
   );
-  if (!textNode) return false;
+  if (!textNode) return "not_applicable";
+  if (enrollment.currentNodeId === textNode.id) return "already_on_step";
 
   // Only rewind — never skip the enrollment forward past a step it has not
   // reached (jumping over an unsent intro would drop the email entirely).
@@ -89,7 +103,8 @@ async function rewindToDayZeroText(
   }
   const here = order.get(enrollment.currentNodeId);
   const target = order.get(textNode.id);
-  if (here === undefined || target === undefined || here <= target) return false;
+  if (here === undefined || target === undefined) return "not_applicable";
+  if (here < target) return "not_applicable";
 
   await db
     .update(sequenceEnrollments)
@@ -99,7 +114,20 @@ async function rewindToDayZeroText(
       updatedAt: new Date(),
     })
     .where(eq(sequenceEnrollments.id, enrollment.id));
-  return true;
+  return "rewound";
+}
+
+function dayZeroTextNote(outcome: DayZeroTextOutcome): string {
+  switch (outcome) {
+    case "rewound":
+      return "Nothing had sent yet, so the intro text was restored and leads the text sequence.";
+    case "already_on_step":
+      return "The sequence was already holding on the intro text, which now sends with the number attached.";
+    case "intro_already_sent":
+      return "The intro email had already gone out, so the sequence resumes at its next text step.";
+    case "not_applicable":
+      return "The text steps resume from the sequence's current position.";
+  }
 }
 
 /** Enrollments still walking the graph — completed/stopped can't benefit. */
@@ -211,9 +239,12 @@ export async function backfillEnrollmentPhones(options?: {
 
     summary.attached += 1;
 
-    const restored = await rewindToDayZeroText(enrollment);
-    if (restored) summary.dayZeroTextRestored += 1;
-    else summary.dayZeroTextMissed += 1;
+    const outcome = await rewindToDayZeroText(enrollment);
+    if (outcome === "rewound" || outcome === "already_on_step") {
+      summary.dayZeroTextRestored += 1;
+    } else if (outcome === "intro_already_sent") {
+      summary.dayZeroTextMissed += 1;
+    }
 
     await logEnrollmentEvent({
       enrollmentId: enrollment.id,
@@ -225,10 +256,8 @@ export async function backfillEnrollmentPhones(options?: {
         from_plan: "email_only",
         to_plan: "email_and_text",
         phone,
-        day_zero_text_restored: restored,
-        detail: restored
-          ? "phone found before the intro went out — rewound to the day-0 text so it leads the text sequence"
-          : "phone found after the intro had sent — text_1 would be stale, so the sequence resumes at its next text step",
+        day_zero_text: outcome,
+        detail: dayZeroTextNote(outcome),
       },
     });
 
@@ -242,11 +271,8 @@ export async function backfillEnrollmentPhones(options?: {
         bumpAttempt: false,
         summary:
           `Phone found for ${contact.name} after enrollment (${phone}) — ` +
-          "sequence upgraded to email + SMS. " +
-          (restored
-            ? "Nothing had sent yet, so the intro text was restored and leads the text sequence."
-            : "The intro email had already gone out, so the sequence resumes at its next text step.") +
-          " Already-sent emails are unaffected.",
+          `sequence upgraded to email + SMS. ${dayZeroTextNote(outcome)} ` +
+          "Already-sent emails are unaffected.",
       });
     } catch (error) {
       console.error("[outreach] backfill call-list note failed", error);
