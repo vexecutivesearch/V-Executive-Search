@@ -204,12 +204,23 @@ export async function POST(request: NextRequest) {
         const { recordCallListOutreachEvent } = await import(
           "@/lib/outreach/call-list-sync"
         );
+        const { contacts } = await import("@/lib/db/schema");
+        const [texted] = await db
+          .select({ name: contacts.name })
+          .from(contacts)
+          .where(eq(contacts.id, enr.contactId))
+          .limit(1);
         await recordCallListOutreachEvent({
           companyId: enr.companyId,
           contactId: enr.contactId,
           bumpAttempt: true,
           callStatus: "email_sent",
-          summary: `Outreach ${message.stepKind} iMessage sent`,
+          // Several contacts enroll per company, so an unnamed line is
+          // indistinguishable from a duplicate send.
+          summary:
+            `Outreach ${message.stepKind} ${result.transport ?? "iMessage"} sent` +
+            `${texted ? ` to ${texted.name}` : ""}` +
+            `${enr.phoneNumber ? ` (${enr.phoneNumber})` : ""}`,
         });
         const { companies } = await import("@/lib/db/schema");
         const [company] = await db

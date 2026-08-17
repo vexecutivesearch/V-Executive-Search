@@ -85,22 +85,32 @@ async function markCompanyContacted(enrollment: SequenceEnrollment): Promise<voi
   }
 }
 
+/** Deep link to the delivery record in Resend, for the Call List note. */
+export function resendEmailUrl(resendId: string | null | undefined): string | null {
+  const id = resendId?.trim();
+  return id ? `https://resend.com/emails/${id}` : null;
+}
+
 async function logSendActivity(
   enrollment: SequenceEnrollment,
   message: OutreachMessage,
+  resendId: string | null,
 ): Promise<void> {
   const { recordCallListOutreachEvent } = await import(
     "@/lib/outreach/call-list-sync"
   );
+  const link = resendEmailUrl(resendId);
   await recordCallListOutreachEvent({
     companyId: enrollment.companyId,
     contactId: enrollment.contactId,
     activityType: "email",
     bumpAttempt: true,
     callStatus: "email_sent",
-    summary: `Outreach ${message.stepKind} email sent${
-      message.subject ? `: ${message.subject}` : ""
-    }`,
+    summary:
+      `Outreach ${message.stepKind} email sent` +
+      `${message.subject ? `: ${message.subject}` : ""}` +
+      ` to ${enrollment.emailAddress}` +
+      `${link ? ` — delivery record: ${link}` : ""}`,
   });
 }
 
@@ -229,7 +239,7 @@ export async function runOutreachDispatch(now = new Date()): Promise<DispatchSum
 
     // System daily cap (0 = no extra cap).
     if (settings.dailySendCap > 0 && sentTodayCount >= settings.dailySendCap) {
-      await deferMessage(message, "daily_cap_exhausted", now, summary);
+      await deferMessage(message, "daily_cap_exhausted", now, summary, enrollment);
       continue;
     }
 
@@ -244,14 +254,14 @@ export async function runOutreachDispatch(now = new Date()): Promise<DispatchSum
     if (!profile && configured.length > 0) {
       // Profiles exist but every one is capped/unhealthy → defer, never
       // silently fall back past the warm-up limits.
-      await deferMessage(message, "capacity_exhausted", now, summary);
+      await deferMessage(message, "capacity_exhausted", now, summary, enrollment);
       continue;
     }
 
     const apiKey = resolveProfileApiKey(profile);
     const from = profile?.fromAddress ?? defaultFromAddress();
     if (!apiKey || !from) {
-      await deferMessage(message, "no_sending_identity", now, summary);
+      await deferMessage(message, "no_sending_identity", now, summary, enrollment);
       continue;
     }
 
@@ -298,7 +308,7 @@ export async function runOutreachDispatch(now = new Date()): Promise<DispatchSum
         .where(eq(outreachMessages.id, message.id));
       if (profile) await bumpProfileCounters(profile.id, { totalSent: 1 });
       await markCompanyContacted(enrollment);
-      await logSendActivity(enrollment, message);
+      await logSendActivity(enrollment, message, result.resendId ?? null);
       await logEnrollmentEvent({
         enrollmentId: enrollment.id,
         eventType: "sent",
@@ -388,12 +398,27 @@ export async function runOutreachDispatch(now = new Date()): Promise<DispatchSum
   return summary;
 }
 
+/** Plain-language deferral reasons for the Call List row. */
+const DEFERRAL_NOTES: Record<string, string> = {
+  daily_cap_exhausted:
+    "the system daily send cap for today is used up — it goes out on the next sending day",
+  capacity_exhausted:
+    "every sending profile is at its warm-up limit for today — it goes out as capacity frees up",
+  no_sending_identity:
+    "no sending identity is configured (Resend key or from address) — this needs fixing before it can send",
+};
+
 async function deferMessage(
   message: OutreachMessage,
   reason: string,
   now: Date,
   summary: DispatchSummary,
+  enrollment?: SequenceEnrollment,
 ): Promise<void> {
+  // Only the first time, or when the reason changes: a deferral is re-evaluated
+  // every 15 minutes and one note per pass would bury the row.
+  const isNew = message.deferredReason !== reason;
+
   await db
     .update(outreachMessages)
     .set({ deferredReason: reason, updatedAt: now })
@@ -404,4 +429,24 @@ async function deferMessage(
     payload: { message_id: message.id, reason },
   });
   summary.deferred += 1;
+
+  // A silent deferral looks identical to a lost email from the Call List, which
+  // is exactly how an unsent intro goes unnoticed for hours.
+  if (isNew && enrollment) {
+    try {
+      const { recordCallListOutreachEvent } = await import(
+        "@/lib/outreach/call-list-sync"
+      );
+      await recordCallListOutreachEvent({
+        companyId: enrollment.companyId,
+        contactId: enrollment.contactId,
+        bumpAttempt: false,
+        summary: `Outreach ${message.stepKind} email is waiting to send — ${
+          DEFERRAL_NOTES[reason] ?? reason
+        }.`,
+      });
+    } catch (error) {
+      console.error("[outreach] deferral note failed", error);
+    }
+  }
 }
