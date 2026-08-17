@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   companies,
@@ -25,6 +25,7 @@ import {
   resolveProfileApiKey,
   sendOutreachEmail,
 } from "@/lib/outreach/resend-send";
+import { sentTodayOnChannel } from "@/lib/outreach/send-caps";
 import { getOrCreateOutreachSettings } from "@/lib/outreach/settings";
 import { isSuppressed } from "@/lib/outreach/suppression";
 import { buildUnsubscribeUrl } from "@/lib/outreach/unsubscribe";
@@ -59,17 +60,13 @@ export type DispatchSummary = {
   skippedReason?: string;
 };
 
-async function sentTodayTotal(): Promise<number> {
-  const startOfDay = new Date();
-  startOfDay.setUTCHours(0, 0, 0, 0);
-  const [row] = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(outreachMessages)
-    .where(
-      and(eq(outreachMessages.status, "sent"), gte(outreachMessages.sentAt, startOfDay)),
-    );
-  return Number(row?.count ?? 0);
-}
+/**
+ * Emails sent today, for the system daily cap.
+ *
+ * Email only — the cap is enforced per channel. See send-caps.ts for why the
+ * two transports must not share one budget.
+ */
+const emailsSentTodayTotal = () => sentTodayOnChannel("email");
 
 async function markCompanyContacted(enrollment: SequenceEnrollment): Promise<void> {
   const [company] = await db
@@ -191,7 +188,7 @@ export async function runOutreachDispatch(now = new Date()): Promise<DispatchSum
     .limit(50);
 
   let consecutiveFailures = 0;
-  let sentTodayCount = await sentTodayTotal();
+  let sentTodayCount = await emailsSentTodayTotal();
 
   for (const message of dueMessages) {
     if (consecutiveFailures >= CONSECUTIVE_FAILURE_HALT) {

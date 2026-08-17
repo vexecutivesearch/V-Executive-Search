@@ -171,12 +171,19 @@ async function main() {
   }
 
   // --- what has NOT sent, and why ---------------------------------------
+  // A drafted row has no scheduled_for: the flow has not reached that step
+  // yet, so it is a future follow-up rather than a held send. Only queued rows
+  // are actually waiting on the dispatcher.
   const pending = (await sql`
     select m.status,
-           coalesce(m.deferred_reason,
+           case
+             when m.status = 'drafted'
+               then 'later step — flow has not reached it yet (not a backlog)'
+             else coalesce(m.deferred_reason,
                     case when m.scheduled_for > now() then 'waiting for its scheduled slot'
                          when m.approved_at is null then 'waiting on approval'
-                         else 'due now — next dispatch pass' end) as reason,
+                         else 'due now — next dispatch pass' end)
+           end as reason,
            count(*) as n,
            min(m.scheduled_for) as earliest_slot
     from outreach_messages m
@@ -201,27 +208,107 @@ async function main() {
     console.log("Nothing pending — every email on a live enrollment has sent.");
   }
 
+  const queuedTotal = pending
+    .filter((r) => r.status === "queued")
+    .reduce((sum, r) => sum + Number(r.n), 0);
   const deferredTotal = pending
     .filter((r) => String(r.reason).includes("exhausted"))
     .reduce((sum, r) => sum + Number(r.n), 0);
 
-  if (deferredTotal > 0) {
-    const perDay = profiles.length
-      ? profiles.reduce(
-          (sum, p) =>
-            sum + Math.min(Number(p.daily_limit), rampCap(Number(p.ramp_stage))),
-          0,
-        )
-      : Number(settings.daily_send_cap);
+  if (queuedTotal > 0) {
     console.log(
-      `\n${deferredTotal} email(s) are held behind capacity. At ${perDay}/day ` +
-        `that is about ${Math.ceil(deferredTotal / Math.max(1, perDay))} more ` +
-        `sending day(s) to drain, before counting anything added meanwhile.`,
+      `${queuedTotal} email(s) are queued and waiting on the dispatcher. ` +
+        "Drafted rows above are later flow steps, not a backlog.",
+    );
+  }
+
+  if (deferredTotal > 0) {
+    const poolPerDay = profiles.reduce(
+      (sum, p) =>
+        sum + Math.min(Number(p.daily_limit), rampCap(Number(p.ramp_stage))),
+      0,
+    );
+    // Whichever ceiling is lower is the one that actually binds.
+    const cap = Number(settings.daily_send_cap) || Infinity;
+    const perDay = Math.min(poolPerDay || Infinity, cap);
+    const binding = poolPerDay && poolPerDay <= cap ? "sending pool" : "daily_send_cap";
+    console.log(
+      `\n${deferredTotal} email(s) are held behind capacity. The binding ceiling ` +
+        `is the ${binding} at ${perDay}/day (pool ${poolPerDay}, cap ${cap}), so ` +
+        `about ${Math.ceil(deferredTotal / Math.max(1, perDay))} more sending ` +
+        `day(s) to drain, before counting anything added meanwhile.`,
     );
     console.log(
       "They are not lost: each dispatch pass retries them, and they send as " +
         "capacity frees up. A queued email deferred for roughly a day is " +
         "escalated to failed and alerted rather than sitting forever.",
+    );
+  }
+
+  // --- what actually goes out on the next sending day -------------------
+  const poolPerDay = profiles.reduce(
+    (sum, p) =>
+      sum + Math.min(Number(p.daily_limit), rampCap(Number(p.ramp_stage))),
+    0,
+  );
+  const cap = Number(settings.daily_send_cap) || Infinity;
+  const emailCeiling = Math.min(poolPerDay || Infinity, cap);
+
+  const [nextDay] = (await sql`
+    select
+      -- Already queued and due by the end of the next sending day.
+      (select count(*) from outreach_messages m
+        join sequence_enrollments e on e.id = m.enrollment_id
+        where m.channel='email' and m.status='queued'
+          and e.status in ('active','paused','waiting_on_reply','waiting_on_manual')
+          and (m.scheduled_for is null
+               or m.scheduled_for < date_trunc('day', now()) + interval '2 days')
+      ) as email_ready,
+      (select count(*) from outreach_messages m
+        join sequence_enrollments e on e.id = m.enrollment_id
+        where m.channel='imessage' and m.status='queued'
+          and e.status in ('active','paused','waiting_on_reply','waiting_on_manual')
+          and (m.scheduled_for is null
+               or m.scheduled_for < date_trunc('day', now()) + interval '2 days')
+      ) as text_ready,
+      -- Enrollments whose wait expires in the next 24-48h: each one queues its
+      -- next drafted step, adding to tomorrow's load.
+      (select count(*) from sequence_enrollments e
+        where e.status = 'active'
+          and e.next_step_at is not null
+          and e.next_step_at < date_trunc('day', now()) + interval '2 days'
+      ) as enrollments_waking
+  `) as Array<Record<string, unknown>>;
+
+  const emailReady = Number(nextDay?.email_ready ?? 0);
+  const textReady = Number(nextDay?.text_ready ?? 0);
+  const waking = Number(nextDay?.enrollments_waking ?? 0);
+
+  console.log("\n=== Next sending day ===");
+  console.table([
+    {
+      channel: "email",
+      queued_and_due: emailReady,
+      ceiling_per_day: emailCeiling,
+      will_send: Math.min(emailReady, emailCeiling),
+      still_waiting_after: Math.max(0, emailReady - emailCeiling),
+    },
+    {
+      channel: "imessage",
+      queued_and_due: textReady,
+      ceiling_per_day: cap,
+      will_send: Math.min(textReady, cap),
+      still_waiting_after: Math.max(0, textReady - cap),
+    },
+  ]);
+  console.log(
+    `Plus ${waking} enrollment(s) whose wait expires by then — each queues its ` +
+      "next step, which competes for the same ceilings.",
+  );
+  if (emailReady > emailCeiling) {
+    console.log(
+      `Email backlog needs about ${Math.ceil(emailReady / Math.max(1, emailCeiling))} ` +
+        "sending day(s) to clear at the current ceiling, ignoring new adds.",
     );
   }
 

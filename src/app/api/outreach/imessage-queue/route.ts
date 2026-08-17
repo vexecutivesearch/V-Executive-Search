@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { outreachMessages, sequenceEnrollments } from "@/lib/db/schema";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
 import { WORKER_CLAIMABLE_ENROLLMENT_STATUSES } from "@/lib/outreach/imessage-queue";
+import { remainingToday, sentTodayOnChannel } from "@/lib/outreach/send-caps";
 import { getOrCreateOutreachSettings } from "@/lib/outreach/settings";
 import { isSuppressed } from "@/lib/outreach/suppression";
 
@@ -23,6 +24,20 @@ export async function GET(request: NextRequest) {
   const settings = await getOrCreateOutreachSettings();
   if (!settings.enabled || settings.dryRun) {
     return NextResponse.json({ messages: [], reason: !settings.enabled ? "kill_switch" : "dry_run" });
+  }
+
+  // The daily send cap applies to texts too, counted separately from email.
+  // Without this the text channel was entirely uncapped while still consuming
+  // the email budget — the worst of both arrangements.
+  const textsSentToday = await sentTodayOnChannel("imessage");
+  const textsRemaining = remainingToday(settings.dailySendCap, textsSentToday);
+  if (textsRemaining <= 0) {
+    return NextResponse.json({
+      messages: [],
+      reason: "daily_cap_exhausted",
+      sent_today: textsSentToday,
+      cap: settings.dailySendCap,
+    });
   }
 
   const now = new Date();
@@ -59,6 +74,9 @@ export async function GET(request: NextRequest) {
   }> = [];
 
   for (const { message, enrollment } of due) {
+    // Never hand the worker more than the day's remaining allowance; the rest
+    // stay queued and go out on the next sending day.
+    if (out.length >= textsRemaining) break;
     if (settings.requireApproval && !message.approvedAt) continue;
     const suppression = await isSuppressed({
       channel: "imessage",

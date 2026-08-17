@@ -232,7 +232,10 @@ export function OverviewTab() {
       <Section title="Caps, window & identity">
         <div className="grid sm:grid-cols-2 gap-4">
           <div>
-            <label className={label}>System daily send cap (all channels)</label>
+            <label className={label}>
+              System daily send cap (per channel — this many emails AND this
+              many texts)
+            </label>
             <input
               className={input}
               type="number"
