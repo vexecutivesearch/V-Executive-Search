@@ -1,56 +1,66 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { remainingToday } from "@/lib/outreach/send-caps";
+
+vi.mock("@/lib/db", () => ({ db: {} }));
+
 /**
- * The system daily send cap is an EMAIL cap.
+ * The system daily send cap is enforced PER CHANNEL — the configured number is
+ * a ceiling for email and a separate ceiling for text.
  *
- * It is only ever consulted in the email dispatch loop — the Mac worker's
- * iMessage queue has no equivalent check — but the count behind it selected
- * every channel. On 2026-08-17 that meant 83 emails plus 73 texts against a
- * cap of 100: the texts ate the email budget and 71 intros were deferred with
- * `daily_cap_exhausted` while the sending pool still had headroom.
- *
- * This asserts the query is scoped to email by inspecting the conditions the
- * count is built with, since the real one needs a database.
+ * It used to be one shared all-channel total. On 2026-08-17 that cost 71 intro
+ * emails: 83 emails plus 73 texts hit the shared 100 first, so the email loop
+ * deferred everything after that while the sending pool still had headroom —
+ * and the text channel had no ceiling of its own at all.
  */
-const capturedConditions: unknown[] = [];
-
-vi.mock("@/lib/db", () => ({
-  db: {
-    select: () => ({
-      from: () => ({
-        where: (...args: unknown[]) => {
-          capturedConditions.push(...args);
-          return Promise.resolve([{ count: 0 }]);
-        },
-      }),
-    }),
-  },
-}));
-
-describe("daily send cap scope", () => {
-  it("counts only email sends toward the cap", async () => {
-    const { runOutreachDispatch } = await import("@/lib/outreach/dispatch");
-    expect(typeof runOutreachDispatch).toBe("function");
-
-    // The guard lives in dispatch.ts; assert the source states the scope so a
-    // future edit cannot quietly widen it back to all channels.
-    const { readFileSync } = await import("node:fs");
-    const src = readFileSync("src/lib/outreach/dispatch.ts", "utf8");
-
-    const fn = src.slice(
-      src.indexOf("async function emailsSentTodayTotal"),
-      src.indexOf("async function markCompanyContacted"),
-    );
-    expect(fn).toContain('eq(outreachMessages.channel, "email")');
-    expect(fn).toContain('eq(outreachMessages.status, "sent")');
+describe("remainingToday", () => {
+  it("leaves the rest of the channel's allowance", () => {
+    expect(remainingToday(100, 83)).toBe(17);
   });
 
-  it("uses the email-scoped count for the cap check", async () => {
+  it("is zero once the channel's own cap is reached", () => {
+    expect(remainingToday(100, 100)).toBe(0);
+    expect(remainingToday(100, 156)).toBe(0);
+  });
+
+  it("treats 0 as uncapped", () => {
+    expect(remainingToday(0, 5_000)).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  /*
+   * The whole point: 83 emails and 73 texts on a cap of 100 leaves headroom on
+   * both channels. Under the shared total it left none on either.
+   */
+  it("keeps the two channels independent", () => {
+    const cap = 100;
+    expect(remainingToday(cap, 83)).toBe(17); // email
+    expect(remainingToday(cap, 73)).toBe(27); // text
+    expect(remainingToday(cap, 83 + 73)).toBe(0); // the old shared behaviour
+  });
+});
+
+describe("cap wiring", () => {
+  const read = async (path: string) => {
     const { readFileSync } = await import("node:fs");
-    const src = readFileSync("src/lib/outreach/dispatch.ts", "utf8");
-    expect(src).toContain("await emailsSentTodayTotal()");
+    return readFileSync(path, "utf8");
+  };
+
+  it("counts email sends for the email loop", async () => {
+    const src = await read("src/lib/outreach/send-caps.ts");
+    expect(src).toContain("eq(outreachMessages.channel, channel)");
+    expect(src).toContain('eq(outreachMessages.status, "sent")');
+
+    const dispatch = await read("src/lib/outreach/dispatch.ts");
+    expect(dispatch).toContain('sentTodayOnChannel("email")');
     // The old all-channel helper must be gone, not merely unused.
-    expect(src).not.toContain("sentTodayTotal()\n");
-    expect(src).not.toMatch(/async function sentTodayTotal\b/);
+    expect(dispatch).not.toMatch(/async function sentTodayTotal\b/);
+  });
+
+  it("applies the cap to the text queue as well", async () => {
+    const queue = await read("src/app/api/outreach/imessage-queue/route.ts");
+    expect(queue).toContain('sentTodayOnChannel("imessage")');
+    expect(queue).toContain("remainingToday(settings.dailySendCap");
+    // And actually stops handing the worker more than the allowance.
+    expect(queue).toContain("out.length >= textsRemaining");
   });
 });

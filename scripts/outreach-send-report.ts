@@ -245,6 +245,73 @@ async function main() {
     );
   }
 
+  // --- what actually goes out on the next sending day -------------------
+  const poolPerDay = profiles.reduce(
+    (sum, p) =>
+      sum + Math.min(Number(p.daily_limit), rampCap(Number(p.ramp_stage))),
+    0,
+  );
+  const cap = Number(settings.daily_send_cap) || Infinity;
+  const emailCeiling = Math.min(poolPerDay || Infinity, cap);
+
+  const [nextDay] = (await sql`
+    select
+      -- Already queued and due by the end of the next sending day.
+      (select count(*) from outreach_messages m
+        join sequence_enrollments e on e.id = m.enrollment_id
+        where m.channel='email' and m.status='queued'
+          and e.status in ('active','paused','waiting_on_reply','waiting_on_manual')
+          and (m.scheduled_for is null
+               or m.scheduled_for < date_trunc('day', now()) + interval '2 days')
+      ) as email_ready,
+      (select count(*) from outreach_messages m
+        join sequence_enrollments e on e.id = m.enrollment_id
+        where m.channel='imessage' and m.status='queued'
+          and e.status in ('active','paused','waiting_on_reply','waiting_on_manual')
+          and (m.scheduled_for is null
+               or m.scheduled_for < date_trunc('day', now()) + interval '2 days')
+      ) as text_ready,
+      -- Enrollments whose wait expires in the next 24-48h: each one queues its
+      -- next drafted step, adding to tomorrow's load.
+      (select count(*) from sequence_enrollments e
+        where e.status = 'active'
+          and e.next_step_at is not null
+          and e.next_step_at < date_trunc('day', now()) + interval '2 days'
+      ) as enrollments_waking
+  `) as Array<Record<string, unknown>>;
+
+  const emailReady = Number(nextDay?.email_ready ?? 0);
+  const textReady = Number(nextDay?.text_ready ?? 0);
+  const waking = Number(nextDay?.enrollments_waking ?? 0);
+
+  console.log("\n=== Next sending day ===");
+  console.table([
+    {
+      channel: "email",
+      queued_and_due: emailReady,
+      ceiling_per_day: emailCeiling,
+      will_send: Math.min(emailReady, emailCeiling),
+      still_waiting_after: Math.max(0, emailReady - emailCeiling),
+    },
+    {
+      channel: "imessage",
+      queued_and_due: textReady,
+      ceiling_per_day: cap,
+      will_send: Math.min(textReady, cap),
+      still_waiting_after: Math.max(0, textReady - cap),
+    },
+  ]);
+  console.log(
+    `Plus ${waking} enrollment(s) whose wait expires by then — each queues its ` +
+      "next step, which competes for the same ceilings.",
+  );
+  if (emailReady > emailCeiling) {
+    console.log(
+      `Email backlog needs about ${Math.ceil(emailReady / Math.max(1, emailCeiling))} ` +
+        "sending day(s) to clear at the current ceiling, ignoring new adds.",
+    );
+  }
+
   console.log(
     "\nDispatch runs */15 12-23 Mon-Fri and */15 0-6 Tue-Sat UTC — " +
       "nothing dispatches on a Sunday.\n",

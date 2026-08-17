@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   companies,
@@ -25,6 +25,7 @@ import {
   resolveProfileApiKey,
   sendOutreachEmail,
 } from "@/lib/outreach/resend-send";
+import { sentTodayOnChannel } from "@/lib/outreach/send-caps";
 import { getOrCreateOutreachSettings } from "@/lib/outreach/settings";
 import { isSuppressed } from "@/lib/outreach/suppression";
 import { buildUnsubscribeUrl } from "@/lib/outreach/unsubscribe";
@@ -62,28 +63,10 @@ export type DispatchSummary = {
 /**
  * Emails sent today, for the system daily cap.
  *
- * Email only. This counted every channel, so iMessage sends — which the Mac
- * worker dispatches on its own uncapped queue — ate the email budget. On
- * 2026-08-17 that was 83 emails plus 73 texts against a cap of 100, which
- * deferred 71 intros with `daily_cap_exhausted` while the sending pool still
- * had headroom left. The cap is only ever checked in the email loop below, so
- * counting texts against it was never the intent.
+ * Email only — the cap is enforced per channel. See send-caps.ts for why the
+ * two transports must not share one budget.
  */
-async function emailsSentTodayTotal(): Promise<number> {
-  const startOfDay = new Date();
-  startOfDay.setUTCHours(0, 0, 0, 0);
-  const [row] = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(outreachMessages)
-    .where(
-      and(
-        eq(outreachMessages.status, "sent"),
-        eq(outreachMessages.channel, "email"),
-        gte(outreachMessages.sentAt, startOfDay),
-      ),
-    );
-  return Number(row?.count ?? 0);
-}
+const emailsSentTodayTotal = () => sentTodayOnChannel("email");
 
 async function markCompanyContacted(enrollment: SequenceEnrollment): Promise<void> {
   const [company] = await db
