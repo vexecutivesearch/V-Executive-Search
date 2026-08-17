@@ -35,7 +35,7 @@ const APPLY = process.argv.includes("--apply");
  */
 const TEST_ADDRESSES = ["miguel@rxlibrary.com", "miguel@autism.one"];
 
-const BOUNCE_VIOLATION_RATE = 0.02;
+const BOUNCE_VIOLATION_RATE = 0.05; // mirrors src/lib/outreach/profiles.ts
 
 async function main() {
   console.log(APPLY ? "=== APPLYING ===\n" : "=== DRY RUN (pass --apply) ===\n");

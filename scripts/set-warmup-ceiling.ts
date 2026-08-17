@@ -23,7 +23,7 @@ const APPLY = process.argv.includes("--apply");
 const RAMP_BASE = 5;
 const RAMP_INCREMENT = 5;
 const RAMP_CEILING = 50;
-const BOUNCE_VIOLATION_RATE = 0.02;
+const BOUNCE_VIOLATION_RATE = 0.05; // mirrors src/lib/outreach/profiles.ts
 const COMPLAINT_VIOLATION_RATE = 0.001;
 /** hasViolation ignores profiles below this many sends. */
 const MIN_SENT_TO_JUDGE = 20;
@@ -40,11 +40,20 @@ function stageFor(target: number): number {
 }
 
 /** 100/day across the three domains, weighted away from the throttled one. */
-const TARGETS: Record<string, number> = {
+const DEFAULT_TARGETS: Record<string, number> = {
   "vexecsearch.com": 35,
   "vexecutivesearch.co": 35,
   "vtalentsearch.com": 30,
 };
+
+/**
+ * `--target N` applies the same ceiling to every domain, for draining a
+ * backlog. RAMP_CEILING (50) is the highest the state machine will ever award
+ * on its own, so it is the ceiling to reach for rather than exceed.
+ */
+const targetArg = process.argv.indexOf("--target");
+const UNIFORM_TARGET =
+  targetArg > -1 ? Math.max(1, Number(process.argv[targetArg + 1]) || 0) : null;
 
 async function main() {
   const rows = (await sql`
@@ -59,7 +68,7 @@ async function main() {
 
   for (const row of rows) {
     const label = String(row.label);
-    const target = TARGETS[label];
+    const target = UNIFORM_TARGET ?? DEFAULT_TARGETS[label];
     const currentCap = Math.min(
       Number(row.daily_limit),
       rampCap(Number(row.ramp_stage)),
