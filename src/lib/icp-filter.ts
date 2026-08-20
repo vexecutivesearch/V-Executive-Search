@@ -1,5 +1,6 @@
 import type { IcpStatus } from "@/lib/db/schema";
 import type { JobListing } from "@/lib/db/schema";
+import { employeeBandForVertical } from "@/lib/discovery/verticals";
 
 const STAFFING_PATTERNS = [
   "staffing",
@@ -88,17 +89,25 @@ export function hasHrOnlyListings(listings: Pick<JobListing, "title">[]): boolea
 /**
  * ICP fit — geo is handled separately via jobLocationInFocus / backlog filters.
  * Missing employee size must not auto-fail (domain backfill + rescore first).
+ *
+ * The employee band is vertical-aware: a 12-person law firm is on target for
+ * Legal (10–500) but would fail the legacy 20–500 band, and `icp_status = fail`
+ * is not cosmetic — it removes a company from the enrichment queue, outreach,
+ * and the backlog. Companies with no vertical keep the 20–500 band so the
+ * job-scrape path is unchanged.
  */
 export function evaluateIcp(input: {
   companyName: string;
   estimatedEmployees?: number | null;
   listings?: Pick<JobListing, "title">[];
+  vertical?: string | null;
 }): IcpStatus {
   if (isStaffingAgency(input.companyName)) return "fail";
 
   const employees = input.estimatedEmployees;
   if (employees != null) {
-    if (employees < 20 || employees > 500) return "fail";
+    const band = employeeBandForVertical(input.vertical);
+    if (employees < band.min || employees > band.max) return "fail";
     return "pass";
   }
 

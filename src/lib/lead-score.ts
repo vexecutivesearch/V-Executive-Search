@@ -6,6 +6,7 @@ import type {
   JobListing,
 } from "@/lib/db/schema";
 import type { pipelineSettings } from "@/lib/db/schema";
+import { employeeBandForVertical } from "@/lib/discovery/verticals";
 import { jobLocationInFocus } from "@/lib/geo-focus";
 import { signalScoreBonus } from "@/lib/hiring-signals";
 import { icpDeprioritizeScore } from "@/lib/icp-filter";
@@ -53,6 +54,79 @@ export function scoreCompanyPreEnrich(input: {
   score += icpDeprioritizeScore(input.icpStatus, input.hrOnlyDeprioritize);
 
   if (input.hasLinkedInPoster) score += 6;
+
+  return Math.min(100, Math.max(0, score));
+}
+
+/**
+ * Flags from the ICP scorer that mean "this is not a company the operator
+ * wants" — the same deterministic and near-deterministic set the CRM hide
+ * toggles use. Discovery deprioritises rather than deletes.
+ */
+const HARD_EXCLUSION_FLAGS = new Set([
+  "fortune_500",
+  "fortune_1000",
+  "known_large_private",
+  "national_retailer",
+  "staffing_agency",
+  "large_hospital_system",
+  "gov_domain",
+  "third_party_posting",
+  "public_sector",
+  "size_above_max",
+]);
+
+export type CompanyFirstScoreInput = {
+  vertical: string | null;
+  icpStatus: IcpStatus;
+  estimatedEmployees: number | null;
+  domainConfidence: string;
+  hasPhone: boolean;
+  hasLinkedIn: boolean;
+  hiringSignals: HiringSignals;
+  /** Active job listings matched to the company — a bonus, never a gate. */
+  openPositions: number;
+  exclusionFlags?: string[];
+};
+
+/**
+ * Company-first score — for companies that entered via discovery rather than a
+ * job posting. Credits what discovery actually knows (size-band fit for the
+ * vertical, vertical match, reachable phone, company LinkedIn, domain
+ * confidence) and treats job activity as an ADDITIVE bonus.
+ *
+ * `scoreCompanyPreEnrich` is job-posting-shaped: with no listings it bottoms
+ * out near 20, which would rank a qualified 12-person law firm below the
+ * Fortune 500 postings the operator is trying to escape.
+ */
+export function scoreCompanyFirst(input: CompanyFirstScoreInput): number {
+  let score = 30;
+
+  const band = employeeBandForVertical(input.vertical);
+  const employees = input.estimatedEmployees;
+  if (employees == null) {
+    // Apollo has no headcount for many small firms; unknown is not a demerit.
+    score += 6;
+  } else if (employees >= band.min && employees <= band.max) {
+    score += 18;
+  } else {
+    score -= 10;
+  }
+
+  if (input.vertical) score += 10;
+  if (input.hasPhone) score += 8;
+  if (input.hasLinkedIn) score += 6;
+  if (input.domainConfidence === "high") score += 8;
+
+  if (input.openPositions > 0) score += 8;
+  if (input.openPositions >= 3) score += 4;
+  score += Math.min(signalScoreBonus(input.hiringSignals), 12);
+
+  const flags = input.exclusionFlags ?? [];
+  if (flags.some((f) => HARD_EXCLUSION_FLAGS.has(f))) score -= 45;
+  else if (flags.length) score -= 8;
+
+  if (input.icpStatus === "fail") score -= 100;
 
   return Math.min(100, Math.max(0, score));
 }

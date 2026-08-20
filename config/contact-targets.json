@@ -49,5 +49,104 @@
   "discovery": {
     "max_candidates": 8,
     "search_per_page": 10
+  },
+  "$verticals_comment": "Company-first discovery (Feature 3). Each vertical drives THREE things: the Apollo organization-search filters (keyword tags + employee range), the vertical-aware ICP employee band, and the single decision-maker title priority used when the operator approves enrichment. contact_sector links a vertical to an existing contact_targets entry so legal keeps its firm-specific ranking.",
+  "verticals": {
+    "legal": {
+      "label": "Legal",
+      "contact_sector": "legal",
+      "employee_min": 10,
+      "employee_max": 500,
+      "apollo_keyword_tags": ["law firm", "attorney", "legal services", "litigation"],
+      "decision_maker_titles": [
+        "Managing Partner",
+        "Firm Administrator",
+        "Executive Director",
+        "HR Director",
+        "HR Manager",
+        "Recruiting Director",
+        "Recruiting Manager",
+        "Office Administrator"
+      ]
+    },
+    "finance_accounting": {
+      "label": "Finance & Accounting",
+      "employee_min": 25,
+      "employee_max": 750,
+      "apollo_keyword_tags": ["accounting", "CPA", "tax", "audit", "advisory"],
+      "decision_maker_titles": [
+        "Managing Partner",
+        "CEO",
+        "CFO",
+        "Controller",
+        "Firm Administrator",
+        "HR Director",
+        "HR Manager"
+      ]
+    },
+    "construction": {
+      "label": "Construction & Trades",
+      "employee_min": 15,
+      "employee_max": 750,
+      "apollo_keyword_tags": [
+        "roofing",
+        "HVAC",
+        "general contractor",
+        "electrical contractor",
+        "plumbing",
+        "restoration",
+        "mechanical contractor",
+        "specialty contractor"
+      ],
+      "decision_maker_titles": [
+        "Owner",
+        "President",
+        "CEO",
+        "COO",
+        "General Manager",
+        "VP Operations",
+        "HR Director",
+        "HR Manager"
+      ]
+    },
+    "general_professional": {
+      "label": "General Professional Services",
+      "employee_min": 25,
+      "employee_max": 750,
+      "apollo_keyword_tags": [
+        "professional services",
+        "business services",
+        "consulting",
+        "marketing agency",
+        "sales operations",
+        "operations consulting"
+      ],
+      "decision_maker_titles": [
+        "Owner",
+        "CEO",
+        "President",
+        "COO",
+        "HR Director",
+        "HR Manager"
+      ]
+    }
+  },
+  "$discovery_markets_comment": "Selectable per run. These never touch pipeline_settings — the job scrape keeps its own global geo focus. Any Apollo location string may also be typed in the run launcher.",
+  "discovery_markets": [
+    "Palm Beach County, Florida",
+    "Miami, Florida",
+    "Fort Lauderdale, Florida",
+    "Tampa, Florida",
+    "Orlando, Florida",
+    "Jacksonville, Florida",
+    "Dallas, Texas",
+    "Houston, Texas",
+    "Atlanta, Georgia",
+    "Charlotte, North Carolina",
+    "Nashville, Tennessee"
+  ],
+  "discovery_run_defaults": {
+    "companies_per_run": 25,
+    "include_unknown_size": true
   }
 }

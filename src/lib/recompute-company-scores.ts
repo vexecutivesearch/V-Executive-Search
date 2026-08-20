@@ -1,6 +1,6 @@
 import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { companies, contacts, jobListings } from "@/lib/db/schema";
+import { companies, companyIcp, contacts, jobListings } from "@/lib/db/schema";
 import { getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
 import {
   evaluateIcp,
@@ -11,7 +11,20 @@ import {
   detectHiringSignals,
   reasonToCallFromSignals,
 } from "@/lib/hiring-signals";
-import { scoreCompanyPostEnrich, scoreCompanyPreEnrich } from "@/lib/lead-score";
+import {
+  scoreCompanyFirst,
+  scoreCompanyPostEnrich,
+  scoreCompanyPreEnrich,
+} from "@/lib/lead-score";
+
+async function exclusionFlagsFor(companyId: string): Promise<string[]> {
+  const [row] = await db
+    .select({ flags: companyIcp.exclusionFlags })
+    .from(companyIcp)
+    .where(eq(companyIcp.companyId, companyId))
+    .limit(1);
+  return row?.flags ?? [];
+}
 
 export async function recomputeCompanyScores(
   companyIds?: string[],
@@ -37,6 +50,7 @@ export async function recomputeCompanyScores(
       companyName: company.name,
       estimatedEmployees: company.estimatedEmployees,
       listings,
+      vertical: company.vertical,
     });
 
     const hrOnly = hasHrOnlyListings(listings);
@@ -68,17 +82,31 @@ export async function recomputeCompanyScores(
         : posterReason;
     }
 
-    const preScore = scoreCompanyPreEnrich({
-      icpStatus,
-      hiringSignals: signals,
-      domainConfidence: company.domainConfidence,
-      listings,
-      geoSettings,
-      hrOnlyDeprioritize: hrOnly,
-      hasLinkedInPoster: companyContacts.some(
-        (c) => c.sourceProvider === "linkedin_poster",
-      ),
-    });
+    // Discovered companies are scored company-first: with no job posting the
+    // job-shaped path bottoms out near 20 and buries them under scraped noise.
+    const preScore = company.vertical
+      ? scoreCompanyFirst({
+          vertical: company.vertical,
+          icpStatus,
+          estimatedEmployees: company.estimatedEmployees,
+          domainConfidence: company.domainConfidence,
+          hasPhone: Boolean(company.phone),
+          hasLinkedIn: Boolean(company.linkedinUrl),
+          hiringSignals: signals,
+          openPositions: listings.filter((l) => !l.archivedAt).length,
+          exclusionFlags: await exclusionFlagsFor(company.id),
+        })
+      : scoreCompanyPreEnrich({
+          icpStatus,
+          hiringSignals: signals,
+          domainConfidence: company.domainConfidence,
+          listings,
+          geoSettings,
+          hrOnlyDeprioritize: hrOnly,
+          hasLinkedInPoster: companyContacts.some(
+            (c) => c.sourceProvider === "linkedin_poster",
+          ),
+        });
 
     const leadScore =
       companyContacts.length > 0
