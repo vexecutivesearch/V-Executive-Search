@@ -1,0 +1,273 @@
+"use client";
+
+import { useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import type { CompanyReviewStatus } from "@/lib/db/schema";
+import type { ReviewQueueRow } from "@/lib/discovery/review-queue";
+
+const REVIEW_ACTIONS: Array<{
+  status: CompanyReviewStatus;
+  label: string;
+  tone: "neutral" | "danger";
+}> = [
+  { status: "rejected", label: "Reject", tone: "danger" },
+  { status: "review_later", label: "Review later", tone: "neutral" },
+  { status: "already_contacted", label: "Already contacted", tone: "neutral" },
+  { status: "existing_client", label: "Existing client", tone: "neutral" },
+  { status: "do_not_contact", label: "Do not contact", tone: "danger" },
+];
+
+const STATUS_LABELS: Record<CompanyReviewStatus, string> = {
+  pending: "Pending review",
+  approved: "Approved",
+  rejected: "Rejected",
+  review_later: "Review later",
+  already_contacted: "Already contacted",
+  existing_client: "Existing client",
+  do_not_contact: "Do not contact",
+};
+
+function linkedInHref(url: string): string {
+  return url.startsWith("http") ? url : `https://${url.replace(/^\/+/, "")}`;
+}
+
+export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Phone is an explicit opt-in: an Apollo fallback mobile is 9 credits
+  // against 1 for an email, and this flow buys exactly one contact.
+  const [includePhone, setIncludePhone] = useState(false);
+
+  async function review(status: CompanyReviewStatus) {
+    setBusy(status);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/companies/${row.id}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const data = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setError(data.error ?? "Review failed");
+        return;
+      }
+      setNotice(`Marked ${STATUS_LABELS[status].toLowerCase()}`);
+      router.refresh();
+    } catch {
+      setError("Network error — review not saved");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function enrich(additional: boolean) {
+    setBusy(additional ? "additional" : "approve");
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/companies/${row.id}/approve-enrichment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ include_phone: includePhone, additional }),
+      });
+      const data = (await res.json()) as { message?: string; error?: string };
+      if (!res.ok) {
+        setError(data.error ?? "Enrichment failed");
+        return;
+      }
+      setNotice(data.message ?? "Enriched");
+      router.refresh();
+    } catch {
+      setError("Network error — enrichment did not run");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const sizeLabel =
+    row.estimatedEmployees == null
+      ? "size unknown"
+      : `${row.estimatedEmployees.toLocaleString()} employees`;
+  const location = [row.city, row.stateAbbr ?? row.state]
+    .filter(Boolean)
+    .join(", ");
+
+  return (
+    <article className="border border-gray-200 dark:border-gray-800 rounded-xl p-4 bg-white dark:bg-gray-950">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href={`/companies/${row.id}`}
+              className="font-semibold hover:underline break-words"
+            >
+              {row.name}
+            </Link>
+            {row.verticalLabel && (
+              <span className="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 dark:bg-blue-950/50 dark:text-blue-200">
+                {row.verticalLabel}
+              </span>
+            )}
+            {row.sizeUnknown && (
+              <span
+                className="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200"
+                title="Apollo has no headcount for this company — surfaced rather than filtered out"
+              >
+                size unknown
+              </span>
+            )}
+            {row.reviewStatus !== "pending" && (
+              <span className="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">
+                {STATUS_LABELS[row.reviewStatus]}
+              </span>
+            )}
+          </div>
+
+          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+            {[row.industry ?? "Industry unknown", location || "Location unknown", sizeLabel]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+
+          <p className="text-xs text-gray-500 mt-1 flex flex-wrap gap-x-3 gap-y-1">
+            {row.website ? (
+              <a
+                href={row.website}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                {row.domain}
+              </a>
+            ) : (
+              <span>no website</span>
+            )}
+            {row.phone ? <span>☎ {row.phone}</span> : <span>no main phone</span>}
+            {row.linkedinUrl ? (
+              <a
+                href={linkedInHref(row.linkedinUrl)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                Company LinkedIn →
+              </a>
+            ) : (
+              <span>no LinkedIn</span>
+            )}
+            {row.market && <span>{row.market}</span>}
+          </p>
+
+          <p className="text-xs mt-1">
+            {row.jobSignal.label ? (
+              <span className="text-green-700 dark:text-green-400">
+                {row.jobSignal.openPositions} open position
+                {row.jobSignal.openPositions === 1 ? "" : "s"} ·{" "}
+                {row.jobSignal.label}
+              </span>
+            ) : (
+              <span className="text-gray-500">
+                No job postings on file — hiring is a signal, not a requirement
+              </span>
+            )}
+          </p>
+
+          {row.icpFlags.length > 0 && (
+            <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+              ICP flags: {row.icpFlags.join(", ")}
+            </p>
+          )}
+
+          {row.primaryContact && (
+            <p className="text-xs text-gray-700 dark:text-gray-300 mt-1.5">
+              {row.primaryContact.name}
+              {row.primaryContact.title ? ` · ${row.primaryContact.title}` : ""}
+              {row.primaryContact.email ? ` · ${row.primaryContact.email}` : ""}
+              {row.primaryContact.emailDeliverable === true
+                ? " (verified)"
+                : row.primaryContact.emailDeliverable === false
+                  ? " (unverified)"
+                  : ""}
+              {row.primaryContact.phone ? ` · ${row.primaryContact.phone}` : ""}
+            </p>
+          )}
+        </div>
+
+        <div className="text-right shrink-0">
+          <p className="text-sm font-semibold tabular-nums">
+            {row.leadScore}
+            <span className="text-xs font-normal text-gray-500"> score</span>
+          </p>
+          {row.icpAdjustedScore != null && (
+            <p className="text-xs text-gray-500 tabular-nums">
+              ICP {row.icpAdjustedScore}
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => enrich(false)}
+          title="Reveals exactly ONE top-ranked decision-maker, verifies the email, then stops"
+          className="px-3 py-1.5 rounded-md text-sm font-medium bg-green-700 text-white hover:bg-green-800 disabled:opacity-50"
+        >
+          {busy === "approve" ? "Enriching…" : "Approve for enrichment"}
+        </button>
+
+        {row.revealedContactCount > 0 && (
+          <button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => enrich(true)}
+            className="px-3 py-1.5 rounded-md text-sm font-medium border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50"
+          >
+            {busy === "additional" ? "Finding…" : "Find additional contact"}
+          </button>
+        )}
+
+        <label className="inline-flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={includePhone}
+            onChange={(e) => setIncludePhone(e.target.checked)}
+            className="rounded border-gray-300"
+          />
+          Also reveal phone (+8 credits if Apollo supplies the mobile)
+        </label>
+
+        <span className="mx-1 h-4 w-px bg-gray-200 dark:bg-gray-700" aria-hidden />
+
+        {REVIEW_ACTIONS.map((action) => (
+          <button
+            key={action.status}
+            type="button"
+            disabled={busy !== null}
+            onClick={() => review(action.status)}
+            className={`px-2.5 py-1 rounded-md text-xs border disabled:opacity-50 ${
+              action.tone === "danger"
+                ? "border-red-200 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
+                : "border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-900"
+            }`}
+          >
+            {busy === action.status ? "Saving…" : action.label}
+          </button>
+        ))}
+      </div>
+
+      {notice && (
+        <p className="text-xs text-green-700 dark:text-green-400 mt-2">{notice}</p>
+      )}
+      {error && (
+        <p className="text-xs text-red-700 dark:text-red-400 mt-2">{error}</p>
+      )}
+    </article>
+  );
+}

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { CrmFilterBar } from "@/components/crm/CrmFilterBar";
 import { CrmLeadsList } from "@/components/crm/CrmLeadsList";
+import { DiscoveryReviewList } from "@/components/crm/DiscoveryReviewList";
 import { CrmListingsList } from "@/components/crm/CrmListingsList";
 import { CallListView } from "@/components/crm/CallListView";
 import { KpiCards } from "@/components/crm/KpiCards";
@@ -20,12 +21,23 @@ import {
   type CrmListingSort,
   type CrmSort,
 } from "@/lib/crm-queries";
-import type { CompanyStatus } from "@/lib/db/schema";
+import {
+  companyReviewStatusEnum,
+  type CompanyReviewStatus,
+  type CompanyStatus,
+} from "@/lib/db/schema";
+import {
+  getReviewQueue,
+  getReviewQueueCounts,
+  getReviewQueueFacets,
+  type ReviewQueueCounts,
+  type ReviewQueueResult,
+} from "@/lib/discovery/review-queue";
 import { businessListDate } from "@/lib/timezone";
 
 export const dynamic = "force-dynamic";
 
-type CrmTab = "all" | "listings" | "call-list" | "hot";
+type CrmTab = "all" | "listings" | "call-list" | "hot" | "discovery";
 
 const COMPANY_STATUSES = new Set(["new", "contacted", "meeting", "client", "skipped"]);
 const SORTS = new Set(["icp", "score", "recent", "name"]);
@@ -48,9 +60,16 @@ const ROLE_TYPES = new Set([
   "unknown",
 ]);
 const SIZE_BANDS = new Set(["micro", "small", "mid", "large", "unknown"]);
+const REVIEW_STATUSES = new Set<string>(companyReviewStatusEnum.enumValues);
 
 type CrmSearchParams = {
   tab?: string;
+  /** Discovery review bucket (pending by default). */
+  review?: string;
+  /** Discovery vertical filter. */
+  vertical?: string;
+  /** Discovery market filter — separate from the legacy `market` param. */
+  dmarket?: string;
   market?: string;
   state?: string;
   city?: string;
@@ -75,7 +94,15 @@ function parseTab(raw: string | undefined): CrmTab {
   if (raw === "call-list") return "call-list";
   if (raw === "hot") return "hot";
   if (raw === "listings") return "listings";
+  if (raw === "discovery") return "discovery";
   return "all";
+}
+
+function parseReviewStatus(raw: string | undefined): CompanyReviewStatus | "all" {
+  if (raw === "all") return "all";
+  return REVIEW_STATUSES.has(raw ?? "")
+    ? (raw as CompanyReviewStatus)
+    : "pending";
 }
 
 function parseFilters(params: CrmSearchParams): CrmLeadFilters {
@@ -126,6 +153,10 @@ export default async function CrmPage({
   let leads: CrmLeadsResult | null = null;
   let listings: CrmListingsResult | null = null;
   let callListItems: CallListItem[] | null = null;
+  let review: ReviewQueueResult | null = null;
+  let reviewCounts: ReviewQueueCounts | null = null;
+  let reviewFacets: { verticals: string[]; markets: string[] } | null = null;
+  const reviewStatus = parseReviewStatus(params.review);
   try {
     [filterOptions, counts, kpis, rail] = await Promise.all([
       getCrmFilterOptions(),
@@ -133,7 +164,21 @@ export default async function CrmPage({
       getCrmKpis(businessListDate()),
       getLocationRailCounts(),
     ]);
-    if (tab === "call-list") {
+    if (tab === "discovery") {
+      [review, reviewCounts, reviewFacets] = await Promise.all([
+        getReviewQueue({
+          reviewStatus,
+          vertical: params.vertical?.trim() || undefined,
+          market: params.dmarket?.trim() || undefined,
+          state: filters.state,
+          city: filters.city,
+          search: filters.search,
+          page: filters.page,
+        }),
+        getReviewQueueCounts(),
+        getReviewQueueFacets(),
+      ]);
+    } else if (tab === "call-list") {
       callListItems = await getCallListItems();
     } else if (tab === "listings") {
       listings = await getConsolidatedListings({
@@ -216,6 +261,26 @@ export default async function CrmPage({
     return s ? `/crm?${s}` : "/crm";
   }
 
+  /** Discovery keeps its own bucket/vertical/market params alongside the shared ones. */
+  function discoveryHref(changes: Record<string, string | null>): string {
+    const qs = new URLSearchParams();
+    qs.set("tab", "discovery");
+    const current: Record<string, string | undefined> = {
+      review: params.review,
+      vertical: params.vertical,
+      dmarket: params.dmarket,
+      state: params.state,
+      city: params.city,
+      q: params.q,
+      page: params.page,
+    };
+    for (const [key, value] of Object.entries({ ...current, ...changes })) {
+      if (value) qs.set(key, value);
+      else qs.delete(key);
+    }
+    return `/crm?${qs.toString()}`;
+  }
+
   function locationHref(state: string | null, city?: string | null): string {
     const qs = new URLSearchParams();
     for (const [key, value] of Object.entries(carriedFilterEntries)) {
@@ -263,8 +328,15 @@ export default async function CrmPage({
           <Link href={tabHref("hot")} className={tabClass(tab === "hot")}>
             Hot ({counts!.hot.toLocaleString()})
           </Link>
+          <Link
+            href={tabHref("discovery")}
+            className={tabClass(tab === "discovery")}
+          >
+            Discovery review
+            {reviewCounts ? ` (${reviewCounts.pending.toLocaleString()})` : ""}
+          </Link>
         </div>
-        {tab === "call-list" ? (
+        {tab === "call-list" || tab === "discovery" ? (
           <a
             href="/api/export/csv?type=call-list"
             download
@@ -289,7 +361,19 @@ export default async function CrmPage({
         )}
 
         <div className="flex-1 min-w-0">
-          {tab === "call-list" ? (
+          {tab === "discovery" ? (
+            <DiscoveryReviewList
+              result={review!}
+              counts={reviewCounts!}
+              facets={reviewFacets!}
+              active={{
+                reviewStatus,
+                vertical: params.vertical ?? "",
+                market: params.dmarket ?? "",
+              }}
+              buildHref={discoveryHref}
+            />
+          ) : tab === "call-list" ? (
             <CallListView items={callListItems!} />
           ) : tab === "listings" ? (
             <CrmListingsList
