@@ -20,6 +20,8 @@ import {
 } from "@/lib/crm-queries";
 import { CALL_STATUS_LABELS } from "@/lib/call-status";
 import { compareContactsForOutreach } from "@/lib/contact-title-priority";
+import { summarizeJobSignals } from "@/lib/discovery/job-signals";
+import { getVerticalConfig } from "@/lib/discovery/verticals";
 import { parseJobLocation } from "@/lib/location-match";
 import { formatListingSalary, pickDisplayListing } from "@/lib/salary-format";
 import { businessListDate } from "@/lib/timezone";
@@ -238,16 +240,21 @@ export function exportFilename(
 const CALL_LIST_HEADERS = [
   "company_name",
   "industry",
+  "vertical",
   "city",
   "state",
   "market",
+  "company_size",
+  "open_positions",
   "open_position",
+  "hiring_signals",
   "salary",
   "contact_name",
   "contact_title",
   "verified_email",
   "direct_phone",
   "main_company_phone",
+  "company_linkedin",
   "linkedin_profile",
   "opportunity_score",
   "outreach_angle",
@@ -284,15 +291,29 @@ export async function buildCallListCsv(): Promise<string> {
     const companyPhone =
       phones.find((p) => p.kind === "company")?.number ??
       primaryContact?.companyPhone ??
+      company.phone ??
       "";
+    const jobSignal = summarizeJobSignals(company.jobListings);
 
     return {
       company_name: company.name,
       industry: company.industry ?? "",
-      city: parsedLocation?.city ?? "",
-      state: parsedLocation?.stateAbbr ?? parsedLocation?.stateName ?? "",
+      vertical: getVerticalConfig(company.vertical)?.label ?? company.vertical ?? "",
+      // Discovered companies have an Apollo HQ; scraped ones only have a job location.
+      city: parsedLocation?.city ?? company.city ?? "",
+      state:
+        parsedLocation?.stateAbbr ??
+        parsedLocation?.stateName ??
+        company.state ??
+        "",
       market: marketLabel ?? "",
+      company_size:
+        company.estimatedEmployees == null
+          ? "size unknown"
+          : String(company.estimatedEmployees),
+      open_positions: jobSignal.openPositions,
       open_position: job?.title ?? "",
+      hiring_signals: jobSignal.label ?? "",
       salary: salaryJob ? (formatListingSalary(salaryJob) ?? "") : "",
       contact_name: primaryContact?.name ?? "",
       contact_title: primaryContact?.title ?? "",
@@ -303,6 +324,7 @@ export async function buildCallListCsv(): Promise<string> {
         : "",
       direct_phone: directPhone,
       main_company_phone: companyPhone,
+      company_linkedin: company.linkedinUrl ?? "",
       linkedin_profile: primaryContact?.linkedinUrl ?? "",
       opportunity_score: company.leadScore ?? 0,
       outreach_angle: entry.outreachAngle ?? company.reasonToCall ?? "",
