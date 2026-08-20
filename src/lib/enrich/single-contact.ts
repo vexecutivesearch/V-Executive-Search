@@ -16,7 +16,6 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { companies, contacts } from "@/lib/db/schema";
 import { verifyContactEmail } from "@/lib/email-verify";
-import { titlePriorityRank } from "@/lib/enrich/contact-targets";
 import {
   discoverCompanyContacts,
   getCachedCandidates,
@@ -252,6 +251,3 @@ export async function revealSingleDecisionMaker(options: {
     message: parts.join(" · "),
   };
 }
-
-/** Re-exported so the picker and this flow rank titles the same way. */
-export { titlePriorityRank };

@@ -251,7 +251,14 @@ export default async function CrmPage({
   function tabHref(nextTab: CrmTab): string {
     const qs = new URLSearchParams();
     // Filters carry across the data tabs; the Call List is a curated queue.
-    if (nextTab !== "call-list") {
+    // Discovery review only filters on location and search, so carrying the
+    // job-shaped filters would show an active filter that does nothing.
+    if (nextTab === "discovery") {
+      for (const key of ["state", "city", "q"] as const) {
+        const value = carriedFilterEntries[key];
+        if (value) qs.set(key, value);
+      }
+    } else if (nextTab !== "call-list") {
       for (const [key, value] of Object.entries(carriedFilterEntries)) {
         if (value) qs.set(key, value);
       }
@@ -283,7 +290,11 @@ export default async function CrmPage({
 
   function locationHref(state: string | null, city?: string | null): string {
     const qs = new URLSearchParams();
-    for (const [key, value] of Object.entries(carriedFilterEntries)) {
+    const carried: Record<string, string | undefined> =
+      tab === "discovery"
+        ? { q: params.q, review: params.review, vertical: params.vertical, dmarket: params.dmarket }
+        : carriedFilterEntries;
+    for (const [key, value] of Object.entries(carried)) {
       if (value && key !== "market" && key !== "state" && key !== "city") {
         qs.set(key, value);
       }
@@ -362,6 +373,29 @@ export default async function CrmPage({
 
         <div className="flex-1 min-w-0">
           {tab === "discovery" ? (
+            <>
+            <CrmFilterBar
+              options={filterOptions!}
+              tab={tab}
+              variant="discovery"
+              active={{
+                state: params.state ?? "",
+                city: params.city ?? "",
+                sector: "",
+                status: "",
+                q: params.q ?? "",
+                callable: false,
+                enriched: false,
+                discovered: false,
+                role: "",
+                size: "",
+                comp: "",
+                includeEstimated: true,
+                icpMin: "",
+                hide: [],
+                sort: "icp",
+              }}
+            />
             <DiscoveryReviewList
               result={review!}
               counts={reviewCounts!}
@@ -373,6 +407,7 @@ export default async function CrmPage({
               }}
               buildHref={discoveryHref}
             />
+            </>
           ) : tab === "call-list" ? (
             <CallListView items={callListItems!} />
           ) : tab === "listings" ? (
