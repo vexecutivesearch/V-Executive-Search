@@ -39,6 +39,20 @@ export function candidateKey(org: {
 }
 
 /**
+ * Every key a company can collide on. Apollo happily returns the same firm
+ * twice with a domain on one row and nothing on the other, so a domain match
+ * alone is not enough to dedupe a batch.
+ */
+function candidateKeys(org: { domain: string | null; name: string }): string[] {
+  const keys: string[] = [];
+  const domain = org.domain?.trim().toLowerCase();
+  if (domain) keys.push(`domain:${domain}`);
+  const nameKey = normalizeCompanyKey(org.name);
+  if (nameKey) keys.push(`name:${nameKey}`);
+  return keys;
+}
+
+/**
  * Merge the two Apollo passes into one review batch.
  *
  * The size-filtered pass is authoritative; the second pass exists only because
@@ -64,31 +78,33 @@ export function selectDiscoveryCandidates(input: {
   const excluded = input.excludeKeys ?? new Set<string>();
   let duplicatesSkipped = 0;
 
-  const take = (orgs: DiscoveredOrganization[], max: number, unknownOnly: boolean) => {
+  const dedupe = (orgs: DiscoveredOrganization[], unknownOnly: boolean) => {
     const out: DiscoveryCandidate[] = [];
     for (const org of orgs) {
-      if (out.length >= max) break;
       if (unknownOnly && org.estimatedEmployees != null) continue;
-      const key = candidateKey(org);
-      if (seen.has(key) || excluded.has(key)) {
+      const keys = candidateKeys(org);
+      if (!keys.length) continue;
+      if (keys.some((key) => seen.has(key) || excluded.has(key))) {
         duplicatesSkipped += 1;
         continue;
       }
-      seen.add(key);
+      for (const key of keys) seen.add(key);
       out.push(toCandidate(org, input.vertical));
     }
     return out;
   };
 
-  // Reserve a fifth of the batch for unknown-headcount firms.
+  const sizedPool = dedupe(input.sized, false);
+  const unknownPool = dedupe(input.unknownSize, true);
+
+  // Reserve a fifth of the batch for unknown-headcount firms so they are never
+  // crowded out, then hand any unused reserve back to the sized pool.
   const unknownReserve = limit > 0 ? Math.max(1, Math.ceil(limit / 5)) : 0;
-  const sized = take(input.sized, Math.max(0, limit - unknownReserve), false);
-  const unknown = take(input.unknownSize, Math.max(0, limit - sized.length), true);
-  // Backfill with sized results when the unknown pass came back thin.
-  const backfill = take(
-    input.sized,
-    Math.max(0, limit - sized.length - unknown.length),
-    false,
+  const sized = sizedPool.slice(0, Math.max(0, limit - unknownReserve));
+  const unknown = unknownPool.slice(0, Math.max(0, limit - sized.length));
+  const backfill = sizedPool.slice(
+    sized.length,
+    sized.length + Math.max(0, limit - sized.length - unknown.length),
   );
 
   const candidates = [...sized, ...backfill, ...unknown];
