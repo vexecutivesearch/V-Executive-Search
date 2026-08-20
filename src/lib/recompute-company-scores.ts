@@ -17,15 +17,6 @@ import {
   scoreCompanyPreEnrich,
 } from "@/lib/lead-score";
 
-async function exclusionFlagsFor(companyId: string): Promise<string[]> {
-  const [row] = await db
-    .select({ flags: companyIcp.exclusionFlags })
-    .from(companyIcp)
-    .where(eq(companyIcp.companyId, companyId))
-    .limit(1);
-  return row?.flags ?? [];
-}
-
 export async function recomputeCompanyScores(
   companyIds?: string[],
 ): Promise<{ scored: number; icpMatch: number }> {
@@ -37,6 +28,22 @@ export async function recomputeCompanyScores(
         .from(companies)
         .where(inArray(companies.id, companyIds))
     : await db.select().from(companies).where(eq(companies.status, "new"));
+
+  // Only the company-first path reads exclusion flags, so this is scoped to
+  // companies that carry a vertical.
+  const discoveredIds = companyRows.filter((c) => c.vertical).map((c) => c.id);
+  const flagRows = discoveredIds.length
+    ? await db
+        .select({
+          companyId: companyIcp.companyId,
+          flags: companyIcp.exclusionFlags,
+        })
+        .from(companyIcp)
+        .where(inArray(companyIcp.companyId, discoveredIds))
+    : [];
+  const flagsByCompany = new Map(
+    flagRows.map((row) => [row.companyId, row.flags ?? []]),
+  );
 
   let icpMatch = 0;
 
@@ -94,7 +101,7 @@ export async function recomputeCompanyScores(
           hasLinkedIn: Boolean(company.linkedinUrl),
           hiringSignals: signals,
           openPositions: listings.filter((l) => !l.archivedAt).length,
-          exclusionFlags: await exclusionFlagsFor(company.id),
+          exclusionFlags: flagsByCompany.get(company.id) ?? [],
         })
       : scoreCompanyPreEnrich({
           icpStatus,
