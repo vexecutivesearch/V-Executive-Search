@@ -12,6 +12,7 @@ import {
   listVerticals,
 } from "@/lib/discovery/verticals";
 import { PaidEgressBlockedError } from "@/lib/paid-egress";
+import { discoverySourceStatus } from "@/lib/discovery/source-status";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,17 +27,21 @@ export async function GET() {
     // The launcher still works before the discovery table exists.
     console.error("Discovery pool status unavailable:", err);
   }
+  const verticals = listVerticals().map(({ id, config }) => ({
+    id,
+    label: config.label,
+    employeeMin: config.employee_min,
+    employeeMax: config.employee_max,
+    keywords: config.apollo_keyword_tags,
+  }));
   return NextResponse.json({
-    verticals: listVerticals().map(({ id, config }) => ({
-      id,
-      label: config.label,
-      employeeMin: config.employee_min,
-      employeeMax: config.employee_max,
-      keywords: config.apollo_keyword_tags,
-    })),
+    verticals,
     markets: discoveryMarkets(),
     defaults: discoveryRunDefaults(),
     pools,
+    sourcesByVertical: Object.fromEntries(
+      verticals.map((v) => [v.id, discoverySourceStatus(v.id)]),
+    ),
   });
 }
 

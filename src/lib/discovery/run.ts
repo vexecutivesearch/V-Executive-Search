@@ -45,6 +45,7 @@ import {
   type GateDecision,
 } from "./exclusion-gate";
 import { summarizeJobSignals, type JobSignalSummary } from "./job-signals";
+import { marketProgress } from "./run-progress";
 import {
   advanceCursor,
   DISCOVERY_APOLLO_PER_PAGE,
@@ -194,7 +195,13 @@ export type DiscoveryRunSummary = {
   allowLargeCompanies: boolean;
   withJobSignals: number;
   pools: Record<DiscoveryPool, PoolStatus>;
+  /**
+   * True only when every pool we would search is empty. Historically this
+   * mirrored the sized pool alone, which told the operator to rotate a market
+   * that still had hundreds of unpaged rows.
+   */
   poolExhausted: boolean;
+  canFindMore: boolean;
   notes: string[];
   companies: DiscoveryRunResultCompany[];
 };
@@ -937,9 +944,21 @@ export async function runCompanyDiscovery(
     sized: poolStatus(nextSizedCursor),
     unknown_size: poolStatus(nextUnknownCursor),
   };
-  if (pools.sized.exhausted) {
+  const progress = marketProgress({
+    sized: pools.sized,
+    unknown: pools.unknown_size,
+    includeUnknown: includeUnknownSize,
+  });
+  if (pools.sized.exhausted && progress.canFindMore) {
     notes.push(
-      `Sized pool exhausted for ${verticalConfig.label} in ${market} — rotate market.`,
+      `Apollo is out of companies it already has a headcount for in ${market}. ` +
+        `${pools.unknown_size.remaining ?? "More"} rows remain on the unfiltered ` +
+        "pass — Find again to keep going. That is not the market running dry.",
+    );
+  } else if (progress.marketExhausted) {
+    notes.push(
+      `Both Apollo passes for ${verticalConfig.label} in ${market} are empty. ` +
+        "Reset this market to start over, or pick another market.",
     );
   }
   const rejectionNote = describeGateRejections(gateRejectionsByReason);
@@ -1020,7 +1039,8 @@ export async function runCompanyDiscovery(
     withJobSignals: resultCompanies.filter((c) => c.jobSignal.openPositions > 0)
       .length,
     pools,
-    poolExhausted: pools.sized.exhausted,
+    poolExhausted: progress.marketExhausted,
+    canFindMore: progress.canFindMore,
     notes,
     companies: resultCompanies,
   };
