@@ -67,10 +67,16 @@ export function CrmFilterBar({
   options,
   tab,
   active,
+  variant = "full",
 }: {
   options: CrmFilterOptions;
-  tab: "all" | "hot";
+  tab: "all" | "hot" | "discovery";
   active: CrmActiveFilters;
+  /**
+   * "discovery" hides the controls the review queue does not filter on, so the
+   * bar never shows a filter that silently does nothing.
+   */
+  variant?: "full" | "discovery";
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -191,6 +197,8 @@ export function CrmFilterBar({
           ))}
         </select>
 
+        {variant === "full" && (
+        <>
         <select
           value={active.sector}
           onChange={(e) => apply({ sector: e.target.value || null })}
@@ -262,12 +270,20 @@ export function CrmFilterBar({
           <option value="recent">Sort: Recently updated</option>
           <option value="name">Sort: Name</option>
         </select>
+        </>
+        )}
 
         {hasActiveFilters && (
           <button
             type="button"
             onClick={() =>
-              router.push(tab === "hot" ? "/crm?tab=hot" : "/crm")
+              router.push(
+                tab === "hot"
+                  ? "/crm?tab=hot"
+                  : tab === "discovery"
+                    ? "/crm?tab=discovery"
+                    : "/crm",
+              )
             }
             className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
           >
@@ -276,7 +292,8 @@ export function CrmFilterBar({
         )}
       </div>
 
-      {/* ICP annotation filters — reversible view state, never data changes. */}
+      {variant === "full" && (
+      /* ICP annotation filters — reversible view state, never data changes. */
       <div className={`${controlRowClass(filtersOpen)} mt-2`}>
         <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500">
           ICP
@@ -395,6 +412,7 @@ export function CrmFilterBar({
           </div>
         </details>
       </div>
+      )}
     </div>
   );
 }

@@ -36,6 +36,22 @@ export const geographicScopeEnum = pgEnum("geographic_scope", [
 
 export const icpStatusEnum = pgEnum("icp_status", ["pass", "fail", "unknown"]);
 
+/**
+ * Operator review state for company-first discovery. Deliberately SEPARATE
+ * from companyStatusEnum: outreach enrollment gates on `status = 'new'`, so
+ * overloading that enum with review states would silently stop enrollment.
+ * Null = never went through the review queue (every job-scraped company).
+ */
+export const companyReviewStatusEnum = pgEnum("company_review_status", [
+  "pending",
+  "approved",
+  "rejected",
+  "review_later",
+  "already_contacted",
+  "existing_client",
+  "do_not_contact",
+]);
+
 export type HiringSignalKey =
   | "reposted_role"
   | "multiple_openings"
@@ -227,6 +243,19 @@ export const companies = pgTable("companies", {
   icpStatus: icpStatusEnum("icp_status").default("unknown").notNull(),
   estimatedEmployees: integer("estimated_employees"),
   industry: text("industry"),
+  /** Main company line from Apollo organization search (not a contact phone). */
+  phone: text("phone"),
+  linkedinUrl: text("linkedin_url"),
+  /** Discovery vertical (legal, finance_accounting, …); null = job-scraped. */
+  vertical: text("vertical"),
+  city: text("city"),
+  state: text("state"),
+  /**
+   * Review-queue state. Null for every pre-discovery row so existing pipeline
+   * behaviour is untouched; discovery stamps 'pending' on what it inserts.
+   */
+  reviewStatus: companyReviewStatusEnum("review_status"),
+  reviewStatusUpdatedAt: timestamp("review_status_updated_at"),
   enrichedAt: timestamp("enriched_at"),
   enrichRunDate: date("enrich_run_date"),
   /**
@@ -244,6 +273,48 @@ export const companies = pgTable("companies", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+/**
+ * Pagination state for company-first discovery — "25 new per day" is a
+ * sustained rate against a finite pool (a single county's law firms are a few
+ * hundred companies), so day 2 must not re-return day 1.
+ *
+ * One row per (vertical, market, pool). `pool` splits the size-filtered query
+ * from the companion query that surfaces unknown-headcount companies: Apollo's
+ * `organization_num_employees_ranges` filter drops companies it has no
+ * headcount for, and those are exactly the small firms the operator wants.
+ * The two queries page independently, so they need independent cursors.
+ */
+export const companyDiscoveryRuns = pgTable(
+  "company_discovery_runs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    vertical: text("vertical").notNull(),
+    market: text("market").notNull(),
+    /** 'sized' | 'unknown_size' */
+    pool: text("pool").default("sized").notNull(),
+    /** Apollo page size this cursor was built with — the offset depends on it. */
+    perPage: integer("per_page").default(25).notNull(),
+    /** Apollo organizations consumed so far; the page offset derives from this. */
+    consumed: integer("consumed").default(0).notNull(),
+    /** Apollo pagination.total_entries — the pool size for this filter set. */
+    totalEntries: integer("total_entries"),
+    pagesFetched: integer("pages_fetched").default(0).notNull(),
+    /** Set when Apollo has no more results — rotate market. */
+    poolExhausted: boolean("pool_exhausted").default(false).notNull(),
+    lastRunAt: timestamp("last_run_at"),
+    lastReturned: integer("last_returned").default(0).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("company_discovery_runs_vertical_market_pool_uq").on(
+      table.vertical,
+      table.market,
+      table.pool,
+    ),
+  ],
+);
 
 export const contacts = pgTable("contacts", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -828,6 +899,9 @@ export type CallStatus = (typeof callStatusEnum.enumValues)[number];
 export type CompanyStatus = (typeof companyStatusEnum.enumValues)[number];
 export type GeographicScope = (typeof geographicScopeEnum.enumValues)[number];
 export type IcpStatus = (typeof icpStatusEnum.enumValues)[number];
+export type CompanyReviewStatus =
+  (typeof companyReviewStatusEnum.enumValues)[number];
+export type CompanyDiscoveryRun = typeof companyDiscoveryRuns.$inferSelect;
 
 export type OutreachTemplate = typeof outreachTemplates.$inferSelect;
 export type SequenceEnrollment = typeof sequenceEnrollments.$inferSelect;

@@ -26,6 +26,12 @@ export interface CompanyCardData {
   enrichRunDate?: string | null;
   /** Market active when scraped (e.g. "Charlotte, NC") — CRM provenance tag. */
   sourceMarket?: string | null;
+  /** Company-first discovery fields (Apollo organization search). */
+  phone?: string | null;
+  linkedinUrl?: string | null;
+  vertical?: string | null;
+  city?: string | null;
+  state?: string | null;
   contacts: Contact[];
   jobListings: JobListing[];
 }

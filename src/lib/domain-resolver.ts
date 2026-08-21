@@ -53,10 +53,19 @@ function parseEmployees(value: unknown): number | null {
 }
 
 type ApolloOrg = {
+  name?: string;
   primary_domain?: string;
   website_url?: string;
   industry?: string;
   estimated_num_employees?: number | string;
+  primary_phone?: { number?: string; sanitized_number?: string } | string;
+  sanitized_phone?: string;
+  phone?: string;
+  linkedin_url?: string;
+  founded_year?: number | string;
+  city?: string;
+  state?: string;
+  country?: string;
 };
 
 function parseApolloOrg(org: ApolloOrg): OrgLookupResult {
@@ -135,6 +144,159 @@ export async function resolveCompanyOrg(
     confidence: "low",
     industry: null,
     estimatedEmployees: null,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Company-first discovery — filter-based organization search          */
+/* ------------------------------------------------------------------ */
+
+export type DiscoveredOrganization = {
+  name: string;
+  domain: string | null;
+  websiteUrl: string | null;
+  industry: string | null;
+  estimatedEmployees: number | null;
+  phone: string | null;
+  linkedinUrl: string | null;
+  foundedYear: number | null;
+  city: string | null;
+  state: string | null;
+  domainConfidence: DomainConfidence;
+};
+
+export type OrganizationSearchResult = {
+  organizations: DiscoveredOrganization[];
+  page: number;
+  perPage: number;
+  totalEntries: number | null;
+  totalPages: number | null;
+};
+
+export type OrganizationSearchOptions = {
+  apiKey: string;
+  /** Apollo `organization_locations[]` — the market for THIS run only. */
+  locations: string[];
+  notLocations?: string[];
+  keywordTags?: string[];
+  /** Omit to search without a headcount filter (surfaces unknown headcount). */
+  employeeRange?: string | null;
+  page?: number;
+  perPage?: number;
+  context?: PaidEgressContext;
+  /** Free-text label recorded on the usage event (vertical/market). */
+  usageLabel?: string;
+};
+
+function apolloPhone(org: ApolloOrg): string | null {
+  const primary =
+    typeof org.primary_phone === "string"
+      ? org.primary_phone
+      : (org.primary_phone?.sanitized_number ?? org.primary_phone?.number);
+  const raw = primary ?? org.sanitized_phone ?? org.phone;
+  return raw?.trim() || null;
+}
+
+function parseDiscoveredOrg(org: ApolloOrg): DiscoveredOrganization | null {
+  const name = org.name?.trim();
+  if (!name) return null;
+  const parsed = parseApolloOrg(org);
+  const foundedYear = parseEmployees(org.founded_year);
+  return {
+    name,
+    domain: parsed.domain,
+    websiteUrl: org.website_url?.trim() || null,
+    industry: parsed.industry,
+    estimatedEmployees: parsed.estimatedEmployees,
+    phone: apolloPhone(org),
+    linkedinUrl: org.linkedin_url?.trim() || null,
+    foundedYear,
+    city: org.city?.trim() || null,
+    state: org.state?.trim() || null,
+    // A domain straight from organization search is Apollo's own primary
+    // domain, not a name guess — that is the high-confidence case.
+    domainConfidence: parsed.domain ? "high" : "low",
+  };
+}
+
+/**
+ * Filter-based organization search — the discovery source.
+ *
+ * Apollo bills ONE credit per page of up to 100 organizations, so a 25-company
+ * run costs a single credit. Nothing here reveals a person: discovery must stay
+ * cheap and must never auto-enrich.
+ */
+export async function searchOrganizations(
+  options: OrganizationSearchOptions,
+): Promise<OrganizationSearchResult> {
+  const {
+    apiKey,
+    locations,
+    notLocations = [],
+    keywordTags = [],
+    employeeRange = null,
+    page = 1,
+    perPage = 25,
+    context,
+    usageLabel,
+  } = options;
+
+  const boundedPerPage = Math.min(Math.max(1, perPage), 100);
+  const body: Record<string, unknown> = {
+    page,
+    per_page: boundedPerPage,
+  };
+  if (locations.length) body.organization_locations = locations;
+  if (notLocations.length) body.organization_not_locations = notLocations;
+  if (keywordTags.length) body.q_organization_keyword_tags = keywordTags;
+  if (employeeRange) body.organization_num_employees_ranges = [employeeRange];
+
+  await assertPaidEgressAllowed("apollo", "organizations/search", context, {
+    estimatedCost: 1,
+    metadata: { usageLabel, page, perPage: boundedPerPage, employeeRange },
+  });
+
+  const resp = await fetch(`${APOLLO_BASE}/organizations/search`, {
+    method: "POST",
+    headers: apolloHeaders(apiKey),
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    throw new Error(`Apollo organization search failed: ${await resp.text()}`);
+  }
+
+  const data = (await resp.json()) as {
+    organizations?: ApolloOrg[];
+    accounts?: ApolloOrg[];
+    pagination?: {
+      page?: number;
+      per_page?: number;
+      total_entries?: number;
+      total_pages?: number;
+    };
+  };
+  const raw = data.organizations ?? data.accounts ?? [];
+  await recordProviderUsageEvent(
+    "apollo",
+    "organizations/search",
+    context ?? "automated_scrape",
+    {
+      recordsReturned: raw.length,
+      estimatedCost: 1,
+      metadata: { usageLabel, page, perPage: boundedPerPage, employeeRange },
+    },
+  );
+
+  const organizations = raw
+    .map(parseDiscoveredOrg)
+    .filter((org): org is DiscoveredOrganization => org !== null);
+
+  return {
+    organizations,
+    page: data.pagination?.page ?? page,
+    perPage: data.pagination?.per_page ?? boundedPerPage,
+    totalEntries: parseEmployees(data.pagination?.total_entries),
+    totalPages: parseEmployees(data.pagination?.total_pages),
   };
 }
 

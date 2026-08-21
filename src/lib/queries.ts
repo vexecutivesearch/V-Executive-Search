@@ -580,6 +580,11 @@ export async function enrichCompanies(
       enrichedAt: company.enrichedAt,
       enrichRunDate: company.enrichRunDate,
       sourceMarket: company.sourceMarket,
+      phone: company.phone,
+      linkedinUrl: company.linkedinUrl,
+      vertical: company.vertical,
+      city: company.city,
+      state: company.state,
       contacts: applySharedLineFilter(companyContacts),
       jobListings: inFocusListings,
     };

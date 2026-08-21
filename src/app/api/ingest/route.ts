@@ -8,6 +8,7 @@ import {
   dailyRuns,
   jobListings,
 } from "@/lib/db/schema";
+import { normalizeCompanyKey } from "@/lib/company-name";
 import { jobUrlFingerprint } from "@/lib/hiring-signals";
 import {
   augmentScrapeFunnelWithGeo,
@@ -127,18 +128,6 @@ function earliestFirstSeen(
     .filter((d): d is string => Boolean(d));
   if (dates.length) return dates.sort()[0];
   return runDate;
-}
-
-function normalizeCompanyKey(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(
-      /\b(inc|incorporated|llc|l l c|corp|corporation|co|company|ltd|limited|plc|group|holdings)\b/gi,
-      "",
-    )
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 async function findCompany(item: IngestCompany) {
