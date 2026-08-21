@@ -1,14 +1,22 @@
 /**
- * The Pipeline page speaks two location vocabularies:
+ * The Pipeline page speaks three location vocabularies. They are reconciled
+ * here, and only here, so the controls on screen can never silently disagree
+ * about what is scoped to what.
  *
- * - Browse scope (location rail + filter bar) narrows rows already in the
- *   database. It is state-led: State → City.
- * - Discovery market is an Apollo search target — where to go find companies
- *   that are not in the database yet. Its list is curated to metros/counties
- *   Apollo can actually search.
+ * 1. Browse scope — the State → City pair in the filter bar, summarised by the
+ *    location rail. Narrows companies already in the database by job-listing
+ *    geography (falling back to the company's own HQ when it has no listings).
+ *    Applies to All leads, Job listings and Hot.
  *
- * They are reconciled here, and only here, so the controls on screen can never
- * silently disagree about what is scoped to what.
+ * 2. Review scope — the Discovery review queue. Narrows by the market a
+ *    company was FOUND IN (companies.source_market), which is the label the
+ *    row itself carries. Browse scope deliberately does not apply here: a
+ *    company-first Apollo row can have no job listings at all, so job-listing
+ *    geography would hide it while the queue counts still counted it.
+ *
+ * 3. Discovery market — the run launcher's "Apollo market to search". A search
+ *    input, not a filter: it decides where to go looking for companies that are
+ *    not in the database yet, so its curated list stays whole.
  */
 
 import { parseJobLocation } from "@/lib/location-match";
@@ -62,6 +70,89 @@ export function cityOptionsForState(
 
 export function stateLabel(state: string): string {
   return (state && parseJobLocation(state)?.stateName) || state;
+}
+
+/* ------------------------------------------------------------------ */
+/* Review scope — vocabulary 2                                         */
+/* ------------------------------------------------------------------ */
+
+export type ReviewScope = {
+  /** Discovery vertical id — "" for every vertical. */
+  vertical: string;
+  /** Market the row was found in (source_market) — "" for every market. */
+  market: string;
+  /** Free text over company name / domain / industry. */
+  search: string;
+};
+
+export type ReviewScopeOptions = {
+  verticals: readonly string[];
+  markets: readonly string[];
+};
+
+export const EMPTY_REVIEW_SCOPE: ReviewScope = {
+  vertical: "",
+  market: "",
+  search: "",
+};
+
+/**
+ * A vertical or market that is no longer in the facets has no chip on screen,
+ * so a stale value carried in from a bookmark would empty the queue with
+ * nothing visible to blame or clear. Unknown values are dropped instead.
+ */
+export function normalizeReviewScope(
+  raw: { vertical?: string | null; dmarket?: string | null; q?: string | null },
+  options: ReviewScopeOptions,
+): ReviewScope {
+  const vertical = (raw.vertical ?? "").trim();
+  const market = (raw.dmarket ?? "").trim();
+  return {
+    vertical: options.verticals.includes(vertical) ? vertical : "",
+    market: options.markets.includes(market) ? market : "",
+    search: (raw.q ?? "").trim(),
+  };
+}
+
+export type ActiveReviewFilter = {
+  /** Query-string key, so a caller can clear exactly this one. */
+  key: "vertical" | "dmarket" | "q";
+  value: string;
+};
+
+/** Filters currently narrowing the queue, for "N hidden by filters" copy. */
+export function activeReviewFilters(scope: ReviewScope): ActiveReviewFilter[] {
+  const active: ActiveReviewFilter[] = [];
+  if (scope.vertical) active.push({ key: "vertical", value: scope.vertical });
+  if (scope.market) active.push({ key: "dmarket", value: scope.market });
+  if (scope.search) active.push({ key: "q", value: scope.search });
+  return active;
+}
+
+/**
+ * Filters handed to the review-queue read.
+ *
+ * Deliberately carries no state/city. The queue and its per-bucket counts are
+ * built from exactly this set, which is why a count can no longer promise rows
+ * the list then filters away.
+ */
+export function reviewQueueQueryFilters<Status extends string>(
+  scope: ReviewScope,
+  extras: { reviewStatus: Status; page: number },
+): {
+  reviewStatus: Status;
+  vertical: string | undefined;
+  market: string | undefined;
+  search: string | undefined;
+  page: number;
+} {
+  return {
+    reviewStatus: extras.reviewStatus,
+    vertical: scope.vertical || undefined,
+    market: scope.market || undefined,
+    search: scope.search || undefined,
+    page: extras.page,
+  };
 }
 
 /**
