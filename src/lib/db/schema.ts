@@ -37,6 +37,29 @@ export const geographicScopeEnum = pgEnum("geographic_scope", [
 export const icpStatusEnum = pgEnum("icp_status", ["pass", "fail", "unknown"]);
 
 /**
+ * How the lead entered the system, which decides what channels are legal:
+ * cold_discovery is email-only plus a human call to the business line;
+ * the inbound lanes arrive with a consent artifact and are excluded from
+ * cold calling because they already raised a hand.
+ */
+export const leadSourceEnum = pgEnum("lead_source", [
+  "cold_discovery",
+  "inbound_form",
+  "inbound_meta",
+]);
+
+/**
+ * Dial-safety class of a stored number. `unknown` is treated exactly like
+ * `mobile` by every gate: TCPA restrictions attach to the number type, so an
+ * unclassified number must never be assumed to be a landline.
+ */
+export const phoneClassificationEnum = pgEnum("phone_classification", [
+  "business_line",
+  "mobile",
+  "unknown",
+]);
+
+/**
  * Operator review state for company-first discovery. Deliberately SEPARATE
  * from companyStatusEnum: outreach enrollment gates on `status = 'new'`, so
  * overloading that enum with review states would silently stop enrollment.
@@ -245,7 +268,21 @@ export const companies = pgTable("companies", {
   industry: text("industry"),
   /** Main company line from Apollo organization search (not a contact phone). */
   phone: text("phone"),
+  /**
+   * Dial class of `phone`. Apollo organization search is the only writer of
+   * that column and it returns the published main line, so the default is
+   * business_line; anything else must be set explicitly.
+   */
+  phoneClassification: phoneClassificationEnum("phone_classification")
+    .default("business_line")
+    .notNull(),
   linkedinUrl: text("linkedin_url"),
+  /**
+   * Lane the lead came in on. Every pre-existing row and every discovery
+   * insert is cold_discovery, so channel behaviour for the existing pipeline
+   * is unchanged; the inbound lanes are set by the opt-in endpoint.
+   */
+  leadSource: leadSourceEnum("lead_source").default("cold_discovery").notNull(),
   /** Discovery vertical (legal, finance_accounting, …); null = job-scraped. */
   vertical: text("vertical"),
   city: text("city"),
@@ -332,14 +369,16 @@ export const contacts = pgTable("contacts", {
   personalPhone: text("personal_phone"),
   companyPhone: text("company_phone"),
   phones: jsonb("phones")
-    .$type<
-      Array<{
-        number: string;
-        source: "apollo" | "contactout";
-        kind?: "mobile" | "work" | "company" | "other";
-      }>
-    >()
+    .$type<import("@/lib/contact-phones").SourcedPhone[]>()
     .default([]),
+  /**
+   * Dial class of the contact's primary number. ContactOut is the main source
+   * of contact numbers and returns personal mobiles, so the default is mobile
+   * — the classification that blocks dialing.
+   */
+  phoneClassification: phoneClassificationEnum("phone_classification")
+    .default("mobile")
+    .notNull(),
   linkedinUrl: text("linkedin_url"),
   apolloId: text("apollo_id"),
   sourceProvider: text("source_provider").default("apollo"),
@@ -503,6 +542,124 @@ export const companyActivities = pgTable("company_activities", {
   classification: text("classification"),
   source: text("source").default("manual").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+/* ============================================================================
+ * Consent, consented inbound leads, and compliant human calling.
+ *
+ * `suppressions` records how to STOP. Nothing recorded how permission was
+ * GRANTED, and `sequence_enrollments.legal_basis` is a B2B email posture, not
+ * consent. These tables hold the artifact that would have to defend a TCPA
+ * claim: the exact words shown, where they were shown, when, and to whom.
+ * ========================================================================== */
+
+export const consentChannelScopeEnum = pgEnum("consent_channel_scope", [
+  "email",
+  "sms",
+  "both",
+]);
+
+/**
+ * Mechanism the consent was captured by. Only mechanisms that produce a
+ * written E-SIGN artifact are listed: keypress/voice capture is deliberately
+ * absent because E-SIGN 7001(c)(6) excludes recordings of oral communications
+ * and the Fifth Circuit split from the FCC on it in Feb 2026.
+ */
+export const consentSourceEnum = pgEnum("consent_source", [
+  "web_form",
+  "meta_lead_ad",
+  "inbound_written_request",
+]);
+
+/** Result of a human dial. No telephony vendor — the operator reports these. */
+export const callOutcomeEnum = pgEnum("call_outcome", [
+  "placed",
+  "connected",
+  "no_answer",
+  "voicemail",
+  "gatekeeper",
+  "wrong_number",
+]);
+
+/**
+ * Consent artifacts. Retention guidance is five years, so nothing here is
+ * hard-deleted: a withdrawal sets revoked_at and the row survives as proof
+ * that consent existed for the period it covered.
+ */
+export const consentRecords = pgTable("consent_records", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  contactId: uuid("contact_id").references(() => contacts.id, {
+    onDelete: "set null",
+  }),
+  companyId: uuid("company_id").references(() => companies.id, {
+    onDelete: "set null",
+  }),
+  /** Raw values the consent covers, as submitted — not a normalized join key. */
+  email: text("email"),
+  phone: text("phone"),
+  channelScope: consentChannelScopeEnum("channel_scope").notNull(),
+  /**
+   * The disclosure the person actually saw, stored verbatim. A version tag or
+   * a pointer to today's copy would be worthless: the defence is the wording
+   * rendered at capture time, not the wording currently deployed.
+   */
+  disclosureText: text("disclosure_text").notNull(),
+  source: consentSourceEnum("source").notNull(),
+  /** Form id, Meta campaign/form id, or the inbound message id. */
+  sourceIdentifier: text("source_identifier"),
+  capturedAt: timestamp("captured_at").defaultNow().notNull(),
+  /** Web opt-ins only; null for written requests arriving by email. */
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  revokedAt: timestamp("revoked_at"),
+  revokedReason: text("revoked_reason"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+/** One row per human dial attempt — the CRM's record of what happened. */
+export const callOutcomes = pgTable("call_outcomes", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  companyId: uuid("company_id")
+    .references(() => companies.id, { onDelete: "cascade" })
+    .notNull(),
+  callListEntryId: uuid("call_list_entry_id").references(
+    () => callListEntries.id,
+    { onDelete: "set null" },
+  ),
+  contactId: uuid("contact_id").references(() => contacts.id, {
+    onDelete: "set null",
+  }),
+  outcome: callOutcomeEnum("outcome").notNull(),
+  /** Number dialed and the class it was dialed under (audit of the gate). */
+  phone: text("phone"),
+  phoneClassification: phoneClassificationEnum("phone_classification"),
+  notes: text("notes"),
+  loggedBy: text("logged_by"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+/**
+ * Opt-in form links emailed from the call screen. This replaces a press-1
+ * IVR: the call's job is to earn a form click, so the send is the tracked
+ * unit and consent conversion is measured against it.
+ */
+export const optInLinkSends = pgTable("opt_in_link_sends", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  companyId: uuid("company_id")
+    .references(() => companies.id, { onDelete: "cascade" })
+    .notNull(),
+  contactId: uuid("contact_id").references(() => contacts.id, {
+    onDelete: "set null",
+  }),
+  callOutcomeId: uuid("call_outcome_id").references(() => callOutcomes.id, {
+    onDelete: "set null",
+  }),
+  email: text("email").notNull(),
+  formUrl: text("form_url").notNull(),
+  sentAt: timestamp("sent_at").defaultNow().notNull(),
+  sentBy: text("sent_by"),
+  /** Set when the send failed — the attempt is still recorded. */
+  error: text("error"),
 });
 
 /* ============================================================================
@@ -908,6 +1065,18 @@ export type IcpStatus = (typeof icpStatusEnum.enumValues)[number];
 export type CompanyReviewStatus =
   (typeof companyReviewStatusEnum.enumValues)[number];
 export type CompanyDiscoveryRun = typeof companyDiscoveryRuns.$inferSelect;
+export type LeadSource = (typeof leadSourceEnum.enumValues)[number];
+export type StoredPhoneClassification =
+  (typeof phoneClassificationEnum.enumValues)[number];
+
+export type ConsentRecord = typeof consentRecords.$inferSelect;
+export type NewConsentRecord = typeof consentRecords.$inferInsert;
+export type ConsentChannelScope =
+  (typeof consentChannelScopeEnum.enumValues)[number];
+export type ConsentSource = (typeof consentSourceEnum.enumValues)[number];
+export type CallOutcomeRow = typeof callOutcomes.$inferSelect;
+export type CallOutcomeKind = (typeof callOutcomeEnum.enumValues)[number];
+export type OptInLinkSend = typeof optInLinkSends.$inferSelect;
 
 export type OutreachTemplate = typeof outreachTemplates.$inferSelect;
 export type SequenceEnrollment = typeof sequenceEnrollments.$inferSelect;

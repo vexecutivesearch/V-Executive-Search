@@ -3,14 +3,42 @@ import { parsePhoneValue, phoneDigits } from "@/lib/phone-utils";
 export type PhoneSource = "apollo" | "contactout";
 export type PhoneKind = "mobile" | "work" | "company" | "other";
 
+/**
+ * Dial-safety class, mirroring phone_classification in the schema. Kept on the
+ * same shape as source/kind so there is one phone structure, not two.
+ * See phone-classification.ts for the derivation and the dial gate.
+ */
+export type PhoneClassification = "business_line" | "mobile" | "unknown";
+
 export type SourcedPhone = {
   number: string;
   source: PhoneSource;
   kind?: PhoneKind;
+  /** Absent on rows stored before classification existed — read as unknown. */
+  classification?: PhoneClassification;
 };
 
 /** Max personal/direct-dial numbers stored or shown per contact. */
 export const MAX_PERSONAL_PHONES_PER_CONTACT = 3;
+
+/**
+ * The one derivation of dial class from provenance, so extraction-time
+ * stamping and read-time backfill of older rows cannot disagree.
+ *
+ * Apollo's company/HQ numbers are published main lines. ContactOut sells
+ * personal mobiles, so every ContactOut number is a mobile. Everything else —
+ * including an Apollo "work" direct dial, which is as likely to be a cell —
+ * stays unknown, and unknown is treated as a mobile.
+ */
+export function deriveClassification(
+  source: PhoneSource,
+  kind?: PhoneKind,
+): PhoneClassification {
+  if (kind === "company") return "business_line";
+  if (source === "contactout") return "mobile";
+  if (kind === "mobile") return "mobile";
+  return "unknown";
+}
 
 export function phoneKindLabel(kind?: PhoneKind): string {
   if (kind === "mobile") return "Mobile";
@@ -148,7 +176,11 @@ export function dedupeSourcedPhones(phones: SourcedPhone[]): SourcedPhone[] {
     const key = `${p.source}:${phoneDigits(number)}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ ...p, number });
+    out.push({
+      ...p,
+      number,
+      classification: p.classification ?? deriveClassification(p.source, p.kind),
+    });
   }
   return out;
 }

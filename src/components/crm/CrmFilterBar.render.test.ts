@@ -31,6 +31,7 @@ function render(active: Partial<FilterBarProps["active"]>): string {
         state: "",
         city: "",
         sector: "",
+        lane: "",
         status: "",
         q: "",
         callable: false,
@@ -68,5 +69,20 @@ describe("CrmFilterBar — city is scoped by the state scope", () => {
 
   it("names the state scope where the rail replaces the state dropdown", () => {
     expect(render({ state: "FL", city: "Miami" })).toContain("Florida");
+  });
+});
+
+describe("CrmFilterBar — lead source lane", () => {
+  it("offers every lane and defaults to all of them", () => {
+    const html = render({});
+    expect(html).toContain('aria-label="Filter by lead source"');
+    expect(html).toContain("All lead sources");
+    expect(html).toContain("Inbound — form");
+    expect(html).toContain("Inbound — Meta");
+  });
+
+  it("selects the active lane", () => {
+    const html = render({ lane: "inbound_form" });
+    expect(html).toMatch(/<option value="inbound_form" selected="">/);
   });
 });

@@ -581,6 +581,8 @@ export async function enrichCompanies(
       enrichRunDate: company.enrichRunDate,
       sourceMarket: company.sourceMarket,
       phone: company.phone,
+      phoneClassification: company.phoneClassification,
+      leadSource: company.leadSource,
       linkedinUrl: company.linkedinUrl,
       vertical: company.vertical,
       city: company.city,

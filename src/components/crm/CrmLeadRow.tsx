@@ -19,6 +19,13 @@ import {
   scoreTextClass,
 } from "@/lib/lead-score";
 import { sectorFromIndustry } from "@/lib/industry-sectors";
+import {
+  LEAD_SOURCE_BADGE_CLASSES,
+  LEAD_SOURCE_DESCRIPTIONS,
+  isInboundLane,
+  leadSourceLabel,
+  normalizeLeadSource,
+} from "@/lib/lead-lanes";
 import { parseJobLocation } from "@/lib/location-match";
 import { formatListingSalary, pickDisplayListing } from "@/lib/salary-format";
 
@@ -53,6 +60,7 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
   ).length;
   const hotSignals = Object.keys(company.hiringSignals ?? {}).length > 0;
   const sector = sectorFromIndustry(company.industry);
+  const lane = normalizeLeadSource(company.leadSource);
   const jobLocation =
     primaryJob?.location ||
     company.contacts.find((c) => c.jobLocation)?.jobLocation ||
@@ -158,6 +166,12 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
                   On list
                 </span>
               )}
+              <span
+                className={`shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded ${LEAD_SOURCE_BADGE_CLASSES[lane]}`}
+                title={LEAD_SOURCE_DESCRIPTIONS[lane]}
+              >
+                {leadSourceLabel(lane)}
+              </span>
               {hotSignals && (
                 <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 dark:bg-orange-950/60 dark:text-orange-300">
                   Hot
@@ -408,6 +422,18 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
             )}
           </div>
 
+          <div className="mb-3 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 px-3 py-2 text-xs text-gray-600 dark:text-gray-400">
+            <span className="font-medium text-gray-800 dark:text-gray-200">
+              {leadSourceLabel(lane)} lead
+            </span>{" "}
+            — {LEAD_SOURCE_DESCRIPTIONS[lane]}
+            {isInboundLane(lane) && (
+              <span className="block mt-0.5">
+                Excluded from the cold-calling list.
+              </span>
+            )}
+          </div>
+
           <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600 dark:text-gray-400">
             {company.industry && (
               <span title={company.industry}>
@@ -464,7 +490,10 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
 
           {onList && (
             <div className="mt-3">
-              <CallControls companyId={company.id} />
+              <CallControls
+                companyId={company.id}
+                contacts={company.contacts}
+              />
             </div>
           )}
         </div>
