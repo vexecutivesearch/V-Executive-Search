@@ -18,12 +18,10 @@ import {
   getCrmLeads,
   type CrmLeadFilters,
 } from "@/lib/crm-queries";
-import { CALL_STATUS_LABELS } from "@/lib/call-status";
-import { compareContactsForOutreach } from "@/lib/contact-title-priority";
-import { summarizeJobSignals } from "@/lib/discovery/job-signals";
-import { getVerticalConfig } from "@/lib/discovery/verticals";
-import { parseJobLocation } from "@/lib/location-match";
-import { formatListingSalary, pickDisplayListing } from "@/lib/salary-format";
+import {
+  buildCallListCsvRow,
+  CALL_LIST_HEADERS,
+} from "@/lib/call-list-csv-row";
 import { businessListDate } from "@/lib/timezone";
 
 export type ScrapeCsvRow = {
@@ -237,108 +235,13 @@ export function exportFilename(
   return `vexec-${kind}-${suffix}.csv`;
 }
 
-const CALL_LIST_HEADERS = [
-  "company_name",
-  "industry",
-  "vertical",
-  "city",
-  "state",
-  "market",
-  "company_size",
-  "open_positions",
-  "open_position",
-  "hiring_signals",
-  "salary",
-  "contact_name",
-  "contact_title",
-  "verified_email",
-  "direct_phone",
-  "main_company_phone",
-  "company_linkedin",
-  "linkedin_profile",
-  "opportunity_score",
-  "outreach_angle",
-  "call_status",
-  "last_contact_date",
-  "attempts",
-  "next_follow_up_date",
-  "notes",
-  "assigned_team_member",
-  "final_result",
-  "added_at",
-] as const;
-
-function isoDate(value: Date | string | null | undefined): string {
-  if (!value) return "";
-  if (typeof value === "string") return value.slice(0, 10);
-  return value.toISOString().slice(0, 10);
-}
-
 /** Full call list — one row per entry, all workflow + contact fields. */
 export async function buildCallListCsv(): Promise<string> {
   const items = await getCallListItems();
-  const rows = items.map(({ entry, company, marketLabel }) => {
-    const primaryContact =
-      company.contacts.find((c) => c.id === entry.primaryContactId) ??
-      [...company.contacts].sort(compareContactsForOutreach)[0];
-    const job = company.jobListings[0];
-    const salaryJob = pickDisplayListing(company.jobListings);
-    const parsedLocation = job?.location ? parseJobLocation(job.location) : null;
-    const phones = primaryContact
-      ? sortPhonesForDisplay(contactPhonesForDisplay(primaryContact))
-      : [];
-    const directPhone = phones.find((p) => p.kind !== "company")?.number ?? "";
-    const companyPhone =
-      phones.find((p) => p.kind === "company")?.number ??
-      primaryContact?.companyPhone ??
-      company.phone ??
-      "";
-    const jobSignal = summarizeJobSignals(company.jobListings);
-
-    return {
-      company_name: company.name,
-      industry: company.industry ?? "",
-      vertical: getVerticalConfig(company.vertical)?.label ?? company.vertical ?? "",
-      // Discovered companies have an Apollo HQ; scraped ones only have a job location.
-      city: parsedLocation?.city ?? company.city ?? "",
-      state:
-        parsedLocation?.stateAbbr ??
-        parsedLocation?.stateName ??
-        company.state ??
-        "",
-      market: marketLabel ?? "",
-      company_size:
-        company.estimatedEmployees == null
-          ? "size unknown"
-          : String(company.estimatedEmployees),
-      open_positions: jobSignal.openPositions,
-      open_position: job?.title ?? "",
-      hiring_signals: jobSignal.label ?? "",
-      salary: salaryJob ? (formatListingSalary(salaryJob) ?? "") : "",
-      contact_name: primaryContact?.name ?? "",
-      contact_title: primaryContact?.title ?? "",
-      verified_email: primaryContact
-        ? (resolveWorkEmail(primaryContact) ??
-          resolvePersonalEmail(primaryContact) ??
-          "")
-        : "",
-      direct_phone: directPhone,
-      main_company_phone: companyPhone,
-      company_linkedin: company.linkedinUrl ?? "",
-      linkedin_profile: primaryContact?.linkedinUrl ?? "",
-      opportunity_score: company.leadScore ?? 0,
-      outreach_angle: entry.outreachAngle ?? company.reasonToCall ?? "",
-      call_status: CALL_STATUS_LABELS[entry.callStatus],
-      last_contact_date: isoDate(entry.lastContactAt),
-      attempts: entry.attempts,
-      next_follow_up_date: entry.nextFollowUpDate ?? "",
-      notes: entry.notes ?? "",
-      assigned_team_member: entry.assignedTo ?? "",
-      final_result: entry.finalResult ?? "",
-      added_at: isoDate(entry.addedAt),
-    };
-  });
-  return rowsToCsv([...CALL_LIST_HEADERS], rows);
+  return rowsToCsv(
+    [...CALL_LIST_HEADERS],
+    items.map((item) => buildCallListCsvRow(item)),
+  );
 }
 
 /** CRM All Leads / Hot export — the whole filtered set, one row per job. */

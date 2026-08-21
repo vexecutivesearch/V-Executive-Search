@@ -20,6 +20,12 @@ export type JobSignalSummary = {
   oldestOpenDays: number | null;
   /** e.g. "4 active jobs, Controller open 32 days"; null when there are none. */
   label: string | null;
+  /**
+   * Whether we have ANY job data for this company. "0 open jobs" (we scraped
+   * and everything is archived) and "we never scraped this company" are
+   * different facts, and reports must not collapse the second into a zero.
+   */
+  hasJobData: boolean;
 };
 
 function toDate(value: Date | string | null | undefined): Date | null {
@@ -32,6 +38,7 @@ export function summarizeJobSignals(
   listings: JobSignalListing[],
   now: Date = new Date(),
 ): JobSignalSummary {
+  const hasJobData = listings.length > 0;
   const open = listings.filter((l) => !toDate(l.archivedAt));
   if (!open.length) {
     return {
@@ -39,6 +46,7 @@ export function summarizeJobSignals(
       oldestTitle: null,
       oldestOpenDays: null,
       label: null,
+      hasJobData,
     };
   }
 
@@ -68,5 +76,6 @@ export function summarizeJobSignals(
     oldestTitle,
     oldestOpenDays,
     label: `${jobsPart}${agePart}`,
+    hasJobData,
   };
 }
