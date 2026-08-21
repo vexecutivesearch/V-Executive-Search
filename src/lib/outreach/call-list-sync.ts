@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import {
   callListEntries,
   companyActivities,
+  type CallListEntry,
   type CallStatus,
 } from "@/lib/db/schema";
 import { canAutoAdvanceStatus, TERMINAL_STATUSES } from "@/lib/call-status";
@@ -51,8 +52,11 @@ export async function recordCallListOutreachEvent(options: {
    * e.g. a Calendly cancellation reverting Call Booked.
    */
   allowRegression?: boolean;
-}): Promise<void> {
+  /** companyActivities provenance; defaults to the sequencer. */
+  source?: string;
+}): Promise<CallListEntry | null> {
   const line = stampLine(options.summary);
+  let updated: CallListEntry | null = null;
   try {
     const [entry] = await db
       .select()
