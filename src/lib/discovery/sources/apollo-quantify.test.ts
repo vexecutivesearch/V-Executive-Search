@@ -294,6 +294,51 @@ describe("gateInputFor", () => {
     ]);
   });
 
+  it("hands the gate Apollo's industry, not the display winner", () => {
+    /*
+     * The fail-open bug a live trace of this pipeline caught. A staffing agency
+     * with a polished Google Business Profile declares itself a "Business
+     * management consultant" — nothing the Maps category filter can reject —
+     * while Apollo's taxonomy says "staffing & recruiting", which is a hard
+     * reject. Display precedence keeps the Google category (a real value is not
+     * overwritten), so handing the gate `org.industry` hid Apollo's word and the
+     * agency was ACCEPTED into review at 22 employees, inside the band.
+     */
+    const merged = mergeQuantified(
+      org({
+        name: "Meridian Advisory Group",
+        domain: "meridianadvisory.com",
+        industry: "Business management consultant",
+      }),
+      apolloOrg({
+        name: "Meridian Advisory Group",
+        domain: "meridianadvisory.com",
+        industry: "staffing & recruiting",
+        estimatedEmployees: 22,
+      }),
+      { domain: "meridianadvisory.com" },
+    );
+
+    // The display value is untouched: precedence still protects the operator's
+    // screen from being rewritten by a second provider.
+    expect(merged.industry).toBe("Business management consultant");
+    // The gate sees what disqualifies the company.
+    expect(gateInputFor(merged, "construction").industry).toBe(
+      "staffing & recruiting",
+    );
+  });
+
+  it("falls back to the source's industry when Apollo had no record", () => {
+    const unmatched = mergeQuantified(
+      org({ industry: "Roofing contractor" }),
+      null,
+      { domain: "x.com" },
+    );
+    expect(gateInputFor(unmatched, "construction").industry).toBe(
+      "Roofing contractor",
+    );
+  });
+
   it("passes a backfilled headcount through, and null when nobody knows", () => {
     const quantified = mergeQuantified(org(), apolloOrg(), {
       domain: "palmbeachroofing.com",

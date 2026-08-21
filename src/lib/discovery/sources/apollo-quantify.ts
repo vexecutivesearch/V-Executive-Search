@@ -126,6 +126,27 @@ export type CompanyQuantification = {
   fields: Record<QuantifiedField, FieldProvenance>;
   /** Apollo's own name for the domain, so a bad match is auditable. */
   apolloName: string | null;
+  /**
+   * Apollo's industry taxonomy value, kept even when it LOST the display
+   * precedence contest to the source's own label.
+   *
+   * This is not redundant with `industry`, and the difference is a fail-open bug
+   * away. Display precedence keeps a real value over a placeholder, so a Maps
+   * company whose Google category is "Business management consultant" keeps that
+   * label — but Apollo's word for the same company may be "staffing &
+   * recruiting", which is a hard reject. The exclusion gate matches against
+   * Apollo's taxonomy (Google Business categories never appear in its industry
+   * sets), so the gate has to see this value rather than the display winner.
+   */
+  apolloIndustry: string | null;
+  /**
+   * Apollo's city/state for the domain. When it disagrees with the source's, the
+   * Apollo record is the parent or HQ and its headcount describes the whole
+   * company rather than this branch. Recorded, not acted on: for the operator's
+   * "no huge corporations" rule the parent's size is the right basis, and this
+   * exists so a surprising headcount can be explained afterwards.
+   */
+  apolloLocation: string | null;
   /** Set when identity could not be verified; explains which guard fired. */
   identityNote: string | null;
 };
@@ -165,6 +186,8 @@ export function unquantified(
       reason,
       fields,
       apolloName: null,
+      apolloIndustry: null,
+      apolloLocation: null,
       identityNote: null,
     },
   };
@@ -482,6 +505,9 @@ export function mergeQuantified(
       reason: identityVerified ? "quantified" : "identity_unverified",
       fields,
       apolloName: apollo.name,
+      apolloIndustry: apollo.industry,
+      apolloLocation:
+        [apollo.city, apollo.state].filter(Boolean).join(", ") || null,
       identityNote,
     },
   };
@@ -514,15 +540,24 @@ export type DiscoveryGateInputShape = {
  * Note `employeeCount` stays null when Apollo did not answer or identity was
  * unverified: the gate reads null as "size unknown → send to review", which is
  * the fail-closed path, and handing it a guess here would defeat it.
+ *
+ * `industry` deliberately prefers Apollo's taxonomy over the row's display
+ * value, which is the reverse of the display precedence rule. A live trace of
+ * this pipeline caught why: a staffing agency whose Google Business category
+ * reads "Business management consultant" keeps that label for display, and
+ * handing it to the gate hid Apollo's "staffing & recruiting" — so the agency
+ * was ACCEPTED. Display precedence protects the operator's screen from being
+ * overwritten; the gate needs whichever provider's word is disqualifying.
  */
 export function gateInputFor(
   org: QuantifiedOrganization | DiscoveredOrganization,
   vertical: string,
 ): DiscoveryGateInputShape {
+  const quantification = quantificationOf(org);
   return {
     name: org.name,
     domain: org.domain,
-    industry: org.industry,
+    industry: quantification?.apolloIndustry ?? org.industry,
     employeeCount: org.estimatedEmployees,
     annualRevenue: org.annualRevenue ?? null,
     publiclyTradedSymbol: org.publiclyTradedSymbol ?? null,
@@ -638,9 +673,11 @@ async function recordProvenance(
           domain: org.quantification.domain,
           reason: org.quantification.reason,
           apolloName: org.quantification.apolloName,
+          apolloLocation: org.quantification.apolloLocation,
           employees: org.estimatedEmployees,
           employeesFrom: org.quantification.fields.estimatedEmployees,
           industry: org.industry,
+          apolloIndustry: org.quantification.apolloIndustry,
           revenue: org.annualRevenue ?? null,
           ticker: org.publiclyTradedSymbol ?? null,
           identityNote: org.quantification.identityNote,
