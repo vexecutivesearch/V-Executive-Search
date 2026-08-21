@@ -4,6 +4,7 @@ import {
   CATALOG_SENDING_DOMAINS,
   ESTABLISHED_SENDING_DOMAINS,
   NEW_SENDING_DOMAINS,
+  applyFromDisplayName,
   fromAddressForDomain,
   rootDomainOf,
 } from "@/lib/outreach/sending-domains-catalog";
@@ -17,6 +18,7 @@ type Row = Record<string, unknown>;
 
 const selectResults = new Map<string, Row[]>();
 const inserts: Array<{ table: string; values: Row }> = [];
+const updates: Array<{ table: string; set: Row }> = [];
 
 function thenable(result: Row[]) {
   const chain: Record<string, unknown> = {};
@@ -49,6 +51,12 @@ vi.mock("@/lib/db", () => ({
         };
       },
     }),
+    update: (table: Parameters<typeof getTableName>[0]) => ({
+      set: (set: Row) => {
+        updates.push({ table: getTableName(table), set });
+        return thenable([]);
+      },
+    }),
   },
 }));
 
@@ -69,17 +77,16 @@ describe("sending-domain catalog", () => {
     expect(CATALOG_SENDING_DOMAINS).toHaveLength(8);
   });
 
-  it("keeps a display-name wrapper from an existing from-address", () => {
+  it("always shows V Executive Search, never the bare ODV local part", () => {
+    expect(fromAddressForDomain("vexecutives.com")).toBe(
+      "V Executive Search <odv@vexecutives.com>",
+    );
+    expect(applyFromDisplayName("odv@vexecsearch.com")).toBe(
+      "V Executive Search <odv@vexecsearch.com>",
+    );
     expect(
-      fromAddressForDomain(
-        "villatororecruiting.us",
-        "Alejandro O Delgado <odv@vexecsearch.com>",
-      ),
-    ).toBe("Alejandro O Delgado <odv@villatororecruiting.us>");
-  });
-
-  it("falls back to odv@domain when no template exists", () => {
-    expect(fromAddressForDomain("vexecutives.com")).toBe("odv@vexecutives.com");
+      applyFromDisplayName("Alejandro O Delgado <odv@vtalentsearch.com>"),
+    ).toBe("V Executive Search <odv@vtalentsearch.com>");
   });
 
   it("uses the last two labels as the root", () => {
@@ -92,6 +99,7 @@ describe("ensureCatalogSendingProfiles", () => {
   beforeEach(() => {
     selectResults.clear();
     inserts.length = 0;
+    updates.length = 0;
     selectResults.set("sending_profiles", [
       {
         kind: "email_domain",
@@ -131,17 +139,24 @@ describe("ensureCatalogSendingProfiles", () => {
     expect(inserts.map((row) => row.values.domain)).toEqual([
       ...NEW_SENDING_DOMAINS,
     ]);
-    expect(inserts[0].values.fromAddress).toBe("odv@vexecutivetalent.com");
+    expect(inserts[0].values.fromAddress).toBe(
+      "V Executive Search <odv@vexecutivetalent.com>",
+    );
     expect(inserts[0].values.replyToAddress).toBe("odv@vexecutivesearch.com");
+    expect(updates).toHaveLength(3);
+    expect(updates.every((row) => String(row.set.fromAddress).startsWith("V Executive Search <"))).toBe(
+      true,
+    );
   });
 
-  it("is a no-op when every catalog domain already has a row", async () => {
+  it("does not insert when every catalog domain already has a row", async () => {
     selectResults.set(
       "sending_profiles",
       CATALOG_SENDING_DOMAINS.map((domain) => ({
+        id: `id-${domain}`,
         kind: "email_domain",
         domain,
-        fromAddress: `odv@${domain}`,
+        fromAddress: fromAddressForDomain(domain),
       })),
     );
     const { ensureCatalogSendingProfiles } = await import(
@@ -151,6 +166,7 @@ describe("ensureCatalogSendingProfiles", () => {
     expect(result.created).toEqual([]);
     expect(result.existing).toEqual([...CATALOG_SENDING_DOMAINS]);
     expect(inserts).toHaveLength(0);
+    expect(updates).toHaveLength(0);
   });
 });
 

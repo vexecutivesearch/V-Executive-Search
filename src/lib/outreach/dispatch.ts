@@ -20,6 +20,7 @@ import {
   tickWarmupStateMachine,
 } from "@/lib/outreach/profiles";
 import { ensureCatalogSendingProfiles } from "@/lib/outreach/sending-domains";
+import { applyFromDisplayName } from "@/lib/outreach/sending-domains-catalog";
 import {
   defaultFromAddress,
   emailFooter,
@@ -271,8 +272,10 @@ export async function runOutreachDispatch(now = new Date()): Promise<DispatchSum
     }
 
     const apiKey = resolveProfileApiKey(profile);
-    const from = profile?.fromAddress ?? defaultFromAddress();
-    if (!apiKey || !from) {
+    const from = applyFromDisplayName(
+      profile?.fromAddress ?? defaultFromAddress() ?? "",
+    );
+    if (!apiKey || !from.includes("@")) {
       await deferMessage(message, "no_sending_identity", now, summary, enrollment);
       continue;
     }

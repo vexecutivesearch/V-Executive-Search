@@ -30,11 +30,11 @@ describe("sendCatalogTestEmails", () => {
     expect(results.every((row) => row.ok)).toBe(true);
     expect(sendOutreachEmail).toHaveBeenCalledTimes(5);
     expect(sendOutreachEmail.mock.calls.map((call) => call[0].from)).toEqual([
-      "odv@vexecutivetalent.com",
-      "odv@vexecutiverecruit.us",
-      "odv@vexecutives.com",
-      "odv@vexecutiverecruit.work",
-      "odv@villatororecruiting.us",
+      "V Executive Search <odv@vexecutivetalent.com>",
+      "V Executive Search <odv@vexecutiverecruit.us>",
+      "V Executive Search <odv@vexecutives.com>",
+      "V Executive Search <odv@vexecutiverecruit.work>",
+      "V Executive Search <odv@villatororecruiting.us>",
     ]);
     expect(
       sendOutreachEmail.mock.calls.every(

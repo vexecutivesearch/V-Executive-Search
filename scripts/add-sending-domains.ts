@@ -46,8 +46,6 @@ async function main() {
       .map((row) => String(row.domain ?? "").trim().toLowerCase())
       .filter(Boolean),
   );
-  const templateFrom =
-    rows.find((row) => row.from_address)?.from_address?.toString() ?? null;
   const replyTo =
     rows.find((row) => row.reply_to_address)?.reply_to_address?.toString() ||
     DEFAULT_REPLY_TO_ADDRESS;
@@ -68,7 +66,7 @@ async function main() {
 
   console.log("\nwill add (warming, 5/day):");
   for (const domain of missing) {
-    const from = fromAddressForDomain(domain, templateFrom);
+    const from = fromAddressForDomain(domain);
     console.log(`  ${domain}  from ${from}  reply-to ${replyTo}`);
     if (APPLY) {
       await sql`

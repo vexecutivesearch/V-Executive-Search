@@ -23,6 +23,7 @@ import {
   REPLY_TEMPLATE_KINDS,
   type ReplyTemplateKind,
 } from "@/lib/outreach/reply-playbook";
+import { applyFromDisplayName } from "@/lib/outreach/sending-domains-catalog";
 import {
   defaultFromAddress,
   emailFooter,
@@ -367,9 +368,11 @@ async function sendThreadedAutoReply(options: {
   const thread = threadHeaders(await sentEmails(enrollment.id));
   const { pickSendingProfile } = await import("@/lib/outreach/profiles");
   const pick = await pickSendingProfile("email_domain");
-  const sendFrom = pick?.profile?.fromAddress ?? defaultFromAddress();
+  const sendFrom = applyFromDisplayName(
+    pick?.profile?.fromAddress ?? defaultFromAddress() ?? "",
+  );
   const sendKey = resolveProfileApiKey(pick?.profile ?? null);
-  if (!sendKey || !sendFrom) {
+  if (!sendKey || !sendFrom.includes("@")) {
     return failAutoReply({
       enrollmentId: enrollment.id,
       replyKind,

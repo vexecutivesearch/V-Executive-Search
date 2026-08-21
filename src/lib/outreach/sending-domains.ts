@@ -15,8 +15,10 @@ export {
   CATALOG_SENDING_DOMAINS,
   DEFAULT_REPLY_TO_ADDRESS,
   ESTABLISHED_SENDING_DOMAINS,
+  FROM_DISPLAY_NAME,
   FROM_LOCAL_PART,
   NEW_SENDING_DOMAINS,
+  applyFromDisplayName,
   fromAddressForDomain,
   rootDomainOf,
 } from "@/lib/outreach/sending-domains-catalog";
@@ -29,7 +31,9 @@ export type EnsureCatalogResult = {
 
 /**
  * Idempotent: insert any catalog domain that is not already a sending
- * profile. Existing rows are left untouched (status, ramp, counters).
+ * profile. Existing rows keep status, ramp, and counters, but their
+ * from_address is rewritten to `V Executive Search <odv@domain>` so
+ * inboxes never show the bare local part ("ODV").
  *
  * New rows enter `warming` at ramp stage 0 so pickSendingProfile can
  * rotate them immediately. Resend already verified these domains; the
@@ -44,13 +48,11 @@ export async function ensureCatalogSendingProfiles(
     .from(sendingProfiles)
     .where(eq(sendingProfiles.kind, "email_domain"));
 
-  const have = new Set(
+  const byDomain = new Map(
     pool
-      .map((row) => row.domain?.trim().toLowerCase())
-      .filter((domain): domain is string => Boolean(domain)),
+      .filter((row) => row.domain?.trim())
+      .map((row) => [row.domain!.trim().toLowerCase(), row]),
   );
-  const templateFrom =
-    pool.find((row) => row.fromAddress)?.fromAddress ?? null;
   const replyTo =
     pool.find((row) => row.replyToAddress)?.replyToAddress?.trim() ||
     DEFAULT_REPLY_TO_ADDRESS;
@@ -59,15 +61,23 @@ export async function ensureCatalogSendingProfiles(
   const existing: string[] = [];
 
   for (const domain of CATALOG_SENDING_DOMAINS) {
-    if (have.has(domain)) {
+    const desiredFrom = fromAddressForDomain(domain);
+    const row = byDomain.get(domain);
+    if (row) {
       existing.push(domain);
+      if (row.fromAddress !== desiredFrom) {
+        await db
+          .update(sendingProfiles)
+          .set({ fromAddress: desiredFrom, updatedAt: now })
+          .where(eq(sendingProfiles.id, row.id));
+      }
       continue;
     }
     await db.insert(sendingProfiles).values({
       kind: "email_domain",
       label: domain,
       domain,
-      fromAddress: fromAddressForDomain(domain, templateFrom),
+      fromAddress: desiredFrom,
       replyToAddress: replyTo,
       rootDomain: rootDomainOf(domain),
       status: "warming",
@@ -78,7 +88,11 @@ export async function ensureCatalogSendingProfiles(
       cleanSince: now,
       updatedAt: now,
     });
-    have.add(domain);
+    byDomain.set(domain, {
+      id: "",
+      domain,
+      fromAddress: desiredFrom,
+    } as (typeof pool)[number]);
     created.push(domain);
   }
 

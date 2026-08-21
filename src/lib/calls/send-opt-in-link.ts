@@ -18,6 +18,7 @@ import {
   resolveProfileApiKey,
   sendOutreachEmail,
 } from "@/lib/outreach/resend-send";
+import { applyFromDisplayName } from "@/lib/outreach/sending-domains-catalog";
 import { getOrCreateOutreachSettings } from "@/lib/outreach/settings";
 import { recordCallListOutreachEvent } from "@/lib/outreach/call-list-sync";
 import { isPersonalEmail } from "@/lib/phone-utils";
@@ -110,8 +111,10 @@ export async function sendOptInLink(
   const pick = await pickSendingProfile("email_domain");
   const profile = pick?.profile ?? null;
   const apiKey = resolveProfileApiKey(profile);
-  const from = profile?.fromAddress ?? defaultFromAddress();
-  if (!apiKey || !from) {
+  const from = applyFromDisplayName(
+    profile?.fromAddress ?? defaultFromAddress() ?? "",
+  );
+  if (!apiKey || !from.includes("@")) {
     return {
       ok: false,
       status: 500,
