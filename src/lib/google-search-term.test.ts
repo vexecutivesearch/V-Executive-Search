@@ -59,6 +59,8 @@ describe("buildGeoZones", () => {
       metroAliases: gaDefaults.metroAliases,
       notificationEmail: "test@example.com",
       jobBoards: [],
+      emailReportPreferences: null,
+      contactTitles: [],
       runRequestedAt: null,
       runClaimedAt: null,
       contactoutSyncRequestedAt: null,

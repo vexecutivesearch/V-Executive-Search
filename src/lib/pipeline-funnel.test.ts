@@ -21,6 +21,8 @@ function wpbSettings(): typeof pipelineSettings.$inferSelect {
     metroAliases: ["palm beach county"],
     notificationEmail: "test@example.com",
     jobBoards: [],
+    emailReportPreferences: null,
+    contactTitles: [],
     runRequestedAt: null,
     runClaimedAt: null,
     contactoutSyncRequestedAt: null,

@@ -26,6 +26,8 @@ function settingsFor(
     metroAliases: config.defaultMetroAliases,
     notificationEmail: "test@example.com",
     jobBoards: [],
+    emailReportPreferences: null,
+    contactTitles: [],
     runRequestedAt: null,
     runClaimedAt: null,
     contactoutSyncRequestedAt: null,
