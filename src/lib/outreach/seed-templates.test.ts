@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { REPLY_TEMPLATE_KINDS } from "@/lib/outreach/reply-playbook";
-import { sanitizeOutreachBody } from "@/lib/outreach/sanitizer";
+import { sanitizeOutreachBody, sanitizeSubject } from "@/lib/outreach/sanitizer";
 import {
   resolveSchedulingLink,
   schedulingCallLength,
@@ -70,6 +70,33 @@ describe("seeded reply exemplars", () => {
     }
   });
 
+  /*
+   * Cold copy has a stricter lint than a reply: no links at all, and the dash
+   * rule applies to the whole body rather than to everything outside a URL.
+   */
+  it("writes cold exemplars that survive the link-free sanitizer", () => {
+    const cold = SEED_TEMPLATES.filter(
+      (t) => !(REPLY_TEMPLATE_KINDS as readonly string[]).includes(t.kind),
+    );
+    expect(cold.length).toBeGreaterThan(0);
+    for (const t of cold) {
+      const result = sanitizeOutreachBody(t.exampleBody, {
+        channel: t.channel,
+      });
+      expect(
+        result.violations,
+        `${t.name}: ${result.violations.join("; ")}`,
+      ).toEqual([]);
+      if (t.exampleSubject) {
+        const subject = sanitizeSubject(t.exampleSubject);
+        expect(
+          subject.violations,
+          `${t.name} subject: ${subject.violations.join("; ")}`,
+        ).toEqual([]);
+      }
+    }
+  });
+
   it("keeps every seeded name and body free of dashes outside URLs", () => {
     const dash = /[\u002D\u2010-\u2015\u2212]/;
     for (const t of SEED_TEMPLATES) {
@@ -82,6 +109,86 @@ describe("seeded reply exemplars", () => {
         );
       }
     }
+  });
+});
+
+/**
+ * The first follow-up took 135 sends to zero replies. It restated that an
+ * earlier email existed, offered empathy that fitted any company alive, sold
+ * the process, and re-asked for the call the intro had already been refused.
+ * Since exemplars are the style DNA every generated followup_1 is written
+ * against, the exemplar is the fix.
+ */
+describe("the first follow-up exemplar", () => {
+  const followup = SEED_TEMPLATES.find((t) => t.kind === "followup_1")!;
+
+  it("passes the dash lint the drafts are held to", () => {
+    const result = sanitizeOutreachBody(followup.exampleBody, {
+      channel: "email",
+    });
+    expect(result.ok, result.violations.join("; ")).toBe(true);
+    expect(
+      result.violations.filter((v) => v.includes("dash or hyphen")),
+    ).toEqual([]);
+    expect(sanitizeSubject(followup.exampleSubject!).ok).toBe(true);
+  });
+
+  it("anchors on a hiring signal the pipeline actually collects", () => {
+    const body = followup.exampleBody.toLowerCase();
+    // The role title, the days it has been open, and the repost: all three
+    // come off the job listing and the hiring signals we already store.
+    expect(body).toContain("senior scada controls systems engineer");
+    expect(body).toMatch(/\b\d+ days old\b/);
+    expect(body).toContain("went back up on the board");
+  });
+
+  it("asks one low friction question instead of the call that already failed", () => {
+    const body = followup.exampleBody.toLowerCase();
+    expect(body).not.toMatch(/\bcall\b/);
+    expect(body).not.toMatch(/\bten minutes\b|\bquick chat\b|\bcatch up\b/);
+    expect(followup.exampleBody.split("?")).toHaveLength(2);
+    expect(followup.exampleBody.trimEnd().endsWith("?")).toBe(true);
+  });
+
+  it("drops the copy that earned nothing", () => {
+    const body = followup.exampleBody.toLowerCase();
+    expect(body).not.toContain("following up on my note");
+    expect(body).not.toContain("a lot to juggle");
+    expect(body).not.toContain("how we'd approach the search");
+    expect(body).not.toContain("realistic timeline");
+  });
+
+  it("keeps a rename path from every earlier title", () => {
+    expect(followup.legacyNames).toContain("Follow up email 1, short nudge");
+  });
+});
+
+/**
+ * Concrete beats polished. The boutique pitch never names a role and took 383
+ * sends to 3 replies; the named open roles exemplar took 5 to 3. Retiring the
+ * first leaves the second as the only DNA a new intro is drafted against.
+ */
+describe("which intro exemplars still draft copy", () => {
+  const intros = SEED_TEMPLATES.filter((t) => t.kind === "intro");
+
+  it("retires the boutique pitch without deleting the record", () => {
+    const boutique = intros.find((t) => t.name.includes("boutique"))!;
+    expect(boutique.isActive).toBe(false);
+    // Still on the record as a real send that once won a reply.
+    expect(boutique.isProven).toBe(true);
+    expect(boutique.exampleBody.length).toBeGreaterThan(0);
+  });
+
+  it("leaves the named open roles pattern as the live intro DNA", () => {
+    const active = intros.filter((t) => t.isActive !== false);
+    expect(active.map((t) => t.name)).toEqual(["Intro email, named open roles"]);
+    expect(active[0].exampleBody).toContain("openings in West Palm Beach");
+  });
+
+  it("retires nothing else by accident", () => {
+    expect(
+      SEED_TEMPLATES.filter((t) => t.isActive === false).map((t) => t.name),
+    ).toEqual(["Intro email, boutique firm pitch"]);
   });
 });
 

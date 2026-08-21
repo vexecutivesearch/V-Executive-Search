@@ -49,15 +49,25 @@ export const SEED_TEMPLATES: Array<{
   channel: "email" | "imessage";
   /** A real send that really got a reply, rather than written for coverage. */
   isProven?: boolean;
+  /**
+   * Set false to retire an exemplar: the row stays for the record and its
+   * reply counters, but drafting stops few-shotting from it.
+   */
+  isActive?: boolean;
   exampleSubject?: string;
   exampleBody: string;
 }> = [
   {
+    // Retired as drafting DNA on the numbers: 3 replies from 383 sends, 0.8%,
+    // against 3 from 5 for the named open roles exemplar below. It never names
+    // a role, so every draft it shapes opens by pitching the firm rather than
+    // by naming what the reader is hiring for.
     name: "Intro email, boutique firm pitch",
     legacyNames: ["Boutique legal recruitment (won reply)"],
     kind: "intro",
     channel: "email",
     isProven: true,
+    isActive: false,
     exampleSubject: "Boutique Legal Recruitment",
     exampleBody: `Hello,
 
@@ -90,18 +100,37 @@ We work quickly while maintaining a strong focus on technical alignment, compens
 Would you be open to a quick conversation this week to discuss how Villatoro Executive Search could support these searches?`,
   },
   {
-    name: "Follow up email 1, short nudge",
-    legacyNames: ["Follow up 1, short nudge", "Follow-up 1, short nudge"],
+    /*
+     * Replaces a nudge that took 135 sends to zero replies. It restated that
+     * an earlier email existed, offered generic empathy that fitted any
+     * company alive, sold the process ("how we'd approach the search and a
+     * realistic timeline"), and then asked for the same call the intro had
+     * already asked for and not got.
+     *
+     * This one carries a reason to reply that did not exist two days ago: the
+     * role is still open, it has now been open for a countable number of days,
+     * and the posting went back up. Those come off the hiring signals the
+     * pipeline already records (long_running, reposted_role, and the reason to
+     * call note that carries the day count), so the specifics are real rather
+     * than invented. The ask is one question a busy person can answer in four
+     * words, because the call ask is the one that already failed.
+     */
+    name: "Follow up email 1, name the stalled role and ask one question",
+    legacyNames: [
+      "Follow up email 1, short nudge",
+      "Follow up 1, short nudge",
+      "Follow-up 1, short nudge",
+    ],
     kind: "followup_1",
     channel: "email",
-    exampleSubject: "Following up on your open roles",
+    exampleSubject: "Your SCADA Controls Engineer role, still open after 34 days",
     exampleBody: `Hi Stacy,
 
-Following up on my note about your open roles. I know hiring for specialized positions while running the day to day is a lot to juggle.
+Your Senior SCADA Controls Systems Engineer posting in West Palm Beach is 34 days old now, and it went back up on the board last week, so I am guessing the shortlist did not hold up.
 
-If it would help, I can share how we'd approach the search and what a realistic timeline looks like, without adding work to your plate.
+When a storage controls search sits this long, it is usually one of two things. Either the comp band is under what the utility scale operators are paying for the same skill set, or the onsite requirement is cutting out most of the people who can actually do the work.
 
-Worth a quick call this week?`,
+Which of those two is closer to the truth here?`,
   },
   {
     name: "Follow up email 2, last note",
@@ -215,6 +244,16 @@ Understood, thanks for letting me know. Wishing you the best with the search, an
   },
 ];
 
+/**
+ * Retirement travels one way. A seed marked inactive is pushed inactive on
+ * every seed pass, but nothing here ever activates a row: an admin who turns
+ * an exemplar off in the Template bank must not have it turned back on by the
+ * next enrollment.
+ */
+function retires(t: (typeof SEED_TEMPLATES)[number]): boolean {
+  return t.isActive === false;
+}
+
 function legacyNamesFor(t: (typeof SEED_TEMPLATES)[number]): string[] {
   return [...(t.legacyNames ?? [])].filter(
     (n, i, arr) => n && n !== t.name && arr.indexOf(n) === i,
@@ -223,7 +262,8 @@ function legacyNamesFor(t: (typeof SEED_TEMPLATES)[number]): string[] {
 
 /**
  * Insert missing seed exemplars and refresh wording for known seed names.
- * Renames legacy hyphenated titles; drops orphan duplicates once the new name exists.
+ * Renames legacy hyphenated titles; drops orphan duplicates once the new name
+ * exists; retires exemplars marked inactive in the seed list.
  */
 export async function seedOutreachTemplates(): Promise<number> {
   let changed = 0;
@@ -258,6 +298,7 @@ export async function seedOutreachTemplates(): Promise<number> {
             isProven: t.isProven ?? false,
             exampleSubject: t.exampleSubject ?? null,
             exampleBody: t.exampleBody,
+            ...(retires(t) ? { isActive: false } : {}),
             updatedAt: new Date(),
           })
           .where(eq(outreachTemplates.id, legacy.id));
@@ -271,7 +312,7 @@ export async function seedOutreachTemplates(): Promise<number> {
         isProven: t.isProven ?? false,
         exampleSubject: t.exampleSubject ?? null,
         exampleBody: t.exampleBody,
-        isActive: true,
+        isActive: t.isActive ?? true,
       });
       changed += 1;
       continue;
@@ -281,7 +322,8 @@ export async function seedOutreachTemplates(): Promise<number> {
       existing.exampleBody !== t.exampleBody ||
       (existing.exampleSubject ?? null) !== (t.exampleSubject ?? null) ||
       existing.channel !== t.channel ||
-      existing.isProven !== (t.isProven ?? false)
+      existing.isProven !== (t.isProven ?? false) ||
+      (retires(t) && existing.isActive)
     ) {
       await db
         .update(outreachTemplates)
@@ -290,6 +332,7 @@ export async function seedOutreachTemplates(): Promise<number> {
           isProven: t.isProven ?? false,
           exampleSubject: t.exampleSubject ?? null,
           exampleBody: t.exampleBody,
+          ...(retires(t) ? { isActive: false } : {}),
           updatedAt: new Date(),
         })
         .where(eq(outreachTemplates.id, existing.id));

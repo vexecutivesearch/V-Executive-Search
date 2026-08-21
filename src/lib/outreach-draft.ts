@@ -171,7 +171,7 @@ const STEP_GUIDANCE: Record<string, string> = {
   intro:
     "First cold email about the PRIMARY job listing. Match the successful examples: short paragraphs, specific role + location, clear value (speed / hands on / fit), soft ask for a quick call. 3 to 5 short paragraphs. No signature (system appends it).",
   followup_1:
-    "Second email, same thread, about 2 days after the day-0 intro (and same-day SMS if sent). Brief nudge that references the earlier note and the same open role(s). One new proof point. Soft ask. 2 to 3 short paragraphs.",
+    "Second email, same thread, about 2 days after the day-0 intro. It must carry a reason to reply that did not exist in the intro, so never merely restate that you emailed. Anchor on a specific signal from the FACTS: the exact role title, how long it has been open, that it was reposted, or the other named openings. Then say something concrete about why a search like that stalls, or what the market is paying. Do NOT ask for a call again, the intro already did and it did not land: close with ONE short low friction question they can answer in a few words. No generic empathy about how busy hiring is. 2 to 3 short paragraphs.",
   followup_2:
     "Final email. Very short, graceful, low pressure, leaves the door open. 2 short paragraphs.",
   text_1:
@@ -264,7 +264,7 @@ function draftPrompt(options: {
 
   const mission =
     isIntro
-      ? `Here are two successful outreach emails that received positive responses (style exemplars below).
+      ? `Here are outreach emails that received positive responses (style exemplars below).
 Here are the details of the job listing(s) we are inquiring about (FACTS block).
 
 Please draft a similar cold email we can send: same professionalism, brevity, value centric pitch, and low pressure CTA, personalized to THIS company and PRIMARY role.`
