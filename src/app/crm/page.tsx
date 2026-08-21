@@ -2,6 +2,7 @@ import Link from "next/link";
 import { CrmFilterBar } from "@/components/crm/CrmFilterBar";
 import { CrmLeadsList } from "@/components/crm/CrmLeadsList";
 import { DiscoveryReviewList } from "@/components/crm/DiscoveryReviewList";
+import { DiscoveryRunLauncher } from "@/components/crm/DiscoveryRunLauncher";
 import { CrmListingsList } from "@/components/crm/CrmListingsList";
 import { CallListView } from "@/components/crm/CallListView";
 import { KpiCards } from "@/components/crm/KpiCards";
@@ -26,6 +27,11 @@ import {
   type CompanyReviewStatus,
   type CompanyStatus,
 } from "@/lib/db/schema";
+import {
+  EMPTY_LOCATION_SCOPE,
+  normalizeLocationScope,
+  type LocationScope,
+} from "@/lib/crm-location-scope";
 import {
   getReviewQueue,
   getReviewQueueCounts,
@@ -105,13 +111,16 @@ function parseReviewStatus(raw: string | undefined): CompanyReviewStatus | "all"
     : "pending";
 }
 
-function parseFilters(params: CrmSearchParams): CrmLeadFilters {
+function parseFilters(
+  params: CrmSearchParams,
+  scope: LocationScope,
+): CrmLeadFilters {
   return {
     // The Pipeline UI is location-led (State → City). source_market remains
     // available to the JSON API for provenance queries, but is not a view gate.
     market: undefined,
-    state: params.state?.trim() || undefined,
-    city: params.city?.trim() || undefined,
+    state: scope.state || undefined,
+    city: scope.city || undefined,
     sector: params.sector?.trim() || undefined,
     status:
       params.status && COMPANY_STATUSES.has(params.status)
@@ -144,7 +153,8 @@ export default async function CrmPage({
 }) {
   const params = await searchParams;
   const tab = parseTab(params.tab);
-  const filters = parseFilters(params);
+  let scope = EMPTY_LOCATION_SCOPE;
+  let filters = parseFilters(params, scope);
 
   let filterOptions;
   let counts;
@@ -164,6 +174,8 @@ export default async function CrmPage({
       getCrmKpis(businessListDate()),
       getLocationRailCounts(),
     ]);
+    scope = normalizeLocationScope(params, filterOptions);
+    filters = parseFilters(params, scope);
     if (tab === "discovery") {
       [review, reviewCounts, reviewFacets] = await Promise.all([
         getReviewQueue({
@@ -230,8 +242,8 @@ export default async function CrmPage({
 
   const carriedFilterEntries = {
     market: params.market,
-    state: params.state,
-    city: params.city,
+    state: scope.state || undefined,
+    city: scope.city || undefined,
     sector: params.sector,
     status: params.status,
     board: params.board,
@@ -276,8 +288,8 @@ export default async function CrmPage({
       review: params.review,
       vertical: params.vertical,
       dmarket: params.dmarket,
-      state: params.state,
-      city: params.city,
+      state: scope.state || undefined,
+      city: scope.city || undefined,
       q: params.q,
       page: params.page,
     };
@@ -305,6 +317,14 @@ export default async function CrmPage({
     const s = qs.toString();
     return s ? `/crm?${s}` : "/crm";
   }
+
+  // Pagination and export links rebuild the query string from these, so hand
+  // them the normalized pair rather than letting a dropped city ride along.
+  const scopedParams: CrmSearchParams = {
+    ...params,
+    state: scope.state || undefined,
+    city: scope.city || undefined,
+  };
 
   const tabClass = (active: boolean) =>
     `px-3 py-1.5 rounded-full text-sm border transition-colors ${
@@ -356,7 +376,7 @@ export default async function CrmPage({
             ↓ Export call list CSV
           </a>
         ) : tab !== "listings" ? (
-          <CrmExportLink params={params} hot={tab === "hot"} />
+          <CrmExportLink params={scopedParams} hot={tab === "hot"} />
         ) : null}
       </div>
 
@@ -365,8 +385,8 @@ export default async function CrmPage({
           <LocationRail
             total={rail!.total}
             states={rail!.states}
-            activeState={params.state ?? ""}
-            activeCity={params.city ?? ""}
+            activeState={scope.state}
+            activeCity={scope.city}
             buildHref={locationHref}
           />
         )}
@@ -374,13 +394,16 @@ export default async function CrmPage({
         <div className="flex-1 min-w-0">
           {tab === "discovery" ? (
             <>
+            {/* The Apollo search leads; the browse filters sit against the
+                queue they narrow, so the two never read as one control row. */}
+            <DiscoveryRunLauncher browseScope={scope} />
             <CrmFilterBar
               options={filterOptions!}
               tab={tab}
               variant="discovery"
               active={{
-                state: params.state ?? "",
-                city: params.city ?? "",
+                state: scope.state,
+                city: scope.city,
                 sector: "",
                 status: "",
                 q: params.q ?? "",
@@ -413,7 +436,7 @@ export default async function CrmPage({
           ) : tab === "listings" ? (
             <CrmListingsList
               result={listings!}
-              params={{ ...params, tab: "listings" }}
+              params={{ ...scopedParams, tab: "listings" }}
               activeFilters={{
                 q: params.q ?? "",
                 board: params.board ?? "",
@@ -429,8 +452,8 @@ export default async function CrmPage({
                 options={filterOptions!}
                 tab={tab}
                 active={{
-                  state: params.state ?? "",
-                  city: params.city ?? "",
+                  state: scope.state,
+                  city: scope.city,
                   sector: params.sector ?? "",
                   status: params.status ?? "",
                   q: params.q ?? "",
@@ -446,7 +469,7 @@ export default async function CrmPage({
                   sort: filters.sort ?? "icp",
                 }}
               />
-              <CrmLeadsList result={leads!} tab={tab} params={params} />
+              <CrmLeadsList result={leads!} tab={tab} params={scopedParams} />
             </>
           )}
         </div>

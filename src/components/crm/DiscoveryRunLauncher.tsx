@@ -2,6 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  defaultDiscoveryMarket,
+  stateLabel,
+  type LocationScope,
+} from "@/lib/crm-location-scope";
 
 type VerticalOption = {
   id: string;
@@ -60,12 +65,21 @@ function poolLabel(status: PoolEntry["status"]): string {
 /**
  * Launch a discovery run: market + vertical + count. Markets are picked per run
  * and never touch the Admin geo config that drives the job scrape.
+ *
+ * This is a search, not a filter: the market goes to Apollo's
+ * organization_locations to find companies the database has never seen. The
+ * browse scope can suggest a starting market but must not narrow the list —
+ * searching Dallas while browsing Florida is legitimate.
  */
-export function DiscoveryRunLauncher() {
+export function DiscoveryRunLauncher({
+  browseScope,
+}: {
+  browseScope?: LocationScope;
+}) {
   const router = useRouter();
   const [config, setConfig] = useState<LauncherConfig | null>(null);
   const [vertical, setVertical] = useState("");
-  const [market, setMarket] = useState("");
+  const [marketChoice, setMarketChoice] = useState("");
   const [customMarket, setCustomMarket] = useState("");
   const [limit, setLimit] = useState(25);
   const [includeUnknownSize, setIncludeUnknownSize] = useState(true);
@@ -81,7 +95,6 @@ export function DiscoveryRunLauncher() {
         if (!active) return;
         setConfig(data);
         setVertical((v) => v || data.verticals[0]?.id || "");
-        setMarket((m) => m || data.markets[0] || "");
         setLimit(data.defaults?.companiesPerRun ?? 25);
         setIncludeUnknownSize(data.defaults?.includeUnknownSize !== false);
       })
@@ -91,6 +104,10 @@ export function DiscoveryRunLauncher() {
     };
   }, []);
 
+  const suggestedMarket = config
+    ? defaultDiscoveryMarket(config.markets, browseScope ?? {})
+    : null;
+  const market = marketChoice || suggestedMarket || config?.markets[0] || "";
   const effectiveMarket = market === "__custom" ? customMarket.trim() : market;
   const activeVertical = config?.verticals.find((v) => v.id === vertical);
   const pools = (config?.pools ?? []).filter(
@@ -132,7 +149,19 @@ export function DiscoveryRunLauncher() {
     "text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900";
 
   return (
-    <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 p-4 mb-4">
+    <section
+      aria-labelledby="discovery-run-heading"
+      className="rounded-xl border-2 border-dashed border-blue-300 dark:border-blue-900 bg-blue-50/50 dark:bg-blue-950/20 p-4 mb-5"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 mb-3">
+        <h2 id="discovery-run-heading" className="text-sm font-semibold">
+          New Apollo search — find companies not in the pipeline yet
+        </h2>
+        <span className="text-xs text-gray-500">
+          Does not filter the queue below
+        </span>
+      </div>
+
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1 text-xs text-gray-500">
           Vertical
@@ -150,10 +179,10 @@ export function DiscoveryRunLauncher() {
         </label>
 
         <label className="flex flex-col gap-1 text-xs text-gray-500">
-          Market
+          Apollo market to search
           <select
             value={market}
-            onChange={(e) => setMarket(e.target.value)}
+            onChange={(e) => setMarketChoice(e.target.value)}
             className={selectClass}
           >
             {(config?.markets ?? []).map((m) => (
@@ -208,6 +237,13 @@ export function DiscoveryRunLauncher() {
           {busy ? "Finding companies…" : `Find ${limit} companies`}
         </button>
       </div>
+
+      {!marketChoice && suggestedMarket && browseScope?.state && (
+        <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+          Prefilled from the {stateLabel(browseScope.state)} browse filter. Any
+          market can be searched, whatever the queue below is scoped to.
+        </p>
+      )}
 
       <p className="text-xs text-gray-500 mt-2">
         Discovery costs one Apollo credit per page of up to 100 organizations and
@@ -271,6 +307,6 @@ export function DiscoveryRunLauncher() {
           ))}
         </div>
       )}
-    </div>
+    </section>
   );
 }
