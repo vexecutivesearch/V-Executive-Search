@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  activeReviewFilters,
   CITY_OPTION_LIMIT,
   cityOptionsForState,
   defaultDiscoveryMarket,
   normalizeLocationScope,
+  normalizeReviewScope,
+  reviewQueueQueryFilters,
   stateLabel,
   type CityOption,
 } from "@/lib/crm-location-scope";
@@ -83,6 +86,102 @@ describe("normalizeLocationScope", () => {
   it("is idempotent", () => {
     const once = normalizeLocationScope({ state: "ga", city: "ATLANTA" }, OPTIONS);
     expect(normalizeLocationScope(once, OPTIONS)).toEqual(once);
+  });
+
+  it("never lets a city outlive the state that scoped it", () => {
+    // The server-side city predicate matches on name alone, so "Springfield"
+    // without its own state would match FL and TN at once. Whichever state is
+    // selected, the persisted pair is either consistent or has no city at all.
+    for (const state of ["", "FL", "GA", "TN", "ZZ"]) {
+      const scope = normalizeLocationScope({ state, city: "Springfield" }, OPTIONS);
+      if (!scope.city) continue;
+      expect(
+        OPTIONS.cities.some(
+          (c) => c.city === scope.city && c.stateAbbr === scope.state,
+        ),
+      ).toBe(true);
+    }
+    expect(normalizeLocationScope({ state: "GA", city: "Springfield" }, OPTIONS))
+      .toEqual({ state: "GA", city: "" });
+  });
+});
+
+describe("normalizeReviewScope", () => {
+  const FACETS = {
+    verticals: ["hvac", "restoration"],
+    markets: ["Palm Beach County, Florida", "Atlanta, Georgia"],
+  };
+
+  it("keeps a vertical and market that still have chips", () => {
+    expect(
+      normalizeReviewScope(
+        { vertical: "hvac", dmarket: "Atlanta, Georgia", q: " acme " },
+        FACETS,
+      ),
+    ).toEqual({
+      vertical: "hvac",
+      market: "Atlanta, Georgia",
+      search: "acme",
+    });
+  });
+
+  it("drops a vertical or market with no chip left to clear it", () => {
+    // A bookmarked URL from before a bucket was emptied would otherwise hide
+    // the whole queue with nothing on screen to blame.
+    expect(
+      normalizeReviewScope(
+        { vertical: "retired_vertical", dmarket: "Boise, Idaho" },
+        FACETS,
+      ),
+    ).toEqual({ vertical: "", market: "", search: "" });
+  });
+
+  it("ignores browse location entirely", () => {
+    const scope = normalizeReviewScope(
+      { vertical: "hvac" } as Record<string, string>,
+      FACETS,
+    );
+    expect(Object.keys(scope).sort()).toEqual(["market", "search", "vertical"]);
+  });
+});
+
+describe("reviewQueueQueryFilters", () => {
+  it("carries no state or city, so counts read the same fields as the list", () => {
+    const filters = reviewQueueQueryFilters(
+      { vertical: "hvac", market: "Palm Beach County, Florida", search: "" },
+      { reviewStatus: "pending", page: 2 },
+    );
+    expect(filters).toEqual({
+      reviewStatus: "pending",
+      vertical: "hvac",
+      market: "Palm Beach County, Florida",
+      search: undefined,
+      page: 2,
+    });
+    expect(Object.keys(filters)).not.toContain("state");
+    expect(Object.keys(filters)).not.toContain("city");
+  });
+});
+
+describe("activeReviewFilters", () => {
+  it("names each filter by the query key that clears it", () => {
+    expect(
+      activeReviewFilters({
+        vertical: "hvac",
+        market: "Atlanta, Georgia",
+        search: "acme",
+      }),
+    ).toEqual([
+      { key: "vertical", value: "hvac" },
+      { key: "dmarket", value: "Atlanta, Georgia" },
+      { key: "q", value: "acme" },
+    ]);
+  });
+
+  it("reports nothing when the queue is unfiltered", () => {
+    expect(
+      activeReviewFilters({ vertical: "", market: "", search: "" }),
+    ).toEqual([]);
   });
 });
 
