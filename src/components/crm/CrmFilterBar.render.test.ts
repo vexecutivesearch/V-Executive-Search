@@ -120,7 +120,7 @@ describe("CrmFilterBar — the discovery variant only searches", () => {
 
   it("promises only the fields the review queue actually searches", () => {
     const html = render({}, "discovery");
-    expect(html).toContain("company, domain, industry");
+    expect(html).toContain("Company, domain, industry");
     expect(html).not.toContain("Sort: ICP fit");
     expect(html).not.toContain("Hide categories");
   });

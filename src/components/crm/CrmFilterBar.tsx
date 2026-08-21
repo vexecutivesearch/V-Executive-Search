@@ -68,9 +68,9 @@ const HIDE_CATEGORY_OPTIONS = [
  * URL-driven filter bar: every change updates the query string so filtering
  * happens server-side, before the pagination cap — not over a loaded slice.
  *
- * This bar owns the whole browse location scope: State, then City. The location
- * summary alongside the list reports the same scope but does not set it, so
- * there is exactly one control per level.
+ * Browse location lives in LocationScopeSelect — State, then City, shared with
+ * the Job Listings bar. The summary alongside the list reports that scope but
+ * does not set it, so there is exactly one control per level.
  */
 export function CrmFilterBar({
   options,
@@ -163,14 +163,19 @@ export function CrmFilterBar({
   if (variant === "discovery") {
     return (
       <div className={barClass}>
-        <input
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search the review queue — company, domain, industry…"
-          aria-label="Search the review queue"
-          className="w-full text-sm border border-gray-200 dark:border-gray-700 rounded-md px-3 py-1.5 bg-white dark:bg-gray-900"
-        />
+        <label className="flex items-center gap-2">
+          <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500 shrink-0">
+            Search queue
+          </span>
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Company, domain, industry…"
+            aria-label="Search the review queue"
+            className="flex-1 min-w-0 text-sm border border-gray-200 dark:border-gray-700 rounded-md px-3 py-1.5 bg-white dark:bg-gray-900"
+          />
+        </label>
       </div>
     );
   }
