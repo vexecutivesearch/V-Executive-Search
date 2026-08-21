@@ -318,8 +318,8 @@ export default async function CrmPage({
     return s ? `/crm?${s}` : "/crm";
   }
 
-  /** Pagination/export links rebuild the query string, so hand them the
-   * normalized pair rather than letting a dropped city ride along. */
+  // Pagination and export links rebuild the query string from these, so hand
+  // them the normalized pair rather than letting a dropped city ride along.
   const scopedParams: CrmSearchParams = {
     ...params,
     state: scope.state || undefined,
@@ -394,8 +394,8 @@ export default async function CrmPage({
         <div className="flex-1 min-w-0">
           {tab === "discovery" ? (
             <>
-            {/* Search first, then the filters that narrow what it produced —
-                the two must not read as one row of location controls. */}
+            {/* The Apollo search leads; the browse filters sit against the
+                queue they narrow, so the two never read as one control row. */}
             <DiscoveryRunLauncher browseScope={scope} />
             <CrmFilterBar
               options={filterOptions!}

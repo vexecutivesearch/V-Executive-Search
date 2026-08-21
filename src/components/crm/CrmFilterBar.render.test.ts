@@ -53,7 +53,7 @@ describe("CrmFilterBar — city is scoped by the state scope", () => {
   it("offers no city until a state is chosen", () => {
     const html = render({});
     expect(html).toContain("All cities — pick a state first");
-    expect(html).toContain("disabled");
+    expect(html).toMatch(/disabled=""[^>]*aria-label="Filter by city"/);
     expect(html).not.toContain("Adairsville, GA");
     expect(html).not.toContain("Miami, FL");
   });
@@ -63,6 +63,7 @@ describe("CrmFilterBar — city is scoped by the state scope", () => {
     expect(html).toContain("All cities in Georgia");
     expect(html).toContain("Adairsville, GA");
     expect(html).not.toContain("Miami, FL");
+    expect(html).not.toContain('disabled=""');
   });
 
   it("names the state scope where the rail replaces the state dropdown", () => {

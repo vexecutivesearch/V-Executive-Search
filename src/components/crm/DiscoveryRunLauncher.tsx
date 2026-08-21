@@ -241,7 +241,7 @@ export function DiscoveryRunLauncher({
       {!marketChoice && suggestedMarket && browseScope?.state && (
         <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
           Prefilled from the {stateLabel(browseScope.state)} browse filter. Any
-          market can be searched, whatever the list below is showing.
+          market can be searched, whatever the queue below is scoped to.
         </p>
       )}
 
