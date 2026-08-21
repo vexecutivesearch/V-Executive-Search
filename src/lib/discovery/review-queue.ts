@@ -10,6 +10,7 @@
 import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
+  callListEntries,
   companies,
   companyIcp,
   contacts,
@@ -17,6 +18,7 @@ import {
   type CompanyReviewStatus,
 } from "@/lib/db/schema";
 import { parseJobLocation } from "@/lib/location-match";
+import { companyStatusForReviewStatus } from "./review-actions";
 import { getVerticalConfig } from "./verticals";
 import { summarizeJobSignals, type JobSignalSummary } from "./job-signals";
 
@@ -58,6 +60,8 @@ export type ReviewQueueRow = {
   contactCount: number;
   revealedContactCount: number;
   primaryContact: ReviewQueueContact | null;
+  /** Already on the Call List — the row shows a link instead of an add button. */
+  onCallList: boolean;
   firstSeen: string;
 };
 
@@ -195,6 +199,17 @@ export async function getReviewQueue(
     listingsByCompany.set(row.companyId, list);
   }
 
+  const onCallList = new Set(
+    ids.length
+      ? (
+          await db
+            .select({ companyId: callListEntries.companyId })
+            .from(callListEntries)
+            .where(inArray(callListEntries.companyId, ids))
+        ).map((r) => r.companyId)
+      : [],
+  );
+
   const contactRows = ids.length
     ? await db
         .select()
@@ -240,6 +255,7 @@ export async function getReviewQueue(
       jobSignal: summarizeJobSignals(listingsByCompany.get(company.id) ?? []),
       contactCount: companyContacts.length,
       revealedContactCount: revealed.length,
+      onCallList: onCallList.has(company.id),
       primaryContact: primary
         ? {
             id: primary.id,
@@ -329,12 +345,8 @@ export async function setCompanyReviewStatus(
   companyId: string,
   status: CompanyReviewStatus,
 ): Promise<void> {
-  const statusUpdate =
-    status === "do_not_contact"
-      ? { status: "skipped" as const }
-      : status === "existing_client"
-        ? { status: "client" as const }
-        : {};
+  const pipelineStatus = companyStatusForReviewStatus(status);
+  const statusUpdate = pipelineStatus ? { status: pipelineStatus } : {};
 
   await db
     .update(companies)
