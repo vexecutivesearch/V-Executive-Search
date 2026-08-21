@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { gateOrganizations } from "@/lib/discovery/run";
+import { mergeQuantified } from "@/lib/discovery/sources/apollo-quantify";
 import type { DiscoveredOrganization } from "@/lib/domain-resolver";
 
 function org(
@@ -91,5 +92,75 @@ describe("gateOrganizations — provider payload to gate decision", () => {
     const page = [org({ name: "Big GC", domain: "biggc.com", estimatedEmployees: 4000 })];
     expect(gateOrganizations(page, "construction", false).kept).toHaveLength(0);
     expect(gateOrganizations(page, "construction", true).kept).toHaveLength(1);
+  });
+
+  /*
+   * The fail-open a live trace caught, asserted at the PIPELINE call site
+   * rather than only on the `gateInputFor` adapter.
+   *
+   * A staffing agency with a polished Google Business Profile calls itself a
+   * "Business management consultant". Display precedence never overwrites a
+   * real value with a second provider's, so that Google category stays on
+   * `industry` even after Apollo says "staffing & recruiting". A gate handed
+   * `org.industry` therefore sees a consultancy at 22 employees — inside the
+   * construction band — and ACCEPTS a company the operator ruled out.
+   *
+   * `gateInputFor` alone is not enough to prevent this: it was already correct
+   * and already covered when `gateOrganizations` was still reading the display
+   * value. Only a test on the function the run actually calls catches it.
+   */
+  it("judges a quantified company on Apollo's taxonomy, not its display industry", () => {
+    const agency = mergeQuantified(
+      org({
+        name: "Meridian Advisory Group",
+        domain: "meridianadvisory.com",
+        industry: "Business management consultant",
+        estimatedEmployees: null,
+      }),
+      org({
+        name: "Meridian Advisory Group",
+        domain: "meridianadvisory.com",
+        industry: "staffing & recruiting",
+        estimatedEmployees: 22,
+      }),
+      { domain: "meridianadvisory.com" },
+    );
+
+    const { kept, rejected } = gateOrganizations([agency], "construction");
+
+    expect(rejected.map((d) => d.reason)).toEqual(["staffing_agency"]);
+    expect(kept).toHaveLength(0);
+    // The display label is untouched — the gate reads a different value, it
+    // does not rewrite the one the operator sees.
+    expect(agency.industry).toBe("Business management consultant");
+  });
+
+  it("still gates on the source's industry when Apollo had no record for it", () => {
+    const unmatched = mergeQuantified(
+      org({
+        name: "Peak Staffing Partners",
+        domain: "peakstaffing.com",
+        industry: "staffing & recruiting",
+      }),
+      null,
+      { domain: "peakstaffing.com" },
+    );
+
+    expect(gateOrganizations([unmatched], "construction").rejected).toEqual([
+      expect.objectContaining({ reason: "staffing_agency" }),
+    ]);
+  });
+
+  it("carries the quantification through the gate so provenance survives", () => {
+    const quantified = mergeQuantified(
+      org({ name: "Northline Mechanical", domain: "northlinemech.com", estimatedEmployees: null }),
+      org({ name: "Northline Mechanical", domain: "northlinemech.com", estimatedEmployees: 80 }),
+      { domain: "northlinemech.com" },
+    );
+
+    const { kept } = gateOrganizations([quantified], "construction");
+
+    expect(kept).toHaveLength(1);
+    expect(kept[0].quantification.fields.estimatedEmployees).toBe("apollo");
   });
 });

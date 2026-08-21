@@ -61,6 +61,7 @@ import {
 } from "./verticals";
 import { resolveSupplementarySources } from "./sources/source";
 import {
+  gateInputFor,
   headcountProvenance,
   quantifyOrganizations,
   type FieldProvenance,
@@ -98,21 +99,23 @@ const AUTO_EXCLUDE_FLAGS = new Set(
  * They are counted by reason instead, which is what makes a short run
  * diagnosable.
  */
-export function gateOrganizations(
-  organizations: DiscoveredOrganization[],
+export function gateOrganizations<T extends DiscoveredOrganization>(
+  organizations: T[],
   vertical: string,
   allowLargeCompanies = false,
-): { kept: DiscoveredOrganization[]; rejected: GateDecision[] } {
+): { kept: T[]; rejected: GateDecision[] } {
   const partition = partitionByGate(
     organizations,
     (org) => ({
-      name: org.name,
+      // `gateInputFor` is what hands the gate Apollo's INDUSTRY TAXONOMY rather
+      // than the display label, and building the input inline here instead is a
+      // fail-open: a staffing agency whose Google Business category reads
+      // "Business management consultant" keeps that label under display
+      // precedence, which hides Apollo's "staffing & recruiting" from the gate.
+      ...gateInputFor(org, vertical),
+      // The enterprise-domain rule still needs something to match on, and a
+      // Maps row can carry a website without a resolved primary domain.
       domain: org.domain ?? org.websiteUrl,
-      industry: org.industry,
-      employeeCount: org.estimatedEmployees,
-      annualRevenue: org.annualRevenue,
-      publiclyTradedSymbol: org.publiclyTradedSymbol,
-      vertical,
     }),
     { allowLargeCompanies },
   );
