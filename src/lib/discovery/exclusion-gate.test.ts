@@ -284,6 +284,24 @@ describe("evaluateDiscoveryGate — government and public sector", () => {
     ).not.toBeNull();
   });
 
+  it("sees the suffix through a full URL, not just a bare domain", () => {
+    expect(
+      isGovernmentEmployer({
+        name: "Parks Department",
+        domain: "https://www.pbcgov.gov/parks",
+      }),
+    ).not.toBeNull();
+  });
+
+  it("does not fire on a .gov substring inside another domain", () => {
+    expect(
+      isGovernmentEmployer({ name: "Govan Plumbing", domain: "govan.com" }),
+    ).toBeNull();
+    expect(
+      isGovernmentEmployer({ name: "Gov Solutions", domain: "mygov.consulting" }),
+    ).toBeNull();
+  });
+
   it("rejects on the government industry taxonomy", () => {
     expect(
       isGovernmentEmployer({

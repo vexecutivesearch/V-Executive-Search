@@ -20,7 +20,7 @@
 
 import { getIcpConfig } from "@/lib/icp/icp-config";
 import { employeeBandForVertical } from "./verticals";
-import { matchEnterpriseDomain } from "./enterprise-domains";
+import { matchEnterpriseDomain, normalizeHost } from "./enterprise-domains";
 
 export type GateVerdict = "accept" | "review" | "reject";
 
@@ -252,8 +252,10 @@ export function isGovernmentEmployer(input: {
   domain?: string | null;
   industry?: string | null;
 }): string | null {
-  const host = (input.domain ?? "").trim().toLowerCase();
-  if (/(^|\.)(gov|mil)$/.test(host.split("/")[0].replace(/^www\./, ""))) {
+  // normalizeHost first: sources hand us bare domains and full URLs alike, and
+  // a naive suffix test on "https://x.gov/dept" sees "https:" and passes.
+  const host = normalizeHost(input.domain);
+  if (host && /\.(gov|mil)$/.test(host)) {
     return `${host} is a government domain`;
   }
   const industry = input.industry ? normalizeIndustry(input.industry) : "";

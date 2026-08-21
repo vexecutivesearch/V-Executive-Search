@@ -484,8 +484,12 @@ export async function runCompanyDiscovery(
     vertical,
     allowLargeCompanies,
   );
+  // Only the genuinely headcount-less rows of the unknown pass are gated:
+  // candidate selection discards the rest anyway, and counting them as
+  // rejections would inflate the number the operator uses to diagnose a short
+  // run with companies that were never candidates.
   const unknownGate = gateOrganizations(
-    unknownOrganizations,
+    unknownOrganizations.filter((org) => org.estimatedEmployees == null),
     vertical,
     allowLargeCompanies,
   );
