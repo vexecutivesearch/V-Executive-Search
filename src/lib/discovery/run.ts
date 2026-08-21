@@ -10,7 +10,7 @@
  * Enrichment.
  */
 
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   companies,
@@ -47,9 +47,11 @@ import {
 import { summarizeJobSignals, type JobSignalSummary } from "./job-signals";
 import {
   advanceCursor,
+  DISCOVERY_APOLLO_PER_PAGE,
   EMPTY_CURSOR,
   pageForCursor,
   poolStatus,
+  reconcileCursor,
   type DiscoveryCursor,
   type DiscoveryPool,
   type PoolStatus,
@@ -85,7 +87,7 @@ import {
  * few organizations repeat. Dedupe absorbs them and the summary reports them as
  * duplicates.
  */
-const APOLLO_PER_PAGE = 100;
+const APOLLO_PER_PAGE = DISCOVERY_APOLLO_PER_PAGE;
 
 /** Deterministic flags that mean "the operator never wants to see this". */
 const AUTO_EXCLUDE_FLAGS = new Set(
@@ -201,7 +203,10 @@ async function loadCursor(
   vertical: string,
   market: string,
   pool: DiscoveryPool,
-): Promise<DiscoveryCursor> {
+): Promise<{
+  cursor: DiscoveryCursor;
+  resetReason: "page_size_changed" | "consumed_past_pool" | null;
+}> {
   const [row] = await db
     .select()
     .from(companyDiscoveryRuns)
@@ -211,13 +216,16 @@ async function loadCursor(
         AND ${companyDiscoveryRuns.pool} = ${pool}`,
     )
     .limit(1);
-  if (!row) return { ...EMPTY_CURSOR };
-  return {
-    perPage: row.perPage,
-    consumed: row.consumed,
-    totalEntries: row.totalEntries,
-    poolExhausted: row.poolExhausted,
-  };
+  if (!row) return { cursor: { ...EMPTY_CURSOR }, resetReason: null };
+  return reconcileCursor(
+    {
+      perPage: row.perPage,
+      consumed: row.consumed,
+      totalEntries: row.totalEntries,
+      poolExhausted: row.poolExhausted,
+    },
+    APOLLO_PER_PAGE,
+  );
 }
 
 async function saveCursor(
@@ -282,13 +290,44 @@ export async function getDiscoveryPoolStatuses(): Promise<
     market: row.market,
     pool: row.pool === "unknown_size" ? "unknown_size" : "sized",
     lastRunAt: row.lastRunAt,
-    status: poolStatus({
-      perPage: row.perPage,
-      consumed: row.consumed,
-      totalEntries: row.totalEntries,
-      poolExhausted: row.poolExhausted,
-    }),
+    status: poolStatus(
+      reconcileCursor(
+        {
+          perPage: row.perPage,
+          consumed: row.consumed,
+          totalEntries: row.totalEntries,
+          poolExhausted: row.poolExhausted,
+        },
+        APOLLO_PER_PAGE,
+      ).cursor,
+    ),
   }));
+}
+
+/**
+ * Forget the Apollo cursors for one (vertical, market) so the next run starts
+ * at page 1. Used when the operator wants to search again after a stale
+ * exhaustion, or after keyword / page-size changes the leftover cursor does
+ * not describe.
+ *
+ * Does not touch supplementary-source cursors (SerpApi search slots live in
+ * the same table under a different `pool` value).
+ */
+export async function resetDiscoveryCursors(
+  vertical: string,
+  market: string,
+): Promise<{ reset: number }> {
+  const deleted = await db
+    .delete(companyDiscoveryRuns)
+    .where(
+      and(
+        eq(companyDiscoveryRuns.vertical, vertical),
+        eq(companyDiscoveryRuns.market, market),
+        inArray(companyDiscoveryRuns.pool, ["sized", "unknown_size"]),
+      ),
+    )
+    .returning({ pool: companyDiscoveryRuns.pool });
+  return { reset: deleted.length };
 }
 
 type ExistingCompanyRow = {
@@ -525,22 +564,62 @@ export async function runCompanyDiscovery(
     options.context ?? manualEnrichContext(`discovery:${vertical}:${market}`);
   const notes: string[] = [];
 
-  const sizedCursor = await loadCursor(vertical, market, "sized");
-  const unknownCursor = await loadCursor(vertical, market, "unknown_size");
+  const sizedLoad = await loadCursor(vertical, market, "sized");
+  const unknownLoad = await loadCursor(vertical, market, "unknown_size");
+  const sizedCursor = sizedLoad.cursor;
+  const unknownCursor = unknownLoad.cursor;
+  if (sizedLoad.resetReason) {
+    notes.push(
+      sizedLoad.resetReason === "consumed_past_pool"
+        ? "Sized-pool cursor was past its own pool size (leftover from the 25-row page) — restarted from the top."
+        : "Sized-pool cursor was exhausted at the old 25-row page size — restarted from the top.",
+    );
+  }
+  if (unknownLoad.resetReason) {
+    notes.push(
+      "Size-unknown cursor was marked exhausted under the old page size — " +
+        "restarted. That pass is where small local firms without an Apollo headcount live.",
+    );
+  }
 
   let creditsSpent = 0;
-  const sizedPage = pageForCursor(sizedCursor, APOLLO_PER_PAGE);
-  const sizedResult = await searchOrganizations({
-    apiKey,
-    locations: [market],
-    keywordTags: keywordTagsForVertical(vertical),
-    employeeRange: apolloEmployeeRange(vertical),
-    page: sizedPage,
+  let sizedResult: Awaited<ReturnType<typeof searchOrganizations>> = {
+    organizations: [],
+    page: pageForCursor(sizedCursor, APOLLO_PER_PAGE),
     perPage: APOLLO_PER_PAGE,
-    context,
-    usageLabel: `discovery:${vertical}:${market}:sized`,
-  });
-  creditsSpent += 1;
+    totalEntries: sizedCursor.totalEntries,
+    totalPages: null,
+  };
+  let nextSizedCursor = sizedCursor;
+
+  if (sizedCursor.poolExhausted) {
+    notes.push(
+      "Sized pool already exhausted for this market — skipped so we do not spend a credit on an empty page.",
+    );
+  } else {
+    const sizedPage = pageForCursor(sizedCursor, APOLLO_PER_PAGE);
+    sizedResult = await searchOrganizations({
+      apiKey,
+      locations: [market],
+      keywordTags: keywordTagsForVertical(vertical),
+      employeeRange: apolloEmployeeRange(vertical),
+      page: sizedPage,
+      perPage: APOLLO_PER_PAGE,
+      context,
+      usageLabel: `discovery:${vertical}:${market}:sized`,
+    });
+    creditsSpent += 1;
+    // `requested` is the PAGE size, not the run's limit: a short page is Apollo
+    // saying it has nothing left for these filters, and comparing against a
+    // smaller limit would read a full page as a short one and declare the pool
+    // exhausted on the first run.
+    nextSizedCursor = advanceCursor(sizedCursor, {
+      requested: APOLLO_PER_PAGE,
+      returned: sizedResult.organizations.length,
+      totalEntries: sizedResult.totalEntries,
+      perPage: APOLLO_PER_PAGE,
+    });
+  }
 
   let unknownOrganizations: typeof sizedResult.organizations = [];
   let unknownReturned = 0;
@@ -576,17 +655,6 @@ export async function runCompanyDiscovery(
       "Unknown-headcount pool already exhausted for this market — skipped.",
     );
   }
-
-  // `requested` is the PAGE size, not the run's limit: a short page is Apollo
-  // saying it has nothing left for these filters, and comparing against a
-  // smaller limit would read a full page as a short one and declare the pool
-  // exhausted on the first run.
-  const nextSizedCursor = advanceCursor(sizedCursor, {
-    requested: APOLLO_PER_PAGE,
-    returned: sizedResult.organizations.length,
-    totalEntries: sizedResult.totalEntries,
-    perPage: APOLLO_PER_PAGE,
-  });
 
   /*
    * Supplementary sources (SerpApi Google Maps today) fan out AFTER Apollo and
@@ -846,13 +914,15 @@ export async function runCompanyDiscovery(
     );
   }
 
-  await saveCursor(
-    vertical,
-    market,
-    "sized",
-    nextSizedCursor,
-    sizedResult.organizations.length,
-  );
+  if (!sizedCursor.poolExhausted) {
+    await saveCursor(
+      vertical,
+      market,
+      "sized",
+      nextSizedCursor,
+      sizedResult.organizations.length,
+    );
+  }
   if (includeUnknownSize && !unknownCursor.poolExhausted) {
     await saveCursor(
       vertical,

@@ -4,6 +4,7 @@ import {
   EMPTY_CURSOR,
   pageForCursor,
   poolStatus,
+  reconcileCursor,
 } from "@/lib/discovery/pagination";
 
 describe("discovery pagination cursor", () => {
@@ -162,6 +163,64 @@ describe("discovery pagination cursor", () => {
       });
       expect(next.consumed).toBe(175);
       expect(pageForCursor(next, 100)).toBe(2);
+    });
+  });
+
+  describe("reconcileCursor", () => {
+    it("resets an exhausted cursor written at the old 25-row page size", () => {
+      const stale = {
+        perPage: 25,
+        consumed: 160,
+        totalEntries: 160,
+        poolExhausted: true,
+      };
+      const { cursor, resetReason } = reconcileCursor(stale, 100);
+      expect(resetReason).toBe("page_size_changed");
+      expect(cursor).toEqual({
+        perPage: 100,
+        consumed: 0,
+        totalEntries: null,
+        poolExhausted: false,
+      });
+    });
+
+    it("resets a cursor that consumed past its own pool (19 claimed, 25 consumed)", () => {
+      const { cursor, resetReason } = reconcileCursor(
+        {
+          perPage: 25,
+          consumed: 25,
+          totalEntries: 19,
+          poolExhausted: true,
+        },
+        100,
+      );
+      expect(resetReason).toBe("consumed_past_pool");
+      expect(cursor.poolExhausted).toBe(false);
+      expect(cursor.consumed).toBe(0);
+    });
+
+    it("does not rewind an in-progress cursor when only the page size changed", () => {
+      const mid = {
+        perPage: 25,
+        consumed: 75,
+        totalEntries: 310,
+        poolExhausted: false,
+      };
+      const { cursor, resetReason } = reconcileCursor(mid, 100);
+      expect(resetReason).toBeNull();
+      expect(cursor).toEqual(mid);
+    });
+
+    it("leaves a matching exhausted cursor alone so we do not re-buy an empty pool", () => {
+      const done = {
+        perPage: 100,
+        consumed: 19,
+        totalEntries: 19,
+        poolExhausted: true,
+      };
+      const { cursor, resetReason } = reconcileCursor(done, 100);
+      expect(resetReason).toBeNull();
+      expect(cursor).toEqual(done);
     });
   });
 

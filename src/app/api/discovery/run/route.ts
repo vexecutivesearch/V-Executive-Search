@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
-import { runCompanyDiscovery, getDiscoveryPoolStatuses } from "@/lib/discovery/run";
+import {
+  getDiscoveryPoolStatuses,
+  resetDiscoveryCursors,
+  runCompanyDiscovery,
+} from "@/lib/discovery/run";
 import {
   discoveryMarkets,
   discoveryRunDefaults,
@@ -57,6 +61,7 @@ export async function POST(request: NextRequest) {
     limit?: number;
     include_unknown_size?: boolean;
     allow_large_companies?: boolean;
+    reset?: boolean;
   };
   try {
     body = await request.json();
@@ -81,6 +86,20 @@ export async function POST(request: NextRequest) {
       { error: "market is required (e.g. \"Palm Beach County, Florida\")" },
       { status: 400 },
     );
+  }
+
+  if (body.reset === true) {
+    const result = await resetDiscoveryCursors(vertical, market);
+    revalidatePath("/crm");
+    return NextResponse.json({
+      ok: true,
+      reset: result.reset,
+      vertical,
+      market,
+      message:
+        `Cleared ${result.reset} pool cursor(s) for ${vertical} in ${market}. ` +
+        "The next Find will start at page 1, including size-unknown companies.",
+    });
   }
 
   const limit = Number.isFinite(body.limit)
