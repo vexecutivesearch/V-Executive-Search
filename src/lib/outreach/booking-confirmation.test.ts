@@ -49,6 +49,11 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
+const settings = { textEnabled: true };
+vi.mock("@/lib/outreach/settings", () => ({
+  getOrCreateOutreachSettings: async () => settings,
+}));
+
 const enrollment = {
   id: "enr-1",
   contactId: "contact-1",
@@ -73,6 +78,7 @@ const events = () =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  settings.textEnabled = true;
   selectResults.clear();
   inserts.length = 0;
   updates.length = 0;
@@ -235,6 +241,22 @@ describe("queueing the confirmation", () => {
     expect(result.queued).toBe(false);
     expect(result.reason).toContain("phone");
     expect(texts()).toHaveLength(0);
+  });
+
+  /*
+   * The booking confirmation is the one text nobody thinks of as outreach, so
+   * it is the one most likely to slip past a channel switch. Calendly emails
+   * its own confirmation regardless, so staying quiet loses nothing.
+   */
+  it("stays quiet while the text channel is switched off", async () => {
+    settings.textEnabled = false;
+    selectResults.set("inbound_messages", [{ channel: "imessage" }]);
+    const result = await queue();
+
+    expect(result.queued).toBe(false);
+    expect(result.reason).toContain("switched off");
+    expect(texts()).toHaveLength(0);
+    expect(inserts).toHaveLength(0);
   });
 
   it("refuses to queue where the worker will never look", async () => {

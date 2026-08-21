@@ -29,6 +29,7 @@ export async function GET() {
 
 const BOOLEAN_FIELDS = [
   "enabled",
+  "textEnabled",
   "dryRun",
   "requireApproval",
   "autoEnroll",

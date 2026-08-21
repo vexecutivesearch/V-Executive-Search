@@ -6,6 +6,10 @@
  * text_only exists because the Mac worker has its own IDS capability check
  * with automatic SMS fallback: any phone number can receive a text, so a
  * contact with a phone but no usable email must still enroll.
+ *
+ * Every plan is subject to the admin text channel switch. While it is off no
+ * plan carries a text step at all, which is what keeps texts from being
+ * drafted in the first place rather than merely held further downstream.
  */
 
 export type ChannelPlan = "email_and_text" | "email_only" | "text_only";
@@ -16,15 +20,25 @@ export type ChannelPlan = "email_and_text" | "email_only" | "text_only";
  *
  * textEligible = a phone we are allowed to text; it only widens an email
  * plan. A usable email is never required for text_only.
+ *
+ * textEnabled is the admin text channel switch and it outranks everything
+ * else here: while it is off no plan may carry a text step, which includes
+ * text_only. A contact with no usable email is simply not enrollable then,
+ * because the alternative is enrolling them into a sequence that can never
+ * send anything.
  */
 export function resolveChannelPlan(input: {
   emailUsable: boolean;
   hasPhone: boolean;
   textEligible: boolean;
+  textEnabled: boolean;
 }): ChannelPlan | null {
   if (input.emailUsable) {
-    return input.textEligible ? "email_and_text" : "email_only";
+    return input.textEligible && input.textEnabled
+      ? "email_and_text"
+      : "email_only";
   }
+  if (!input.textEnabled) return null;
   return input.hasPhone ? "text_only" : null;
 }
 
@@ -40,6 +54,7 @@ export type ChannelPlanReason =
   | "capability_unchecked"
   | "not_textable"
   | "phone_suppressed"
+  | "text_channel_off"
   | "email_unusable_text_only"
   | "unreachable";
 
@@ -76,20 +91,30 @@ export function explainChannelPlan(input: {
   /** contacts.imessage_capable — null when the Mac worker has not answered. */
   imessageCapable: boolean | null;
   phoneSuppressed: boolean;
+  /** outreach_settings.text_enabled — the admin text channel switch. */
+  textEnabled: boolean;
 }): ChannelPlanDecision {
   const plan = resolveChannelPlan({
     emailUsable: input.emailUsable,
     hasPhone: input.hasPhone,
     textEligible: phoneIsTextEligible(input),
+    textEnabled: input.textEnabled,
   });
 
-  if (plan === null) return { plan, reason: "unreachable" };
+  if (plan === null) {
+    // A phone we are not allowed to use is a switch problem, not a data one.
+    return {
+      plan,
+      reason: input.hasPhone && !input.textEnabled ? "text_channel_off" : "unreachable",
+    };
+  }
   if (plan === "text_only") {
     return { plan, reason: "email_unusable_text_only" };
   }
   if (plan === "email_and_text") return { plan, reason: "text_added" };
 
   if (!input.hasPhone) return { plan, reason: "no_phone" };
+  if (!input.textEnabled) return { plan, reason: "text_channel_off" };
   if (input.phoneSuppressed) return { plan, reason: "phone_suppressed" };
   if (input.imessageCapable === null) {
     return { plan, reason: "capability_unchecked" };
@@ -109,6 +134,8 @@ export function channelPlanReasonLabel(reason: ChannelPlanReason): string {
       return "the contact's number came back not textable";
     case "phone_suppressed":
       return "the phone number is suppressed";
+    case "text_channel_off":
+      return "the text channel is switched off in Admin, Safety switches";
     case "email_unusable_text_only":
       return "no usable email — text only";
     case "unreachable":

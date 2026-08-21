@@ -113,7 +113,13 @@ export function OverviewTab() {
   const formEnd = draftEnd ?? Math.max(settings.sendWindowEndHour, CRON_COVERED_END_HOUR);
 
   const toggles: Array<{
-    key: "enabled" | "dryRun" | "requireApproval" | "autoEnroll" | "workEmailPreferred";
+    key:
+      | "enabled"
+      | "textEnabled"
+      | "dryRun"
+      | "requireApproval"
+      | "autoEnroll"
+      | "workEmailPreferred";
     title: string;
     description: string;
     danger?: boolean;
@@ -126,22 +132,29 @@ export function OverviewTab() {
       danger: true,
     },
     {
+      key: "textEnabled",
+      title: "Text channel (iMessage / SMS)",
+      description:
+        "OFF = no text is drafted, queued, or handed to the Mac worker: enrollments plan email only, the worker queue returns empty, replies that arrive by text are answered by email, and booking confirmations stay quiet. Email is unaffected. Texts already sitting in the queue are held, not cancelled.",
+      danger: true,
+    },
+    {
       key: "dryRun",
       title: "Dry-run mode",
       description:
-        "ON = draft and queue everything but never send. OFF = live sends when Master send is also On (email via Resend in the send window; SMS via the Mac worker iMessage queue).",
+        "ON = draft and queue everything but never send, auto-replies included. OFF = live sends when Master send is also On (email via Resend in the send window; SMS via the Mac worker iMessage queue when the text channel is On).",
     },
     {
       key: "requireApproval",
       title: "Approval gate",
       description:
-        "ON = every drafted message must be approved in Approvals before send. OFF = enroll auto-approves, queues day-0 email + SMS, and dispatches when Master is On and Dry-run is Off.",
+        "ON = every drafted message must be approved in Approvals before send. OFF = enroll auto-approves, queues the day-0 intro, and dispatches when Master is On and Dry-run is Off.",
     },
     {
       key: "autoEnroll",
       title: "Auto-enroll on call list",
       description:
-        "When you add a company to the call list, the primary contact is enrolled with a personalized email + same-day SMS sequence drafted from their job listings (also runs after enrich ingest). Manual enroll stays available either way.",
+        "When you add a company to the call list, the primary contact is enrolled with a personalized email sequence drafted from their job listings (also runs after enrich ingest). Manual enroll stays available either way.",
     },
     {
       key: "workEmailPreferred",
@@ -212,6 +225,11 @@ export function OverviewTab() {
                   {toggle.key === "enabled" && (
                     <Badge tone={settings.enabled ? "green" : "red"}>
                       {settings.enabled ? "SENDING ENABLED" : "ALL SENDS OFF"}
+                    </Badge>
+                  )}
+                  {toggle.key === "textEnabled" && (
+                    <Badge tone={settings.textEnabled ? "green" : "red"}>
+                      {settings.textEnabled ? "TEXTING ON" : "ALL TEXTS OFF"}
                     </Badge>
                   )}
                 </div>

@@ -94,6 +94,9 @@ vi.mock("@/lib/outreach/call-list-sync", () => ({
 vi.mock("@/lib/outreach/enroll", () => ({
   cancelSiblingEnrollments: vi.fn(async () => 0),
 }));
+vi.mock("@/lib/outreach/settings", () => ({
+  getOrCreateOutreachSettings: async () => ({ textEnabled: true }),
+}));
 
 const ENROLLMENT_ID = "c02d9a1b-58c1-4314-9505-3375ec45b52a";
 

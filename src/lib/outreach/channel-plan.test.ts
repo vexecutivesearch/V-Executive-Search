@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   channelPlanLabel,
+  channelPlanReasonLabel,
   explainChannelPlan,
   filterStepSpecsForPlan,
   phoneIsTextEligible,
@@ -11,17 +12,32 @@ import { DEFAULT_STEP_SPECS } from "@/lib/outreach-draft";
 describe("resolveChannelPlan", () => {
   it("usable email + text-eligible phone → email_and_text", () => {
     expect(
-      resolveChannelPlan({ emailUsable: true, hasPhone: true, textEligible: true }),
+      resolveChannelPlan({
+        emailUsable: true,
+        hasPhone: true,
+        textEligible: true,
+        textEnabled: true,
+      }),
     ).toBe("email_and_text");
   });
 
   it("usable email without a text-eligible phone → email_only", () => {
     expect(
-      resolveChannelPlan({ emailUsable: true, hasPhone: false, textEligible: false }),
+      resolveChannelPlan({
+        emailUsable: true,
+        hasPhone: false,
+        textEligible: false,
+        textEnabled: true,
+      }),
     ).toBe("email_only");
     // Phone present but not iMessage-verified: email plans stay email-only.
     expect(
-      resolveChannelPlan({ emailUsable: true, hasPhone: true, textEligible: false }),
+      resolveChannelPlan({
+        emailUsable: true,
+        hasPhone: true,
+        textEligible: false,
+        textEnabled: true,
+      }),
     ).toBe("email_only");
   });
 
@@ -29,14 +45,77 @@ describe("resolveChannelPlan", () => {
     // The Mac worker IDS-checks and falls back to SMS, so textEligible
     // (which encodes imessageCapable) must NOT gate text-only plans.
     expect(
-      resolveChannelPlan({ emailUsable: false, hasPhone: true, textEligible: false }),
+      resolveChannelPlan({
+        emailUsable: false,
+        hasPhone: true,
+        textEligible: false,
+        textEnabled: true,
+      }),
     ).toBe("text_only");
   });
 
   it("unreachable on every channel → null", () => {
     expect(
-      resolveChannelPlan({ emailUsable: false, hasPhone: false, textEligible: false }),
+      resolveChannelPlan({
+        emailUsable: false,
+        hasPhone: false,
+        textEligible: false,
+        textEnabled: true,
+      }),
     ).toBeNull();
+  });
+});
+
+/*
+ * The text channel switch. Apple disabled the operator's iMessage after three
+ * days of business use, so no plan may carry a text step while it is off, and
+ * that has to be decided here rather than downstream: a plan without text
+ * steps is a sequence whose text steps were never drafted at all.
+ */
+describe("resolveChannelPlan with the text channel switched off", () => {
+  it("keeps a textable contact on email only", () => {
+    expect(
+      resolveChannelPlan({
+        emailUsable: true,
+        hasPhone: true,
+        textEligible: true,
+        textEnabled: false,
+      }),
+    ).toBe("email_only");
+  });
+
+  it("refuses a text_only plan rather than enrolling a text nobody can send", () => {
+    expect(
+      resolveChannelPlan({
+        emailUsable: false,
+        hasPhone: true,
+        textEligible: true,
+        textEnabled: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("never returns a plan that carries a text step", () => {
+    for (const emailUsable of [true, false]) {
+      for (const hasPhone of [true, false]) {
+        for (const textEligible of [true, false]) {
+          const plan = resolveChannelPlan({
+            emailUsable,
+            hasPhone,
+            textEligible,
+            textEnabled: false,
+          });
+          expect(plan === null || plan === "email_only").toBe(true);
+          if (plan) {
+            expect(
+              filterStepSpecsForPlan(plan, DEFAULT_STEP_SPECS).some(
+                (s) => s.channel === "imessage",
+              ),
+            ).toBe(false);
+          }
+        }
+      }
+    }
   });
 });
 
@@ -72,6 +151,7 @@ describe("explainChannelPlan", () => {
     hasPhone: true,
     imessageCapable: true as boolean | null,
     phoneSuppressed: false,
+    textEnabled: true,
   };
 
   it("adds text steps when the contact has a textable phone", () => {
@@ -140,8 +220,37 @@ describe("explainChannelPlan", () => {
         hasPhone: false,
         imessageCapable: true,
         phoneSuppressed: false,
+        textEnabled: true,
       }),
     ).toEqual({ plan: null, reason: "unreachable" });
+  });
+
+  /*
+   * The switch has to be legible in the enrollment note: "email only" already
+   * has five causes that need different fixes, and "we turned texting off" is
+   * not one anybody should have to reverse engineer.
+   */
+  it("names the switch when it is what dropped the text steps", () => {
+    expect(explainChannelPlan({ ...base, textEnabled: false })).toEqual({
+      plan: "email_only",
+      reason: "text_channel_off",
+    });
+    expect(channelPlanReasonLabel("text_channel_off")).toContain(
+      "switched off",
+    );
+  });
+
+  it("still blames the missing phone when there is no number to text anyway", () => {
+    expect(
+      explainChannelPlan({ ...base, hasPhone: false, textEnabled: false })
+        .reason,
+    ).toBe("no_phone");
+  });
+
+  it("names the switch, not unreachability, for a contact with only a phone", () => {
+    expect(
+      explainChannelPlan({ ...base, emailUsable: false, textEnabled: false }),
+    ).toEqual({ plan: null, reason: "text_channel_off" });
   });
 
   it("agrees with resolveChannelPlan on the plan itself", () => {
@@ -149,19 +258,23 @@ describe("explainChannelPlan", () => {
       for (const hasPhone of [true, false]) {
         for (const imessageCapable of [true, false, null]) {
           for (const phoneSuppressed of [true, false]) {
-            const input = {
-              emailUsable,
-              hasPhone,
-              imessageCapable,
-              phoneSuppressed,
-            };
-            expect(explainChannelPlan(input).plan).toBe(
-              resolveChannelPlan({
+            for (const textEnabled of [true, false]) {
+              const input = {
                 emailUsable,
                 hasPhone,
-                textEligible: phoneIsTextEligible(input),
-              }),
-            );
+                imessageCapable,
+                phoneSuppressed,
+                textEnabled,
+              };
+              expect(explainChannelPlan(input).plan).toBe(
+                resolveChannelPlan({
+                  emailUsable,
+                  hasPhone,
+                  textEligible: phoneIsTextEligible(input),
+                  textEnabled,
+                }),
+              );
+            }
           }
         }
       }

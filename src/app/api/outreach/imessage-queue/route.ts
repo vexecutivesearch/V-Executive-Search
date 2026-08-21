@@ -14,16 +14,26 @@ export const dynamic = "force-dynamic";
 
 /**
  * Mac worker poll: due iMessage sends. Same safety order as email dispatch —
- * kill switch → dry-run → approval gate → per-channel suppression re-check.
- * The worker sends via Messages.app AppleScript and posts status back to
- * /api/outreach/imessage-status.
+ * kill switch → dry-run → text channel switch → approval gate → per-channel
+ * suppression re-check. The worker sends via Messages.app AppleScript and
+ * posts status back to /api/outreach/imessage-status.
  */
 export async function GET(request: NextRequest) {
   if (!verifyWorkerAuth(request)) return unauthorized();
 
   const settings = await getOrCreateOutreachSettings();
-  if (!settings.enabled || settings.dryRun) {
-    return NextResponse.json({ messages: [], reason: !settings.enabled ? "kill_switch" : "dry_run" });
+  // A held queue is emptied for the worker but never drained in the database:
+  // the rows stay queued so switching the channel back on is a decision
+  // somebody takes deliberately, not a backlog that leaves on its own.
+  const hold = !settings.enabled
+    ? "kill_switch"
+    : settings.dryRun
+      ? "dry_run"
+      : !settings.textEnabled
+        ? "text_disabled"
+        : null;
+  if (hold) {
+    return NextResponse.json({ messages: [], reason: hold });
   }
 
   // The daily send cap applies to texts too, counted separately from email.

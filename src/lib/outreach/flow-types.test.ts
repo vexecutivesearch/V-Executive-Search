@@ -6,12 +6,12 @@ import {
   type FlowGraph,
 } from "@/lib/outreach/flow-types";
 
-describe("default flow (phase-1 cadence as a locked flow)", () => {
+describe("default flow (cold cadence as a locked flow)", () => {
   it("validates cleanly", () => {
     expect(validateFlowGraph(defaultFlowGraph())).toEqual([]);
   });
 
-  it("walks day 0 email+SMS → day 2/4/6/8 follow-ups", () => {
+  it("walks intro on day 0, then follow-ups on day 2 and day 6", () => {
     const graph = defaultFlowGraph();
     const order: string[] = [];
     let node: string | null = "trigger";
@@ -22,26 +22,47 @@ describe("default flow (phase-1 cadence as a locked flow)", () => {
     expect(order).toEqual([
       "trigger",
       "send_intro",
-      "send_text_1",
       "wait_1",
       "send_followup_1",
       "wait_2",
-      "send_text_2",
-      "wait_3",
       "send_followup_2",
-      "wait_4",
-      "send_text_3",
       "complete",
     ]);
   });
 
-  it("intro email advances on queue so same-day SMS can queue next", () => {
+  /*
+   * Cold texting is retired: Apple disabled the operator's iMessage for using
+   * a consumer account for business messaging. A consent gated text branch is
+   * separate work, so until then no send node in the cold flow may be a text.
+   */
+  it("has no text send node anywhere", () => {
+    const graph = defaultFlowGraph();
+    const channels = graph.nodes
+      .filter((n) => n.type === "send")
+      .map((n) => (n.config as { channel?: string } | undefined)?.channel);
+    expect(channels).toEqual(["email", "email", "email"]);
+    expect(JSON.stringify(graph)).not.toContain("imessage");
+    expect(JSON.stringify(graph)).not.toContain("text_");
+  });
+
+  it("waits the day 2 and day 6 gaps in calendar days", () => {
+    const waits = defaultFlowGraph()
+      .nodes.filter((n) => n.type === "wait")
+      .map((n) => n.config);
+    expect(waits).toEqual([
+      { days: 2, businessDays: false },
+      { days: 4, businessDays: false },
+    ]);
+  });
+
+  /*
+   * advanceOnQueue existed so the day-0 text queued in the same pass as the
+   * intro. With nothing following the intro on day 0, the flow must wait for
+   * the send instead, or the day 2 gap starts counting from the queue.
+   */
+  it("makes the intro wait for its own send", () => {
     const intro = defaultFlowGraph().nodes.find((n) => n.id === "send_intro");
-    expect(intro?.config).toMatchObject({
-      channel: "email",
-      stepKind: "intro",
-      advanceOnQueue: true,
-    });
+    expect(intro?.config).toEqual({ channel: "email", stepKind: "intro" });
   });
 });
 

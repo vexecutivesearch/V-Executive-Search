@@ -1,0 +1,1 @@
+ALTER TABLE "outreach_settings" ADD COLUMN "text_enabled" boolean DEFAULT false NOT NULL;
