@@ -282,7 +282,8 @@ export function DiscoveryRunLauncher({
           </p>
           <p className="text-xs text-gray-600 dark:text-gray-400">
             {summary.sizeUnknownCount ?? 0} size unknown ·{" "}
-            {summary.withJobSignals ?? 0} with job signals ·{" "}
+            {summary.withJobSignals ?? 0} with job signals (a bonus, not a
+            requirement) ·{" "}
             {summary.autoExcluded ?? 0} auto-rejected ·{" "}
             {summary.duplicatesSkipped ?? 0} duplicates skipped ·{" "}
             {summary.creditsSpent ?? 0} credit(s)

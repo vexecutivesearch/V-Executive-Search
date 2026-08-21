@@ -663,6 +663,17 @@ export async function runCompanyDiscovery(
     }),
   );
 
+  const withoutJobs = resultCompanies.filter(
+    (c) => c.jobSignal.openPositions === 0,
+  ).length;
+  if (withoutJobs) {
+    notes.push(
+      `${withoutJobs} of ${resultCompanies.length} have no job postings on file. ` +
+        "Discovery does not filter on hiring — these are full-value prospects, " +
+        "not misses.",
+    );
+  }
+
   return {
     vertical,
     verticalLabel: verticalConfig.label,
