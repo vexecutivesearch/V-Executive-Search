@@ -3,10 +3,19 @@ import { parsePhoneValue, phoneDigits } from "@/lib/phone-utils";
 export type PhoneSource = "apollo" | "contactout";
 export type PhoneKind = "mobile" | "work" | "company" | "other";
 
+/**
+ * Dial-safety class, mirroring phone_classification in the schema. Kept on the
+ * same shape as source/kind so there is one phone structure, not two.
+ * See phone-classification.ts for the derivation and the dial gate.
+ */
+export type PhoneClassification = "business_line" | "mobile" | "unknown";
+
 export type SourcedPhone = {
   number: string;
   source: PhoneSource;
   kind?: PhoneKind;
+  /** Absent on rows stored before classification existed — read as unknown. */
+  classification?: PhoneClassification;
 };
 
 /** Max personal/direct-dial numbers stored or shown per contact. */
