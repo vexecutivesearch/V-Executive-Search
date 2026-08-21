@@ -41,7 +41,11 @@ const sql = readOnlySql();
 const ALLOWED_COST: Record<string, number[]> = {
   "mixed_people/api_search": [0],
   "organizations/search": [0, 1],
-  "people/match": [0, 1, 9],
+  // 1 when a person came back, 0 when not. Never 9: matchPerson RESERVES the
+  // worst case (match + mobile surcharge) against the cap but books only what
+  // happened, so a 9 booked here is the reservation having been written as a
+  // charge — the surcharge would then be counted twice once the webhook lands.
+  "people/match": [0, 1],
   "people/match:mobile": [0, 8],
 };
 
