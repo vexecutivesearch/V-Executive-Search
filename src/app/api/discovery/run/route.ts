@@ -56,6 +56,7 @@ export async function POST(request: NextRequest) {
     market?: string;
     limit?: number;
     include_unknown_size?: boolean;
+    allow_large_companies?: boolean;
   };
   try {
     body = await request.json();
@@ -92,6 +93,9 @@ export async function POST(request: NextRequest) {
       market,
       limit,
       includeUnknownSize: body.include_unknown_size !== false,
+      // Strict equality, so a missing or malformed field can never widen the
+      // size ceiling by accident.
+      allowLargeCompanies: body.allow_large_companies === true,
       apiKey,
     });
 

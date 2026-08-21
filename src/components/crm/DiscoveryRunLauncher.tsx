@@ -7,6 +7,7 @@ import {
   stateLabel,
   type LocationScope,
 } from "@/lib/crm-location-scope";
+import { gateReasonLabel, type GateReason } from "@/lib/discovery/exclusion-gate";
 
 type VerticalOption = {
   id: string;
@@ -45,6 +46,8 @@ type RunSummary = {
   updated?: number;
   sizeUnknownCount?: number;
   autoExcluded?: number;
+  gateRejected?: number;
+  gateRejectionsByReason?: Record<string, number>;
   withJobSignals?: number;
   duplicatesSkipped?: number;
   creditsSpent?: number;
@@ -54,6 +57,16 @@ type RunSummary = {
   cost_note?: string;
   error?: string;
 };
+
+function gateReasonBreakdown(
+  counts: Record<string, number> | undefined,
+): string {
+  const parts = Object.entries(counts ?? {})
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([reason, n]) => `${n} ${gateReasonLabel(reason as GateReason)}`);
+  return parts.join(", ");
+}
 
 function poolLabel(status: PoolEntry["status"]): string {
   const size = status.poolSize == null ? "unknown" : status.poolSize.toLocaleString();
@@ -83,6 +96,9 @@ export function DiscoveryRunLauncher({
   const [customMarket, setCustomMarket] = useState("");
   const [limit, setLimit] = useState(25);
   const [includeUnknownSize, setIncludeUnknownSize] = useState(true);
+  // Always starts off. The size ceiling only lifts when the operator ticks
+  // this for a specific run; nothing in the config can default it on.
+  const [allowLargeCompanies, setAllowLargeCompanies] = useState(false);
   const [busy, setBusy] = useState(false);
   const [summary, setSummary] = useState<RunSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -129,6 +145,7 @@ export function DiscoveryRunLauncher({
           market: effectiveMarket,
           limit,
           include_unknown_size: includeUnknownSize,
+          allow_large_companies: allowLargeCompanies,
         }),
       });
       const data = (await res.json()) as RunSummary;
@@ -228,6 +245,16 @@ export function DiscoveryRunLauncher({
           Include size-unknown companies (+1 credit)
         </label>
 
+        <label className="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer pb-1.5">
+          <input
+            type="checkbox"
+            checked={allowLargeCompanies}
+            onChange={(e) => setAllowLargeCompanies(e.target.checked)}
+            className="rounded border-gray-300"
+          />
+          Allow larger companies this run
+        </label>
+
         <button
           type="button"
           onClick={runDiscovery}
@@ -253,10 +280,20 @@ export function DiscoveryRunLauncher({
         {activeVertical && (
           <>
             {" "}
-            Keywords: {activeVertical.keywords.join(", ")}.
+            Keywords: {activeVertical.keywords.join(", ")}. Companies outside{" "}
+            {activeVertical.employeeMin}–{activeVertical.employeeMax} employees,
+            staffing and recruiting firms, government employers, publicly traded
+            companies, and known enterprises are rejected before review.
           </>
         )}
       </p>
+      {allowLargeCompanies && (
+        <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+          Larger companies are allowed for this run. Oversized firms will be
+          shown for review rather than rejected — staffing, government, and
+          known enterprises are still blocked.
+        </p>
+      )}
 
       {sizedPool && (
         <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
@@ -288,6 +325,17 @@ export function DiscoveryRunLauncher({
             {summary.duplicatesSkipped ?? 0} duplicates skipped ·{" "}
             {summary.creditsSpent ?? 0} credit(s)
           </p>
+          {(summary.gateRejected ?? 0) > 0 && (
+            /* Why a run can come back short — the operator should never have to
+               guess whether Apollo ran dry or the size gate did its job. */
+            <p className="text-xs text-gray-600 dark:text-gray-400">
+              <span className="font-medium">
+                {summary.gateRejected} blocked before review
+              </span>
+              {": "}
+              {gateReasonBreakdown(summary.gateRejectionsByReason)}
+            </p>
+          )}
           {summary.pools?.sized && (
             <p className="text-xs text-gray-600 dark:text-gray-400">
               Sized pool: {poolLabel(summary.pools.sized)}

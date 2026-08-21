@@ -66,6 +66,11 @@ type ApolloOrg = {
   city?: string;
   state?: string;
   country?: string;
+  /** Apollo returns revenue as `annual_revenue`; some plans use the alias. */
+  annual_revenue?: number | string;
+  organization_revenue?: number | string;
+  publicly_traded_symbol?: string | null;
+  publicly_traded_exchange?: string | null;
 };
 
 function parseApolloOrg(org: ApolloOrg): OrgLookupResult {
@@ -163,6 +168,14 @@ export type DiscoveredOrganization = {
   city: string | null;
   state: string | null;
   domainConfidence: DomainConfidence;
+  /**
+   * Enterprise signals the exclusion gate reads. Both are free in the search
+   * payload and both survive the case employee count cannot catch: a large
+   * corporation's local office reports a small headcount but still carries the
+   * parent's ticker and revenue.
+   */
+  annualRevenue: number | null;
+  publiclyTradedSymbol: string | null;
 };
 
 export type OrganizationSearchResult = {
@@ -216,6 +229,10 @@ function parseDiscoveredOrg(org: ApolloOrg): DiscoveredOrganization | null {
     // A domain straight from organization search is Apollo's own primary
     // domain, not a name guess — that is the high-confidence case.
     domainConfidence: parsed.domain ? "high" : "low",
+    annualRevenue: parseEmployees(
+      org.annual_revenue ?? org.organization_revenue,
+    ),
+    publiclyTradedSymbol: org.publicly_traded_symbol?.trim() || null,
   };
 }
 
