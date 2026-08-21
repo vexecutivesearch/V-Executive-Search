@@ -257,6 +257,11 @@ export function DiscoveryRunLauncher({
               : "Google Maps off"}
         </span>
       </div>
+      {!mapsWillRun && maps?.reason && (
+        <p className="text-[11px] text-amber-800 dark:text-amber-200 mb-3">
+          {maps.reason}
+        </p>
+      )}
 
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1 text-xs text-gray-500">

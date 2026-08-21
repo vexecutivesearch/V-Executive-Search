@@ -100,6 +100,8 @@ beforeEach(() => {
   usageToday = 0;
   delete process.env.SERPAPI_DISCOVERY_ENABLED;
   delete process.env.SERPAPI_API_KEY;
+  delete process.env.SERPAPI_KEY;
+  delete process.env.SERP_API_KEY;
   delete process.env.SERPAPI_DISCOVERY_VERTICALS;
   delete process.env.SERPAPI_DISCOVERY_RUN_CAP;
   delete process.env.SERPAPI_DAILY_CREDIT_CAP;
@@ -130,6 +132,14 @@ describe("resolveSerpapiMapsSource", () => {
     );
     const resolution = resolveSerpapiMapsSource({ SERPAPI_API_KEY: "k" });
     expect(resolution.enabled).toBe(true);
+  });
+
+  it("also accepts SERPAPI_KEY / SERP_API_KEY aliases used on Vercel", async () => {
+    const { resolveSerpapiMapsSource } = await import(
+      "@/lib/discovery/sources/serpapi-maps"
+    );
+    expect(resolveSerpapiMapsSource({ SERPAPI_KEY: "k" }).enabled).toBe(true);
+    expect(resolveSerpapiMapsSource({ SERP_API_KEY: "k" }).enabled).toBe(true);
   });
 
   it("stays off when the kill switch is explicit, even with a key", async () => {

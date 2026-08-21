@@ -74,6 +74,21 @@ export const SERPAPI_MAPS_SOURCE = "serpapi_google_maps";
  * a second consumer of the shared monthly search quota. */
 export const SERPAPI_DISCOVERY_FLAG = "SERPAPI_DISCOVERY_ENABLED";
 
+/** Names operators have used on Vercel. Canonical is SERPAPI_API_KEY. */
+const SERPAPI_KEY_ALIASES = [
+  "SERPAPI_API_KEY",
+  "SERPAPI_KEY",
+  "SERP_API_KEY",
+] as const;
+
+export function serpapiApiKey(env: DiscoverySourceEnv = process.env): string {
+  for (const name of SERPAPI_KEY_ALIASES) {
+    const value = (env[name] ?? "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
 /** `company_discovery_runs.pool` value. The column is text, so this needs no
  * migration and no enum change. */
 export const SERPAPI_MAPS_POOL = "serpapi_maps";
@@ -530,14 +545,15 @@ export function resolveSerpapiMapsSource(
       reason: `${SERPAPI_DISCOVERY_FLAG} is off`,
     };
   }
-  const apiKey = (env.SERPAPI_API_KEY ?? "").trim();
+  const apiKey = serpapiApiKey(env);
   if (!apiKey) {
     return {
       enabled: false,
       reason:
-        "Add SERPAPI_API_KEY to Vercel (Settings → Environment Variables), " +
-        "Production + Preview. Use the same key as the Mac worker " +
-        "(~/.vsearch/worker.env). Then redeploy.",
+        "SERPAPI_API_KEY is not set on this Vercel deploy. Add it under " +
+        "Settings → Environment Variables for Production (and Preview), " +
+        "same value as .env.local / the Mac worker, then Redeploy. " +
+        "SERPAPI_DISCOVERY_ENABLED=true alone is not enough.",
     };
   }
   return {
