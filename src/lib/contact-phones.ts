@@ -264,13 +264,23 @@ export function demoteCompanyMainLine(
   companyPhone: string | null | undefined,
 ): SourcedPhone[] {
   const list = phones ?? [];
-  const mainLine = phoneDigits(parsePhoneValue(companyPhone ?? null) ?? "");
+  const mainLine = comparablePhoneDigits(companyPhone);
   if (!mainLine) return list;
   return list.map((phone) =>
-    phoneDigits(phone.number) === mainLine
+    comparablePhoneDigits(phone.number) === mainLine
       ? { ...phone, kind: "company" as PhoneKind, classification: "business_line" as PhoneClassification }
       : phone,
   );
+}
+
+/**
+ * Last ten significant digits, so a stored "+1 561 272 3700" and a
+ * "561-272-3700" are recognised as the same line.
+ */
+function comparablePhoneDigits(raw: unknown): string | null {
+  const digits = phoneDigits(parsePhoneValue(raw ?? null) ?? "");
+  if (digits.length < 10) return digits || null;
+  return digits.slice(-10);
 }
 
 /** Hide shared company lines from primary dial when repeated across contacts. */
