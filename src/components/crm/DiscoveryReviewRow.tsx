@@ -155,6 +155,9 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
     setOutcome(null);
     setCostNote(null);
     setExpanded(true);
+    // Show who is already on file while the reveal runs, and so a failure still
+    // leaves the operator looking at the candidates rather than an empty panel.
+    if (contacts === null) await loadContacts();
     try {
       const res = await fetch(`/api/companies/${row.id}/approve-enrichment`, {
         method: "POST",
@@ -175,25 +178,26 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
       if (data.review_status) setReviewStatus(data.review_status);
       if (data.company) applyCompany(data.company);
       else await loadContacts();
-      setCostNote(data.cost_note ?? null);
-      setOutcome(
-        describeRevealSuccess({
-          revealed: data.revealed ?? 0,
-          candidatesFound: data.candidatesFound ?? 0,
-          alreadyRevealedCount: data.alreadyRevealedCount ?? 0,
-          phoneRequested: data.phoneRequested ?? false,
-          phonesFound: data.phonesFound ?? 0,
-          emailDeliverable: data.emailDeliverable ?? null,
-          emailVerifyReason: data.emailVerifyReason ?? null,
-          contactOutUsed: data.contactOutUsed ?? false,
-          contactOutLocked: data.contactOutLocked ?? false,
-          contactOutError: data.contactOutError ?? null,
-          contactOutConfigured: data.contactout_configured ?? false,
-          contactOutRetryAt: data.contactout_retry_at ?? null,
-          apolloMobileSkipped: data.apolloMobileSkipped ?? 0,
-          contact: data.contact ?? null,
-        }),
-      );
+      const success = describeRevealSuccess({
+        revealed: data.revealed ?? 0,
+        candidatesFound: data.candidatesFound ?? 0,
+        alreadyRevealedCount: data.alreadyRevealedCount ?? 0,
+        phoneRequested: data.phoneRequested ?? false,
+        phonesFound: data.phonesFound ?? 0,
+        emailDeliverable: data.emailDeliverable ?? null,
+        emailVerifyReason: data.emailVerifyReason ?? null,
+        contactOutUsed: data.contactOutUsed ?? false,
+        contactOutLocked: data.contactOutLocked ?? false,
+        contactOutError: data.contactOutError ?? null,
+        contactOutConfigured: data.contactout_configured ?? false,
+        contactOutRetryAt: data.contactout_retry_at ?? null,
+        apolloMobileSkipped: data.apolloMobileSkipped ?? 0,
+        contact: data.contact ?? null,
+      });
+      // The cost note describes a charge, so it must not appear on the paths
+      // that deliberately charged nothing.
+      setCostNote(success.spentCredit ? (data.cost_note ?? null) : null);
+      setOutcome(success);
     } catch {
       setOutcome(describeRevealNetworkFailure());
     } finally {

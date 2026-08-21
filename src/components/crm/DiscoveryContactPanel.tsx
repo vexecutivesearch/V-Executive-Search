@@ -110,7 +110,7 @@ export function DiscoveryContactPanel({
         </p>
       )}
 
-      {loading && !contacts ? (
+      {loading || contacts === null ? (
         <p className="text-sm text-gray-500">Loading contacts…</p>
       ) : all.length === 0 ? (
         <p className="text-sm text-gray-500">
