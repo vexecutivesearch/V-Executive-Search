@@ -394,6 +394,9 @@ export default async function CrmPage({
         <div className="flex-1 min-w-0">
           {tab === "discovery" ? (
             <>
+            {/* Search first, then the filters that narrow what it produced —
+                the two must not read as one row of location controls. */}
+            <DiscoveryRunLauncher browseScope={scope} />
             <CrmFilterBar
               options={filterOptions!}
               tab={tab}
@@ -416,7 +419,6 @@ export default async function CrmPage({
                 sort: "icp",
               }}
             />
-            <DiscoveryRunLauncher browseScope={scope} />
             <DiscoveryReviewList
               result={review!}
               counts={reviewCounts!}
