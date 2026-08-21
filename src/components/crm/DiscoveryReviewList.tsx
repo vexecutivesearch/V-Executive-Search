@@ -6,7 +6,6 @@ import type {
 } from "@/lib/discovery/review-queue";
 import { getVerticalConfig } from "@/lib/discovery/verticals";
 import { DiscoveryReviewRow } from "./DiscoveryReviewRow";
-import { DiscoveryRunLauncher } from "./DiscoveryRunLauncher";
 
 const STATUS_TABS: Array<{ value: CompanyReviewStatus | "all"; label: string }> = [
   { value: "pending", label: "Pending" },
@@ -43,9 +42,14 @@ export function DiscoveryReviewList({
         : "border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
     }`;
 
+  const groupLabelClass =
+    "text-[10px] font-medium uppercase tracking-wide text-gray-500 self-center mr-0.5";
+
   return (
     <div>
-      <DiscoveryRunLauncher />
+      <h2 className="text-sm font-semibold mb-2">
+        Review queue — companies already found
+      </h2>
 
       <div className="flex flex-wrap gap-1.5 mb-3">
         {STATUS_TABS.map((tab) => {
@@ -66,8 +70,9 @@ export function DiscoveryReviewList({
         })}
       </div>
 
-      {(facets.verticals.length > 0 || facets.markets.length > 0) && (
-        <div className="flex flex-wrap gap-1.5 mb-4">
+      {facets.verticals.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          <span className={groupLabelClass}>Vertical</span>
           <Link
             href={buildHref({ vertical: null, page: null })}
             className={chipClass(!active.vertical)}
@@ -83,6 +88,13 @@ export function DiscoveryReviewList({
               {getVerticalConfig(vertical)?.label ?? vertical}
             </Link>
           ))}
+        </div>
+      )}
+
+      {facets.markets.length > 0 && (
+        /* The market a row was *found in*, not a search target. */
+        <div className="flex flex-wrap gap-1.5 mb-4">
+          <span className={groupLabelClass}>Found in</span>
           {facets.markets.map((market) => (
             <Link
               key={market}

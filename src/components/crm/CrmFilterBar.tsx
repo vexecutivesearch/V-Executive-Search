@@ -3,6 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { CrmFilterOptions } from "@/lib/crm-queries";
+import {
+  cityOptionsForState,
+  normalizeLocationScope,
+  stateLabel,
+} from "@/lib/crm-location-scope";
 
 export type CrmActiveFilters = {
   state: string;
@@ -95,6 +100,16 @@ export function CrmFilterBar({
       if (value) params.set(key, value);
       else params.delete(key);
     }
+    // Re-derive the location pair rather than trusting whatever the URL
+    // carried in, so a city can never outlive the state that scoped it.
+    const scope = normalizeLocationScope(
+      { state: params.get("state"), city: params.get("city") },
+      options,
+    );
+    for (const key of ["state", "city"] as const) {
+      if (scope[key]) params.set(key, scope[key]);
+      else params.delete(key);
+    }
     params.delete("page"); // filter change restarts pagination
     router.push(`${pathname}?${params.toString()}`);
   }
@@ -107,12 +122,10 @@ export function CrmFilterBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
-  const cityOptions = useMemo(() => {
-    const list = active.state
-      ? options.cities.filter((c) => c.stateAbbr === active.state)
-      : options.cities;
-    return list.slice(0, 400);
-  }, [options.cities, active.state]);
+  const cityOptions = useMemo(
+    () => cityOptionsForState(options.cities, active.state),
+    [options.cities, active.state],
+  );
 
   // Count active filters (search stays visible, so it's excluded from the badge).
   const activeFilterCount = [
@@ -167,35 +180,49 @@ export function CrmFilterBar({
       </div>
 
       <div className={`${controlRowClass(filtersOpen)} mt-2`}>
-        <select
-          value={active.state}
-          onChange={(e) =>
-            apply({ state: e.target.value || null, city: null })
-          }
-          className={selectClass}
-          aria-label="Filter by state"
-        >
-          <option value="">All states</option>
-          {options.states.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500">
+            Location
+          </span>
 
-        <select
-          value={active.city}
-          onChange={(e) => apply({ city: e.target.value || null })}
-          className={selectClass}
-          aria-label="Filter by city"
-        >
-          <option value="">All cities</option>
-          {cityOptions.map((c) => (
-            <option key={`${c.city}|${c.stateAbbr}`} value={c.city}>
-              {c.city}, {c.stateAbbr}
+          {/* The rail owns the state on desktop; below lg it is off-screen. */}
+          <select
+            value={active.state}
+            onChange={(e) => apply({ state: e.target.value || null })}
+            className={`${selectClass} lg:hidden`}
+            aria-label="Filter by state"
+          >
+            <option value="">All states</option>
+            {options.states.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+
+          <span className="hidden lg:inline text-sm text-gray-600 dark:text-gray-400">
+            {active.state ? stateLabel(active.state) : "All states"}
+          </span>
+
+          <select
+            value={active.city}
+            onChange={(e) => apply({ city: e.target.value || null })}
+            disabled={!active.state}
+            className={`${selectClass} disabled:opacity-60 disabled:cursor-not-allowed`}
+            aria-label="Filter by city"
+          >
+            <option value="">
+              {active.state
+                ? `All cities in ${stateLabel(active.state)}`
+                : "All cities — pick a state first"}
             </option>
-          ))}
-        </select>
+            {cityOptions.map((c) => (
+              <option key={`${c.city}|${c.stateAbbr}`} value={c.city}>
+                {c.city}, {c.stateAbbr}
+              </option>
+            ))}
+          </select>
+        </div>
 
         {variant === "full" && (
         <>
