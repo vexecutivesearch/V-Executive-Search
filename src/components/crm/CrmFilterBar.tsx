@@ -1,14 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { CrmFilterOptions } from "@/lib/crm-queries";
-import {
-  cityOptionsForState,
-  normalizeLocationScope,
-  stateLabel,
-} from "@/lib/crm-location-scope";
+import { normalizeLocationScope } from "@/lib/crm-location-scope";
 import { LEAD_SOURCE_LABELS, LEAD_SOURCES } from "@/lib/lead-lanes";
+import { LocationScopeSelect } from "./LocationScopeSelect";
 
 export type CrmActiveFilters = {
   state: string;
@@ -130,19 +127,6 @@ export function CrmFilterBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
-  const cityOptions = useMemo(
-    () => cityOptionsForState(options.cities, active.state),
-    [options.cities, active.state],
-  );
-
-  const stateOptions = useMemo(
-    () =>
-      options.states
-        .map((abbr) => ({ abbr, label: stateLabel(abbr) }))
-        .sort((a, b) => a.label.localeCompare(b.label)),
-    [options.states],
-  );
-
   // Count active filters (search stays visible, so it's excluded from the badge).
   const activeFilterCount =
     [
@@ -220,57 +204,11 @@ export function CrmFilterBar({
       </div>
 
       <div className={`${controlRowClass(filtersOpen)} mt-2`}>
-        {/* State narrows City, and City is only reachable through it: the
-            server-side city predicate matches on name alone, so a city with no
-            state would match Springfield in four states at once. */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500">
-            Location
-          </span>
-
-          <label className="inline-flex items-center gap-1.5 text-xs text-gray-500">
-            State
-            <select
-              value={active.state}
-              onChange={(e) => apply({ state: e.target.value || null })}
-              className={selectClass}
-              aria-label="Filter by state"
-            >
-              <option value="">All states</option>
-              {stateOptions.map((s) => (
-                <option key={s.abbr} value={s.abbr}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <span className="text-gray-400" aria-hidden>
-            →
-          </span>
-
-          <label className="inline-flex items-center gap-1.5 text-xs text-gray-500">
-            City
-            <select
-              value={active.city}
-              onChange={(e) => apply({ city: e.target.value || null })}
-              disabled={!active.state}
-              className={`${selectClass} disabled:opacity-60 disabled:cursor-not-allowed`}
-              aria-label="Filter by city"
-            >
-              <option value="">
-                {active.state
-                  ? `All cities in ${stateLabel(active.state)}`
-                  : "All cities — pick a state first"}
-              </option>
-              {cityOptions.map((c) => (
-                <option key={`${c.city}|${c.stateAbbr}`} value={c.city}>
-                  {c.city}, {c.stateAbbr}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+        <LocationScopeSelect
+          options={options}
+          state={active.state}
+          city={active.city}
+        />
 
         <select
           value={active.sector}

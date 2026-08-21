@@ -441,6 +441,7 @@ export default async function CrmPage({
           ) : tab === "listings" ? (
             <CrmListingsList
               result={listings!}
+              options={filterOptions!}
               params={{ ...scopedParams, tab: "listings" }}
               activeFilters={{
                 q: params.q ?? "",
@@ -449,6 +450,8 @@ export default async function CrmPage({
                   params.sort && LISTING_SORTS.has(params.sort)
                     ? params.sort
                     : "newest",
+                state: scope.state,
+                city: scope.city,
               }}
             />
           ) : (
