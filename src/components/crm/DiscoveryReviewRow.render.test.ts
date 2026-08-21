@@ -65,9 +65,11 @@ describe("DiscoveryReviewRow — review actions", () => {
     expect(html).toContain("Do not contact");
   });
 
-  it("hides Find additional contact until a contact has been revealed", () => {
+  it("keeps Find additional contact in the dropdown, not on the action bar", () => {
+    // It belongs next to the contact it would add to, and the collapsed row
+    // must not offer a second paid action beside Approve for enrichment.
     expect(render().includes("Find additional contact")).toBe(false);
-    expect(render({ revealedContactCount: 1 })).toContain(
+    expect(render({ revealedContactCount: 1 })).not.toContain(
       "Find additional contact",
     );
   });
@@ -130,5 +132,50 @@ describe("DiscoveryReviewRow — job postings are a signal, not a gate", () => {
     expect(html).toContain("hiring is a signal, not a requirement");
     expect(html).toContain("Approve for enrichment");
     expect(html).toContain("Add to Call List");
+  });
+});
+
+describe("DiscoveryReviewRow — the contacts disclosure", () => {
+  const PANEL_ID = `discovery-contacts-${ROW.id}`;
+
+  it("starts collapsed, with no panel in the markup", () => {
+    const html = render();
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain(`id="${PANEL_ID}"`);
+  });
+
+  it("wires a real button to the panel it controls", () => {
+    const html = render();
+    expect(html).toContain(`aria-controls="${PANEL_ID}"`);
+    expect(html).toContain('aria-label="Show contacts"');
+    expect(html).toMatch(new RegExp(`<button[^>]*aria-controls="${PANEL_ID}"`));
+  });
+
+  it("points Approve for enrichment at the same panel", () => {
+    // The reveal renders in place, so the button that triggers it owns the
+    // region the operator should be reading.
+    const html = render();
+    const approve = html.slice(html.indexOf("Approve for enrichment") - 400);
+    expect(approve).toContain(`aria-controls="${PANEL_ID}"`);
+  });
+
+  it("summarises contact state without expanding", () => {
+    expect(render({ contactCount: 3 })).toContain(
+      "3 contacts found, none revealed",
+    );
+  });
+
+  it("separates revealed from still-discovered in the summary", () => {
+    const html = render({ contactCount: 3, revealedContactCount: 1 });
+    expect(html).toContain("1 revealed contact");
+    expect(html).toContain("2 found, not revealed");
+  });
+
+  it("says so plainly when nothing is on file", () => {
+    expect(render()).toContain("No contacts on file");
+  });
+
+  it("shows a non-pending bucket as a badge", () => {
+    expect(render({ reviewStatus: "approved" })).toContain("Approved");
   });
 });

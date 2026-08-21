@@ -40,9 +40,14 @@ function ContactLocationNote({
     );
   }
 
+  // Company-first discovery finds companies with no job postings at all, so
+  // there is frequently no posting to verify against. Naming one that does not
+  // exist reads as a data error.
   return (
     <span className="text-xs text-amber-700 dark:text-amber-400">
-      Location not verified for this posting
+      {contact.contactLocation
+        ? `Contact in ${contact.contactLocation} — no job posting on file to verify against`
+        : "Contact location unknown — no job posting on file to verify against"}
     </span>
   );
 }

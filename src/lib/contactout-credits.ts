@@ -39,6 +39,18 @@ export async function isContactOutCreditsAvailable(
   return Boolean(apiKey);
 }
 
+/**
+ * When the 24h credit lock clears, or null when nothing is locked. The UI needs
+ * the wall-clock time — "retry later" is not an answer an operator can act on.
+ */
+export async function contactOutLockRetryAt(): Promise<Date | null> {
+  const settings = await getOrCreateSettings();
+  const exhaustedAt = settings.contactoutCreditsExhaustedAt;
+  if (!exhaustedAt) return null;
+  const retryAt = new Date(exhaustedAt.getTime() + CONTACTOUT_LOCK_MS);
+  return retryAt.getTime() > Date.now() ? retryAt : null;
+}
+
 export async function markContactOutCreditsExhausted(): Promise<void> {
   lockedAtMs = Date.now();
   const settings = await getOrCreateSettings();
