@@ -19,7 +19,8 @@
  *   - never touches LinkedIn.
  *
  * SPEND DISCIPLINE, in order of who stops whom:
- *   1. `SERPAPI_DISCOVERY_ENABLED` — off by default. A key alone does nothing.
+ *   1. `SERPAPI_DISCOVERY_ENABLED=false` is the kill switch. The API key
+ *      turns Maps on, same as the worker's Google Jobs scrape.
  *   2. `assertPaidEgressAllowed("serpapi", …)` before EVERY search, so the
  *      daily cap in paid-egress.ts is a hard stop, shared with the Mac
  *      worker's Google Jobs scrape which posts to the same table.
@@ -64,7 +65,7 @@ import type {
   DiscoverySourceRequest,
   DiscoverySourceResolution,
 } from "./source";
-import { sourceFlagOn } from "./source";
+import { sourceFlagOff } from "./source";
 
 export const SERPAPI_MAPS_SOURCE = "serpapi_google_maps";
 
@@ -516,18 +517,17 @@ export function serpapiMapsSource(
 }
 
 /**
- * Off unless BOTH the flag and the key are present. The key already exists in
- * this system for the Mac worker's Google Jobs scrape — reuse it rather than
- * inventing a second variable — but it lives on the worker today, so the CRM
- * needs it added to Vercel before this can do anything.
+ * On when `SERPAPI_API_KEY` is present, same as the Mac worker's Google Jobs
+ * scrape. `SERPAPI_DISCOVERY_ENABLED=false` is the kill switch. The key lives
+ * on the worker today — add the same value to Vercel or Maps stays off.
  */
 export function resolveSerpapiMapsSource(
   env: DiscoverySourceEnv = process.env,
 ): DiscoverySourceResolution {
-  if (!sourceFlagOn(SERPAPI_DISCOVERY_FLAG, env)) {
+  if (sourceFlagOff(SERPAPI_DISCOVERY_FLAG, env)) {
     return {
       enabled: false,
-      reason: `${SERPAPI_DISCOVERY_FLAG} is not set — SerpApi discovery is off`,
+      reason: `${SERPAPI_DISCOVERY_FLAG} is off`,
     };
   }
   const apiKey = (env.SERPAPI_API_KEY ?? "").trim();
@@ -535,8 +535,9 @@ export function resolveSerpapiMapsSource(
     return {
       enabled: false,
       reason:
-        "SERPAPI_API_KEY is not set (it currently lives on the Mac worker; " +
-        "add it to Vercel to use SerpApi from the CRM)",
+        "Add SERPAPI_API_KEY to Vercel (Settings → Environment Variables), " +
+        "Production + Preview. Use the same key as the Mac worker " +
+        "(~/.vsearch/worker.env). Then redeploy.",
     };
   }
   return {

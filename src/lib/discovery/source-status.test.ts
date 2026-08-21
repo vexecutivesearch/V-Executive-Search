@@ -11,11 +11,11 @@ describe("discoverySourceStatus", () => {
     });
   });
 
-  it("says Maps is off for Finance when the flag is unset", () => {
+  it("says Maps is off when the API key is missing", () => {
     const maps = discoverySourceStatus("finance_accounting", {})[1];
     expect(maps.enabled).toBe(false);
     expect(maps.appliesToThisVertical).toBe(false);
-    expect(maps.reason).toMatch(/SERPAPI_DISCOVERY_ENABLED/);
+    expect(maps.reason).toMatch(/SERPAPI_API_KEY/);
   });
 
   it("says Maps does not apply to Finance even when the source is on", () => {

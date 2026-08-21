@@ -433,8 +433,8 @@ Everything here runs on SERP-level data only, before any credit is spent. The de
 
 ## 9. What the operator must do before it does anything
 
-1. Add `SERPAPI_API_KEY` to **Vercel** (it currently lives only on the Mac worker). Same key, same value.
-2. Set `SERPAPI_DISCOVERY_ENABLED=true` on Vercel. **Default is off**; the key alone does nothing.
+1. Add `SERPAPI_API_KEY` to **Vercel** (it currently lives only on the Mac worker). Same key, same value. That is what turns Maps on.
+2. Optional kill switch: `SERPAPI_DISCOVERY_ENABLED=false`. Unset means on, as long as the key is present.
 3. Optional caps, all documented in `.env.example`: `SERPAPI_DAILY_CREDIT_CAP` (default 400 searches/day ≈ 12,000/month ÷ 30), `SERPAPI_DISCOVERY_RUN_CAP` (default 12 searches/run), `SERPAPI_DISCOVERY_VERTICALS` (default `construction,legal`).
 4. **Nothing at all for Apollo quantify.** It is on by default and needs no new
    variable. `APOLLO_QUANTIFY_DISABLED=true` turns it off and

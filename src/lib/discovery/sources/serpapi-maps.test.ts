@@ -113,30 +113,39 @@ beforeEach(() => {
 /* ------------------------------------------------------------------ */
 
 describe("resolveSerpapiMapsSource", () => {
-  it("is off with no configuration at all", async () => {
+  it("is off with no key, and tells the operator to add it to Vercel", async () => {
     const { resolveSerpapiMapsSource } = await import(
       "@/lib/discovery/sources/serpapi-maps"
     );
     const resolution = resolveSerpapiMapsSource({});
     expect(resolution.enabled).toBe(false);
     if (resolution.enabled) return;
-    expect(resolution.reason).toMatch(/SERPAPI_DISCOVERY_ENABLED/);
+    expect(resolution.reason).toMatch(/SERPAPI_API_KEY/);
+    expect(resolution.reason).toMatch(/Vercel/);
   });
 
-  /*
-   * The key already exists in this system for the worker's Google Jobs scrape.
-   * Finding it must never be enough to start spending searches on a second
-   * consumer of the same monthly quota.
-   */
-  it("is still off when only the API key is present", async () => {
+  it("turns on from the API key alone, same as the worker's Google Jobs scrape", async () => {
     const { resolveSerpapiMapsSource } = await import(
       "@/lib/discovery/sources/serpapi-maps"
     );
     const resolution = resolveSerpapiMapsSource({ SERPAPI_API_KEY: "k" });
-    expect(resolution.enabled).toBe(false);
+    expect(resolution.enabled).toBe(true);
   });
 
-  it("is off when the flag is on but no key is configured, and says where the key lives", async () => {
+  it("stays off when the kill switch is explicit, even with a key", async () => {
+    const { resolveSerpapiMapsSource } = await import(
+      "@/lib/discovery/sources/serpapi-maps"
+    );
+    const resolution = resolveSerpapiMapsSource({
+      SERPAPI_DISCOVERY_ENABLED: "false",
+      SERPAPI_API_KEY: "k",
+    });
+    expect(resolution.enabled).toBe(false);
+    if (resolution.enabled) return;
+    expect(resolution.reason).toMatch(/SERPAPI_DISCOVERY_ENABLED is off/);
+  });
+
+  it("is off when the key is missing, even if the flag is on", async () => {
     const { resolveSerpapiMapsSource } = await import(
       "@/lib/discovery/sources/serpapi-maps"
     );
@@ -146,7 +155,7 @@ describe("resolveSerpapiMapsSource", () => {
     expect(resolution.enabled).toBe(false);
     if (resolution.enabled) return;
     expect(resolution.reason).toMatch(/SERPAPI_API_KEY/);
-    expect(resolution.reason).toMatch(/Mac worker/);
+    expect(resolution.reason).toMatch(/Vercel/);
   });
 
   it("enables with both, defaulting to construction and legal only", async () => {
@@ -195,7 +204,7 @@ describe("resolveSupplementarySources", () => {
     expect(skipped).toEqual([
       {
         name: "serpapi_google_maps",
-        reason: expect.stringContaining("SERPAPI_DISCOVERY_ENABLED"),
+        reason: expect.stringContaining("SERPAPI_API_KEY"),
       },
     ]);
   });

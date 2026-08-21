@@ -15,11 +15,9 @@
  * dedupe, ICP annotation, scoring and the review queue never learn a second
  * vocabulary. Adding a third source is a new file plus a registry entry.
  *
- * Nothing here is enabled by credentials alone. A source is off until its
- * explicit flag is set, exactly like `outreach/sms/provider.ts` — a
- * half-configured environment must be inert rather than optimistic, and a
- * source that silently starts spending searches because a key appeared in the
- * environment is the failure this codebase has already paid for once.
+ * Maps turns on from `SERPAPI_API_KEY`, same as the worker's Google Jobs
+ * scrape. `SERPAPI_DISCOVERY_ENABLED=false` is the kill switch. A missing
+ * key stays inert — the CRM cannot see the worker's copy.
  */
 
 import type { DiscoveredOrganization } from "@/lib/domain-resolver";
@@ -92,6 +90,16 @@ export function sourceFlagOn(
   env: DiscoverySourceEnv = process.env,
 ): boolean {
   return ["1", "true", "yes", "on"].includes(
+    (env[flag] ?? "").trim().toLowerCase(),
+  );
+}
+
+/** Explicit off. An unset flag is not off — Maps turns on from the API key. */
+export function sourceFlagOff(
+  flag: string,
+  env: DiscoverySourceEnv = process.env,
+): boolean {
+  return ["0", "false", "no", "off"].includes(
     (env[flag] ?? "").trim().toLowerCase(),
   );
 }
