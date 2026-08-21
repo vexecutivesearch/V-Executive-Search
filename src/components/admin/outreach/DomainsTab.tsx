@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { SendingProfile } from "@/lib/db/schema";
 import { api, Badge, btn, btnDanger, btnPrimary, input, label, statusTone, Section } from "./shared";
+import { DEFAULT_DOMAIN_TEST_TO } from "@/lib/outreach/test-send-domains";
 
 type ProfileRow = SendingProfile & { health: number; effectiveCap: number };
 type DnsRecord = { type: string; host: string; value: string; note: string };
@@ -21,6 +22,11 @@ export function DomainsTab() {
   const [add, setAdd] = useState({ domain: "", fromAddress: "", replyToAddress: "", resendKeyRef: "" });
   const [dnsRecords, setDnsRecords] = useState<DnsRecord[] | null>(null);
   const [dnsCheck, setDnsCheck] = useState<Record<string, { ok: boolean; detail: string }> | null>(null);
+  const [testTo, setTestTo] = useState(DEFAULT_DOMAIN_TEST_TO);
+  const [testBusy, setTestBusy] = useState(false);
+  const [testResults, setTestResults] = useState<
+    Array<{ domain: string; from: string; ok: boolean; resendId?: string; error?: string }> | null
+  >(null);
 
   const load = useCallback(async () => {
     const data = await api<{ profiles: ProfileRow[]; rootGroups: RootGroup[] }>(
@@ -130,6 +136,64 @@ export function DomainsTab() {
               <p key={name} className="text-xs">
                 <Badge tone={check.ok ? "green" : "red"}>{name}</Badge>{" "}
                 <span className="font-mono text-[11px]">{check.detail}</span>
+              </p>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      <Section
+        title="Test new domains"
+        subtitle="Sends one text-only email from each of the five new Resend domains. Does not count against daily caps."
+      >
+        <div className="flex flex-wrap items-end gap-2">
+          <div>
+            <label className={label}>Send test to</label>
+            <input
+              className={input}
+              value={testTo}
+              onChange={(e) => setTestTo(e.target.value)}
+            />
+          </div>
+          <button
+            className={btnPrimary}
+            disabled={testBusy || !testTo.includes("@")}
+            onClick={async () => {
+              setError(null);
+              setTestBusy(true);
+              try {
+                const data = await api<{
+                  results: Array<{
+                    domain: string;
+                    from: string;
+                    ok: boolean;
+                    resendId?: string;
+                    error?: string;
+                  }>;
+                }>("/api/admin/outreach/test-domains", {
+                  method: "POST",
+                  body: JSON.stringify({ to: testTo, scope: "new" }),
+                });
+                setTestResults(data.results);
+                await load();
+              } catch (e) {
+                setError(String(e));
+              } finally {
+                setTestBusy(false);
+              }
+            }}
+          >
+            {testBusy ? "Sending…" : "Send 1 email from each new domain"}
+          </button>
+        </div>
+        {testResults && (
+          <div className="mt-3 space-y-1">
+            {testResults.map((row) => (
+              <p key={row.domain} className="text-xs font-mono">
+                <Badge tone={row.ok ? "green" : "red"}>{row.ok ? "sent" : "failed"}</Badge>{" "}
+                {row.from}
+                {row.resendId ? ` · ${row.resendId}` : ""}
+                {row.error ? ` · ${row.error}` : ""}
               </p>
             ))}
           </div>

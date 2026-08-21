@@ -6,6 +6,7 @@ import {
   sendingProfiles,
   type SendingProfile,
 } from "@/lib/db/schema";
+import { ensureCatalogSendingProfiles } from "@/lib/outreach/sending-domains";
 
 /**
  * Multi-domain rotation. Profiles are polymorphic (email_domain today,
@@ -120,6 +121,9 @@ export async function pickSendingProfile(
   kind: "email_domain" | "imessage_number",
   random: () => number = Math.random,
 ): Promise<ProfilePick | null> {
+  if (kind === "email_domain") {
+    await ensureCatalogSendingProfiles();
+  }
   const pool = await db
     .select()
     .from(sendingProfiles)

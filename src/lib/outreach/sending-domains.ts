@@ -1,13 +1,15 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { sendingProfiles } from "@/lib/db/schema";
-import { rampCap } from "@/lib/outreach/profiles";
 import {
   CATALOG_SENDING_DOMAINS,
   DEFAULT_REPLY_TO_ADDRESS,
   fromAddressForDomain,
   rootDomainOf,
 } from "@/lib/outreach/sending-domains-catalog";
+
+/** Matches rampCap(0) — keep this file free of a profiles.ts import cycle. */
+const WARMUP_FLOOR = 5;
 
 export {
   CATALOG_SENDING_DOMAINS,
@@ -69,7 +71,7 @@ export async function ensureCatalogSendingProfiles(
       replyToAddress: replyTo,
       rootDomain: rootDomainOf(domain),
       status: "warming",
-      dailyLimit: rampCap(0),
+      dailyLimit: WARMUP_FLOOR,
       rampStage: 0,
       verifiedAt: now,
       warmingStartedAt: now,

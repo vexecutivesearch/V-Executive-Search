@@ -32,6 +32,7 @@ import { buildDraftContext } from "@/lib/outreach/draft-context";
 import { ensureDefaultFlow } from "@/lib/outreach/default-flow";
 import { logEnrollmentEvent } from "@/lib/outreach/events";
 import { seedOutreachTemplates } from "@/lib/outreach/seed-templates";
+import { ensureCatalogSendingProfiles } from "@/lib/outreach/sending-domains";
 import { getOrCreateOutreachSettings } from "@/lib/outreach/settings";
 import { isSuppressed } from "@/lib/outreach/suppression";
 import { resolveContactTimezone } from "@/lib/outreach/timezone-infer";
@@ -635,6 +636,11 @@ export async function enrollCompanyContacts(options: {
   advanceNow?: boolean;
 }): Promise<CompanyEnrollmentSummary> {
   const settings = await getOrCreateOutreachSettings();
+  try {
+    await ensureCatalogSendingProfiles();
+  } catch (error) {
+    console.error("[outreach] catalog sending domains failed", error);
+  }
 
   const companyContacts = await db
     .select()
