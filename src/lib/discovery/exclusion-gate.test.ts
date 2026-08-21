@@ -4,6 +4,7 @@ import {
   evaluateDiscoveryGate,
   gateReasonLabel,
   isGovernmentEmployer,
+  isKnownEnterpriseName,
   isPublicEducation,
   isStaffingOrRecruiting,
   partitionByGate,
@@ -12,6 +13,11 @@ import {
   type DiscoveryGateInput,
 } from "./exclusion-gate";
 import { matchEnterpriseDomain, normalizeHost } from "./enterprise-domains";
+import workedLeadsFixture from "@/lib/icp/fixtures/worked-leads.json";
+
+const workedLeads = workedLeadsFixture as {
+  leads: Array<{ name: string; domain: string | null }>;
+};
 
 function company(overrides: Partial<DiscoveryGateInput> = {}): DiscoveryGateInput {
   return {
@@ -412,6 +418,91 @@ describe("partitionByGate and reporting", () => {
     ] as const;
     for (const reason of reasons) {
       expect(gateReasonLabel(reason)).toBeTruthy();
+    }
+  });
+});
+
+describe("known-name lists reused from config/icp-config.json", () => {
+  it.each([
+    "Walmart",
+    "Berkshire Hathaway",
+    "Koch Industries",
+    "Cargill",
+    "Publix",
+    "Cracker Barrel",
+  ])("rejects %s on name alone, with no headcount or ticker", (name) => {
+    const decision = evaluateDiscoveryGate(
+      company({ name, domain: null, industry: null, employeeCount: null }),
+    );
+    expect(decision.verdict).toBe("reject");
+    expect(decision.reason).toBe("known_enterprise_name");
+  });
+
+  it.each(["Aerotek", "Vaco", "Robert Half", "Insight Global", "Kforce"])(
+    "rejects the staffing brand %s, which carries no staffing token",
+    (name) => {
+      const decision = evaluateDiscoveryGate(
+        company({ name, domain: null, industry: null, employeeCount: null }),
+      );
+      expect(decision.verdict).toBe("reject");
+      expect(decision.reason).toBe("staffing_agency");
+    },
+  );
+
+  it("matches exactly, so a local firm sharing a brand word survives", () => {
+    for (const name of [
+      "Target Roofing of Boca",
+      "Apple Valley Plumbing",
+      "Publix Plaza Dental",
+      "Cargill Brothers Electric",
+    ]) {
+      expect(isKnownEnterpriseName(name)).toBeNull();
+    }
+  });
+
+  it("tolerates a legal suffix on either side of the comparison", () => {
+    expect(isKnownEnterpriseName("Koch Industries, Inc.")).not.toBeNull();
+    expect(isKnownEnterpriseName("Cargill LLC")).not.toBeNull();
+  });
+});
+
+describe("worked-leads must-keep gate", () => {
+  /**
+   * The project's §7.1 convention: a rule change must not delete a company the
+   * operator historically worked. Two entries in the fixture ARE rejected, and
+   * both are deliberate — they are the exact categories the operator asked to
+   * eliminate, named with the exact tokens they listed ("city of", "search
+   * group"). Pinning them here means a future widening of the patterns shows
+   * up as a new failure rather than as silent extra deletions.
+   */
+  const ACCEPTED_REJECTIONS = new Set([
+    "City of Deerfield Beach",
+    "Trinity Search Group",
+  ]);
+
+  it("rejects no worked lead except the two documented categories", () => {
+    const rejected = workedLeads.leads
+      .filter(
+        (lead) =>
+          evaluateDiscoveryGate({
+            name: lead.name,
+            domain: lead.domain,
+            employeeCount: null,
+          }).verdict === "reject",
+      )
+      .map((lead) => lead.name);
+    expect(new Set(rejected)).toEqual(ACCEPTED_REJECTIONS);
+  });
+
+  it("surfaces the rest for review rather than dropping them", () => {
+    for (const lead of workedLeads.leads) {
+      if (ACCEPTED_REJECTIONS.has(lead.name)) continue;
+      const decision = evaluateDiscoveryGate({
+        name: lead.name,
+        domain: lead.domain,
+        employeeCount: null,
+      });
+      expect(decision.verdict, `${lead.name}: ${decision.detail}`).toBe("review");
     }
   });
 });

@@ -18,6 +18,7 @@
  * of 25 has to be diagnosable, and a boolean cannot explain itself.
  */
 
+import { getIcpConfig } from "@/lib/icp/icp-config";
 import { employeeBandForVertical } from "./verticals";
 import { matchEnterpriseDomain } from "./enterprise-domains";
 
@@ -33,6 +34,7 @@ export type GateReason =
   | "staffing_agency"
   | "publicly_traded"
   | "enterprise_domain"
+  | "known_enterprise_name"
   | "revenue_above_max";
 
 export type GateDecision = {
@@ -188,6 +190,50 @@ const PUBLIC_EDUCATION_INDUSTRIES = new Set([
   "higher education",
 ]);
 
+/**
+ * Exact-name lookup against the lists already maintained in
+ * `config/icp-config.json`. The ICP annotator treats these as deterministic
+ * (confidence 1.0) and the operator already curates them, so discovery reuses
+ * them rather than starting a competing copy — the difference is that here
+ * they reject instead of subtracting points.
+ *
+ * Exact and suffix-tolerant on purpose: "Target" must not delete "Target
+ * Roofing of Boca". Brand names with no staffing token ("Aerotek", "Vaco")
+ * are precisely what the pattern rules cannot see, which is what makes this
+ * list worth reusing.
+ */
+function knownListSuffixStripped(name: string): string {
+  return normalizeName(name)
+    .replace(
+      /\b(inc|incorporated|llc|llp|lp|corp|corporation|co|company|ltd|limited|plc|holdings|group)\b\s*$/,
+      "",
+    )
+    .trim();
+}
+
+let knownNames: {
+  enterprise: Set<string>;
+  staffing: Set<string>;
+} | null = null;
+
+function knownNameSets() {
+  if (knownNames) return knownNames;
+  const lists = getIcpConfig().known_lists;
+  const build = (entries: string[]) =>
+    new Set(entries.map((entry) => knownListSuffixStripped(entry)));
+  knownNames = {
+    enterprise: build([
+      ...lists.fortune_500,
+      ...lists.fortune_1000,
+      ...lists.known_large_private,
+      ...lists.national_retailers,
+      ...lists.known_large_hospitals,
+    ]),
+    staffing: build(lists.known_staffing_agencies),
+  };
+  return knownNames;
+}
+
 /** The matched substring, so a rejection reads as evidence not as a regex. */
 function matchedToken(value: string, patterns: RegExp[]): string | null {
   for (const pattern of patterns) {
@@ -247,8 +293,22 @@ export function isStaffingOrRecruiting(input: {
   if (industry && STAFFING_INDUSTRIES.has(industry)) {
     return `industry "${input.industry}"`;
   }
+  if (knownNameSets().staffing.has(knownListSuffixStripped(input.name))) {
+    return `"${input.name.trim()}" is on the known staffing-agency list`;
+  }
   const hit = matchedToken(normalizeName(input.name), STAFFING_NAME_PATTERNS);
   return hit ? `name contains "${hit}"` : null;
+}
+
+/**
+ * Exact match against the Fortune 500/1000, large-private, national-retailer,
+ * and large-hospital lists. A supplement to the ticker and revenue rules, for
+ * the private giants that have neither.
+ */
+export function isKnownEnterpriseName(name: string): string | null {
+  return knownNameSets().enterprise.has(knownListSuffixStripped(name))
+    ? `"${name.trim()}" is on the known-enterprise list`
+    : null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -293,6 +353,15 @@ export function evaluateDiscoveryGate(
       reason:
         domainHit.kind === "staffing" ? "staffing_agency" : "enterprise_domain",
       detail: `${domainHit.domain} is a known ${domainHit.kind} domain`,
+    };
+  }
+
+  const knownEnterprise = isKnownEnterpriseName(input.name);
+  if (knownEnterprise) {
+    return {
+      verdict: "reject",
+      reason: "known_enterprise_name",
+      detail: knownEnterprise,
     };
   }
 
@@ -367,6 +436,7 @@ export function gateReasonLabel(reason: GateReason): string {
     case "publicly_traded":
       return "publicly traded";
     case "enterprise_domain":
+    case "known_enterprise_name":
       return "known enterprise";
     case "revenue_above_max":
       return "enterprise revenue";
