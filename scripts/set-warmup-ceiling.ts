@@ -39,7 +39,11 @@ function stageFor(target: number): number {
   return 20;
 }
 
-/** 100/day across the three domains, weighted away from the throttled one. */
+/**
+ * Established domains keep the ~100/day pool they already earned.
+ * The five 2026-08-21 domains stay off this map so a --apply leaves them
+ * at the 5/day warm-up floor until they earn a raise.
+ */
 const DEFAULT_TARGETS: Record<string, number> = {
   "vexecsearch.com": 35,
   "vexecutivesearch.co": 35,

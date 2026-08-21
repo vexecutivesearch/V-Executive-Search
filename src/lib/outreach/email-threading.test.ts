@@ -105,6 +105,9 @@ vi.mock("@/lib/outreach/profiles", () => ({
   pickSendingProfile: async () => ({ profile: null }),
   tickWarmupStateMachine: async () => {},
 }));
+vi.mock("@/lib/outreach/sending-domains", () => ({
+  ensureCatalogSendingProfiles: async () => ({ created: [], existing: [] }),
+}));
 vi.mock("@/lib/outreach/send-caps", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/outreach/send-caps")>()),
   sentTodayOnChannel: async () => 0,
