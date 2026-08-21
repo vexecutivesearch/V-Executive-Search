@@ -456,7 +456,6 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
       {expanded && (
         <DiscoveryContactPanel
           panelId={panelId}
-          companyId={row.id}
           contacts={contacts}
           jobLocation={jobLocation}
           loading={contactsLoading}
@@ -471,9 +470,6 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
           costNote={costNote}
           onFindAdditional={() => void enrich(true)}
           additionalBusy={busy === "additional"}
-          // The action bar already carries it, and it covers the main-line-only
-          // company the panel's callable check would skip.
-          showAddToCallList={false}
         />
       )}
     </article>

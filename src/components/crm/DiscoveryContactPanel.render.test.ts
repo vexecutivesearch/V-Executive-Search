@@ -81,7 +81,6 @@ const UNREVEALED = contact({
 function render(over: Partial<DiscoveryContactPanelProps> = {}): string {
   const props: DiscoveryContactPanelProps = {
     panelId: `discovery-contacts-${COMPANY_ID}`,
-    companyId: COMPANY_ID,
     contacts: null,
     jobLocation: null,
     loading: false,
@@ -163,9 +162,10 @@ describe("DiscoveryContactPanel — revealed", () => {
     expect(html).toContain("Find additional contact");
   });
 
-  it("keeps Add to Call List reachable from the expanded row", () => {
+  it("leaves Add to Call List to the row's own action bar", () => {
+    // One of it, on the bar that stays visible while the panel is open.
     const html = render({ contacts: [contact()], outcome: SUCCESS });
-    expect(html).toContain("Add to Call List");
+    expect(html).not.toContain("Add to Call List");
   });
 
   it("reports the credit cost of the click", () => {

@@ -1,6 +1,5 @@
 "use client";
 
-import { AddToCallListButton } from "@/components/AddToCallListButton";
 import { ContactRow } from "@/components/ContactRow";
 import type { Contact } from "@/lib/db/schema";
 import type { RevealOutcome } from "@/lib/discovery/reveal-outcome";
@@ -22,7 +21,6 @@ function isUnrevealed(contact: Contact): boolean {
 
 export type DiscoveryContactPanelProps = {
   panelId: string;
-  companyId: string;
   /** Contacts as the profile page sees them, or null before the first load. */
   contacts: Contact[] | null;
   jobLocation: string | null;
@@ -35,8 +33,6 @@ export type DiscoveryContactPanelProps = {
   costNote: string | null;
   onFindAdditional: () => void;
   additionalBusy: boolean;
-  /** #53 also renders this on the collapsed action bar — pass false there. */
-  showAddToCallList?: boolean;
 };
 
 /**
@@ -46,11 +42,11 @@ export type DiscoveryContactPanelProps = {
  * Deliberately the same idiom as the expanded CrmLeadRow — a panel under the
  * row, contacts rendered by the shared `ContactRow` so the badges
  * (DISCOVERED — NOT REVEALED, CONTACTOUT · MOBILE, DO NOT CALL, MX ✓) are
- * literally the profile page's, and the same Add to Call List button.
+ * literally the profile page's. Add to Call List stays on the row's own action
+ * bar, which is still visible when the panel is open, so there is one of it.
  */
 export function DiscoveryContactPanel({
   panelId,
-  companyId,
   contacts,
   jobLocation,
   loading,
@@ -61,12 +57,10 @@ export function DiscoveryContactPanel({
   costNote,
   onFindAdditional,
   additionalBusy,
-  showAddToCallList = true,
 }: DiscoveryContactPanelProps) {
   const all = contacts ?? [];
   const revealed = all.filter((c) => !isUnrevealed(c));
   const unrevealed = all.filter(isUnrevealed);
-  const callable = all.some(contactIsCallable);
 
   return (
     <div
@@ -167,9 +161,6 @@ export function DiscoveryContactPanel({
           >
             {additionalBusy ? "Finding…" : "Find additional contact"}
           </button>
-        )}
-        {showAddToCallList && callable && (
-          <AddToCallListButton companyId={companyId} compact />
         )}
       </div>
     </div>
