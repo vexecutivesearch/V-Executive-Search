@@ -29,12 +29,43 @@ export type PoolStatus = {
   note: string | null;
 };
 
+/** Both Apollo discovery passes page at this size. A page costs one credit either way. */
+export const DISCOVERY_APOLLO_PER_PAGE = 100;
+
 export const EMPTY_CURSOR: DiscoveryCursor = {
-  perPage: 25,
+  perPage: DISCOVERY_APOLLO_PER_PAGE,
   consumed: 0,
   totalEntries: null,
   poolExhausted: false,
 };
+
+/**
+ * A cursor written under a different page size, or one that consumed past the
+ * pool it claims, is leftover from a previous search definition (the 25-row
+ * page, a tighter keyword list). Trusting it skips the unknown-size pass —
+ * the small local firms the operator actually wants — and spends a credit on
+ * an empty page of the sized pool.
+ *
+ * In-progress cursors (not exhausted) keep their offset so a mid-run page-size
+ * change still moves forward.
+ */
+export function reconcileCursor(
+  cursor: DiscoveryCursor,
+  currentPerPage: number = DISCOVERY_APOLLO_PER_PAGE,
+): { cursor: DiscoveryCursor; resetReason: "page_size_changed" | "consumed_past_pool" | null } {
+  const size = Math.max(1, currentPerPage);
+  const pageSizeChanged = cursor.perPage !== size;
+  const consumedPastPool =
+    cursor.totalEntries != null && cursor.consumed > cursor.totalEntries;
+
+  if ((pageSizeChanged && cursor.poolExhausted) || consumedPastPool) {
+    return {
+      cursor: { ...EMPTY_CURSOR, perPage: size },
+      resetReason: consumedPastPool ? "consumed_past_pool" : "page_size_changed",
+    };
+  }
+  return { cursor, resetReason: null };
+}
 
 /**
  * Apollo is offset-paged, so the next page derives from how much of the pool

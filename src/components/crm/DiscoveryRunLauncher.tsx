@@ -44,6 +44,8 @@ type RunSummary = {
   companiesReviewed?: number;
   created?: number;
   updated?: number;
+  returnedSized?: number;
+  returnedUnknownSize?: number;
   sizeUnknownCount?: number;
   autoExcluded?: number;
   gateRejected?: number;
@@ -56,6 +58,8 @@ type RunSummary = {
   notes?: string[];
   cost_note?: string;
   error?: string;
+  reset?: number;
+  message?: string;
 };
 
 function gateReasonBreakdown(
@@ -162,6 +166,37 @@ export function DiscoveryRunLauncher({
     }
   }
 
+  async function resetPool() {
+    if (!vertical || !effectiveMarket) return;
+    setBusy(true);
+    setError(null);
+    setSummary(null);
+    try {
+      const res = await fetch("/api/discovery/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vertical,
+          market: effectiveMarket,
+          reset: true,
+        }),
+      });
+      const data = (await res.json()) as RunSummary;
+      if (!res.ok) {
+        setError(data.error ?? "Could not reset this market's pool");
+        return;
+      }
+      setSummary(data);
+      // Reload pool chips so the exhausted banner clears before the next Find.
+      const next = (await fetch("/api/discovery/run").then((r) => r.json())) as LauncherConfig;
+      setConfig(next);
+    } catch {
+      setError("Network error — could not reset the pool");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const selectClass =
     "text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900";
 
@@ -263,6 +298,18 @@ export function DiscoveryRunLauncher({
         >
           {busy ? "Finding companies…" : `Find ${limit} companies`}
         </button>
+
+        {(sizedPool?.status.exhausted ||
+          pools.some((p) => p.pool === "unknown_size" && p.status.exhausted)) && (
+          <button
+            type="button"
+            onClick={resetPool}
+            disabled={busy || !vertical || !effectiveMarket}
+            className="px-3 py-1.5 rounded-md text-sm font-medium border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-200 disabled:opacity-50"
+          >
+            Reset this market and search again
+          </button>
+        )}
       </div>
 
       {!marketChoice && suggestedMarket && browseScope?.state && (
@@ -320,8 +367,15 @@ export function DiscoveryRunLauncher({
             {summary.companiesReviewed ?? 0} companies for review (
             {summary.created ?? 0} new, {summary.updated ?? 0} already known)
           </p>
+          {summary.message && (
+            <p className="text-xs text-gray-600 dark:text-gray-400">
+              {summary.message}
+            </p>
+          )}
           <p className="text-xs text-gray-600 dark:text-gray-400">
-            {summary.sizeUnknownCount ?? 0} size unknown ·{" "}
+            Apollo returned {summary.returnedSized ?? 0} sized /{" "}
+            {summary.returnedUnknownSize ?? 0} size-unknown ·{" "}
+            {summary.sizeUnknownCount ?? 0} size unknown in review ·{" "}
             {summary.withJobSignals ?? 0} with job signals (a bonus, not a
             requirement) ·{" "}
             {summary.autoExcluded ?? 0} auto-rejected ·{" "}
