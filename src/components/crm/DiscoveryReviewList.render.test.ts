@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { summarizeJobSignals } from "@/lib/discovery/job-signals";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: () => {}, refresh: () => {} }),
@@ -73,14 +74,10 @@ function row(id: string): ListProps["result"]["rows"][number] {
     icpFlags: [],
     icpStatus: "unknown",
     market: "Palm Beach County, Florida",
-    jobSignal: {
-      openPositions: 0,
-      oldestTitle: null,
-      oldestOpenDays: null,
-      label: null,
-    },
+    jobSignal: summarizeJobSignals([]),
     contactCount: 0,
     revealedContactCount: 0,
+    onCallList: false,
     primaryContact: null,
     firstSeen: "2026-08-01",
   };

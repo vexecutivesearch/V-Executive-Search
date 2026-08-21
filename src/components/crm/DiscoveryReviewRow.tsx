@@ -3,7 +3,12 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { AddToCallListButton } from "@/components/AddToCallListButton";
 import type { CompanyReviewStatus } from "@/lib/db/schema";
+import {
+  canAddToCallList,
+  REVIEW_STATUS_LABELS as STATUS_LABELS,
+} from "@/lib/discovery/review-actions";
 import type { ReviewQueueRow } from "@/lib/discovery/review-queue";
 import { verticalBadgeLabel } from "@/lib/discovery/vertical-evidence";
 
@@ -18,16 +23,6 @@ const REVIEW_ACTIONS: Array<{
   { status: "existing_client", label: "Existing client", tone: "neutral" },
   { status: "do_not_contact", label: "Do not contact", tone: "danger" },
 ];
-
-const STATUS_LABELS: Record<CompanyReviewStatus, string> = {
-  pending: "Pending review",
-  approved: "Approved",
-  rejected: "Rejected",
-  review_later: "Review later",
-  already_contacted: "Already contacted",
-  existing_client: "Existing client",
-  do_not_contact: "Do not contact",
-};
 
 function linkedInHref(url: string): string {
   return url.startsWith("http") ? url : `https://${url.replace(/^\/+/, "")}`;
@@ -118,6 +113,8 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
     : row.industryIsRollup
       ? `${row.industry} (pipeline rollup — no Apollo industry)`
       : row.industry;
+  const hasContact = row.revealedContactCount > 0;
+  const addable = canAddToCallList(row.reviewStatus);
 
   return (
     <article className="border border-gray-200 dark:border-gray-800 rounded-xl p-4 bg-white dark:bg-gray-950">
@@ -270,6 +267,20 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
           >
             {busy === "additional" ? "Finding…" : "Find additional contact"}
           </button>
+        )}
+
+        {addable && (
+          <AddToCallListButton
+            companyId={row.id}
+            initialOnList={row.onCallList}
+            compact
+            label={hasContact ? "Add to Call List" : "Add to Call List (main line)"}
+            title={
+              hasContact
+                ? "Move this company and its revealed decision-maker onto the active call list"
+                : "Add the company on its own so you can cold-call the main line — no contact is required"
+            }
+          />
         )}
 
         <label
