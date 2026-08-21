@@ -17,11 +17,9 @@ import {
   scoreTextClass,
 } from "@/lib/lead-score";
 import { compareContactsForOutreach } from "@/lib/contact-title-priority";
-import {
-  contactPhonesForDisplay,
-  sortPhonesForDisplay,
-} from "@/lib/contact-phones";
-import { isPersonalEmail, parsePhoneValue } from "@/lib/phone-utils";
+import { isPersonalEmail } from "@/lib/phone-utils";
+import { buildDialTargets } from "@/lib/call-dial-targets";
+import { CallLogPanel } from "./CallLogPanel";
 import { sectorFromIndustry } from "@/lib/industry-sectors";
 import { formatListingSalary, pickDisplayListing } from "@/lib/salary-format";
 import { parseJobLocation } from "@/lib/location-match";
@@ -106,14 +104,17 @@ export function CallListRow({
     return parseJobLocation(raw)?.label ?? raw;
   }, [primaryJob?.location, company.contacts]);
 
-  const phones = primaryContact
-    ? sortPhonesForDisplay(contactPhonesForDisplay(primaryContact))
-    : [];
-  const directPhone = phones.find((p) => p.kind !== "company")?.number ?? null;
-  const companyPhone =
-    phones.find((p) => p.kind === "company")?.number ??
-    primaryContact?.companyPhone ??
-    null;
+  /**
+   * Only gate-approved numbers reach the row. The cell used to link the
+   * primary contact's direct dial, which is a ContactOut mobile on almost
+   * every enriched row — exactly the number the classification exists to keep
+   * out of a tel: link.
+   */
+  const dialTargets = useMemo(
+    () => buildDialTargets({ company, contacts: company.contacts }),
+    [company],
+  );
+  const callableNumber = dialTargets.find((t) => t.allowed)?.number ?? null;
   const verifiedEmail = primaryContact
     ? (primaryContact.workEmail ??
       (primaryContact.email && !isPersonalEmail(primaryContact.email)
@@ -312,17 +313,20 @@ export function CallListRow({
                   <span className="text-gray-500"> · {primaryContact.title}</span>
                 ) : null}
               </p>
-              {!locked && directPhone ? (
+              {!locked && callableNumber ? (
                 <a
-                  href={`tel:${parsePhoneValue(directPhone) ?? directPhone}`}
+                  href={`tel:${callableNumber}`}
                   onClick={(e) => e.stopPropagation()}
+                  title="Business line — safe to dial"
                   className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
                 >
-                  {parsePhoneValue(directPhone) ?? directPhone}
+                  {callableNumber}
                 </a>
               ) : (
                 <span className="text-xs text-gray-400">
-                  {locked ? "outreach locked" : (verifiedEmail ?? "no direct line")}
+                  {locked
+                    ? "outreach locked"
+                    : (verifiedEmail ?? "no business line")}
                 </span>
               )}
             </>
@@ -615,29 +619,31 @@ export function CallListRow({
               Do Not Contact — outreach actions are locked for this company.
               Change the status to re-open it.
             </p>
-          ) : company.contacts.length > 0 ? (
-            <div className="space-y-2 rounded-lg bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-3">
-              {company.contacts.map((c) => (
-                <ContactRow
-                  key={c.id}
-                  contact={c}
-                  jobLocation={primaryJob?.location ?? null}
-                />
-              ))}
-              {companyPhone && (
-                <p className="text-xs text-gray-500">
-                  Main company line:{" "}
-                  <a
-                    href={`tel:${parsePhoneValue(companyPhone) ?? companyPhone}`}
-                    className="text-blue-600 dark:text-blue-400 hover:underline"
-                  >
-                    {parsePhoneValue(companyPhone) ?? companyPhone}
-                  </a>
+          ) : (
+            <>
+              <CallLogPanel
+                entryId={entry.id}
+                targets={dialTargets}
+                contacts={company.contacts}
+                primaryContactId={primaryContact?.id ?? null}
+                onEntryChange={onEntryChange}
+              />
+              {company.contacts.length > 0 ? (
+                <div className="space-y-2 rounded-lg bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-3">
+                  {company.contacts.map((c) => (
+                    <ContactRow
+                      key={c.id}
+                      contact={c}
+                      jobLocation={primaryJob?.location ?? null}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400 italic">
+                  No contacts on file
                 </p>
               )}
-            </div>
-          ) : (
-            <p className="text-sm text-gray-400 italic">No contacts on file</p>
+            </>
           )}
 
           <div className="flex justify-end">

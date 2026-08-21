@@ -490,7 +490,10 @@ export function CrmLeadRow({ row }: { row: CrmLeadRowData }) {
 
           {onList && (
             <div className="mt-3">
-              <CallControls companyId={company.id} />
+              <CallControls
+                companyId={company.id}
+                contacts={company.contacts}
+              />
             </div>
           )}
         </div>

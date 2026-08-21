@@ -1,19 +1,26 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { CallListEntry, CallStatus } from "@/lib/db/schema";
+import type { CallListEntry, CallStatus, Contact } from "@/lib/db/schema";
 import {
   CALL_STATUS_COLORS,
   CALL_STATUS_LABELS,
   CALL_STATUSES,
 } from "@/lib/call-status";
+import { CallLogPanel } from "./CallLogPanel";
 
 /**
  * Dossier call controls — status · attempts · follow-up · assignee,
  * writing straight to the company's call_list_entries row. Log a call
  * without leaving the panel.
  */
-export function CallControls({ companyId }: { companyId: string }) {
+export function CallControls({
+  companyId,
+  contacts = [],
+}: {
+  companyId: string;
+  contacts?: Contact[];
+}) {
   const [entry, setEntry] = useState<CallListEntry | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -54,6 +61,7 @@ export function CallControls({ companyId }: { companyId: string }) {
   if (!loaded || !entry) return null;
 
   return (
+    <div className="space-y-2">
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 px-3 py-2.5 text-sm">
       <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500">
         Call list
@@ -104,6 +112,17 @@ export function CallControls({ companyId }: { companyId: string }) {
           className="w-24 text-xs border border-gray-200 dark:border-gray-700 rounded-md px-1.5 py-1 bg-white dark:bg-gray-900"
         />
       </label>
+    </div>
+
+      {/* Targets are fetched, not passed: the dossier has no contacts list to
+          hand over, and the server is the authority on what may be dialed. */}
+      <CallLogPanel
+        entryId={entry.id}
+        contacts={contacts}
+        primaryContactId={entry.primaryContactId}
+        locked={entry.callStatus === "do_not_contact"}
+        onEntryChange={setEntry}
+      />
     </div>
   );
 }

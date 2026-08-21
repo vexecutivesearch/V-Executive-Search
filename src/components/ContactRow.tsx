@@ -8,6 +8,11 @@ import {
   sourceLabel,
 } from "@/lib/contact-phones";
 import { isPersonalEmail, parsePhoneValue } from "@/lib/phone-utils";
+import {
+  classifyContactPhones,
+  dialGate,
+  PHONE_CLASSIFICATION_LABELS,
+} from "@/lib/phone-classification";
 import { ImessageIndicator } from "./ImessageIndicator";
 
 function ContactLocationNote({
@@ -73,7 +78,12 @@ export function ContactRow({
     (e) => e && e !== personalEmail,
   );
 
-  const phones = sortPhonesForDisplay(contactPhonesForDisplay(contact));
+  const phones = sortPhonesForDisplay(
+    classifyContactPhones({
+      phones: contactPhonesForDisplay(contact),
+      phoneClassification: contact.phoneClassification,
+    }),
+  );
 
   return (
     <div className="space-y-1.5 text-sm border-t border-gray-100 dark:border-gray-800 pt-3 first:border-0 first:pt-0">
@@ -177,23 +187,45 @@ export function ContactRow({
           </a>
         )}
 
-        {phones.length > 0 ? (
-          phones.map((p) => (
-            <div key={`${p.source}-${p.number}`} className="flex flex-wrap items-center gap-2">
-              <span
-                className={`text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded ${sourceBadgeClass(p.source)}`}
-              >
-                {sourceLabel(p.source)} · {phoneKindLabel(p.kind)}
-              </span>
-              <a
-                href={`tel:${parsePhoneValue(p.number) ?? p.number}`}
-                className="text-gray-800 dark:text-gray-200 hover:underline"
-              >
-                {parsePhoneValue(p.number) ?? p.number}
-              </a>
-            </div>
-          ))
-        ) : null}
+        {phones.length > 0
+          ? phones.map((p) => {
+              const gate = dialGate(p);
+              const display = parsePhoneValue(p.number) ?? p.number;
+              return (
+                <div
+                  key={`${p.source}-${p.number}`}
+                  className="flex flex-wrap items-center gap-2"
+                >
+                  <span
+                    className={`text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded ${sourceBadgeClass(p.source)}`}
+                  >
+                    {sourceLabel(p.source)} · {phoneKindLabel(p.kind)}
+                  </span>
+                  {gate.allowed ? (
+                    <a
+                      href={`tel:${gate.number}`}
+                      className="text-gray-800 dark:text-gray-200 hover:underline"
+                    >
+                      {display}
+                    </a>
+                  ) : (
+                    <>
+                      <span
+                        className="text-gray-500 dark:text-gray-400"
+                        title={gate.reason}
+                      >
+                        {display}
+                      </span>
+                      <span className="text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded bg-red-50 text-red-800 dark:bg-red-950/50 dark:text-red-300">
+                        Do not call ·{" "}
+                        {PHONE_CLASSIFICATION_LABELS[gate.classification]}
+                      </span>
+                    </>
+                  )}
+                </div>
+              );
+            })
+          : null}
       </div>
 
       <ContactLocationNote jobLocation={jobLocation} contact={contact} />
