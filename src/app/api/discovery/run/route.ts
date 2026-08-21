@@ -113,6 +113,10 @@ export async function POST(request: NextRequest) {
       cost_note:
         `${summary.creditsSpent} Apollo organization-search credit(s) — ` +
         "one per page of up to 100 organizations" +
+        (summary.apolloQuantifyCredits
+          ? ` (${summary.apolloQuantifyCredits} of those backfilling company ` +
+            "attributes by domain)"
+          : "") +
         (supplementaryCost.length ? `, plus ${supplementaryCost.join(", ")}` : "") +
         ". No contact was revealed.",
     });

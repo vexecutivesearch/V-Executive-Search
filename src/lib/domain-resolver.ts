@@ -66,6 +66,9 @@ type ApolloOrg = {
   city?: string;
   state?: string;
   country?: string;
+  annual_revenue?: number | string;
+  publicly_traded_symbol?: string;
+  publicly_traded_exchange?: string;
 };
 
 function parseApolloOrg(org: ApolloOrg): OrgLookupResult {
@@ -163,6 +166,19 @@ export type DiscoveredOrganization = {
   city: string | null;
   state: string | null;
   domainConfidence: DomainConfidence;
+  /**
+   * Annual revenue in USD, and the stock ticker when the company has one.
+   *
+   * Neither is stored on `companies` — they exist so the discovery exclusion
+   * gate can hard-reject an enterprise on a structural signal instead of
+   * guessing from a local branch's headcount.
+   *
+   * Optional rather than nullable, because a source that does not model revenue
+   * at all (Google Maps) is a different statement from one that looked and
+   * found nothing, and only the second may be treated as evidence.
+   */
+  annualRevenue?: number | null;
+  publiclyTradedSymbol?: string | null;
 };
 
 export type OrganizationSearchResult = {
@@ -173,6 +189,16 @@ export type OrganizationSearchResult = {
   totalPages: number | null;
 };
 
+/**
+ * Apollo documents `q_organization_domains_list[]` as accepting up to 1,000
+ * domains in one request, and bills organization search at one credit per page
+ * regardless. That combination is what makes domain-keyed company enrichment
+ * affordable here: bulk organization enrichment is one credit PER ORGANIZATION,
+ * so 100 domains cost 100 credits through that endpoint and 1 credit through
+ * this one. See docs/discovery-serpapi-source.md for the comparison.
+ */
+export const APOLLO_DOMAIN_LIST_MAX = 1000;
+
 export type OrganizationSearchOptions = {
   apiKey: string;
   /** Apollo `organization_locations[]` — the market for THIS run only. */
@@ -181,11 +207,20 @@ export type OrganizationSearchOptions = {
   keywordTags?: string[];
   /** Omit to search without a headcount filter (surfaces unknown headcount). */
   employeeRange?: string | null;
+  /**
+   * Exact-domain lookup. Set this INSTEAD of the descriptive filters to ask
+   * "what does Apollo know about these specific companies?" — a location or
+   * keyword filter alongside it can only hide a company we already named,
+   * which is the one failure this path must not have.
+   */
+  domains?: string[];
   page?: number;
   perPage?: number;
   context?: PaidEgressContext;
   /** Free-text label recorded on the usage event (vertical/market). */
   usageLabel?: string;
+  /** Extra fields merged into the usage event's metadata, for the audit trail. */
+  usageMetadata?: Record<string, unknown>;
 };
 
 function apolloPhone(org: ApolloOrg): string | null {
@@ -216,6 +251,8 @@ function parseDiscoveredOrg(org: ApolloOrg): DiscoveredOrganization | null {
     // A domain straight from organization search is Apollo's own primary
     // domain, not a name guess — that is the high-confidence case.
     domainConfidence: parsed.domain ? "high" : "low",
+    annualRevenue: parseEmployees(org.annual_revenue),
+    publiclyTradedSymbol: org.publicly_traded_symbol?.trim() || null,
   };
 }
 
@@ -251,6 +288,7 @@ export function buildOrganizationSearchBody(
     notLocations = [],
     keywordTags = [],
     employeeRange = null,
+    domains = [],
     page = 1,
     perPage = 25,
   } = options;
@@ -263,6 +301,9 @@ export function buildOrganizationSearchBody(
   if (notLocations.length) body.organization_not_locations = notLocations;
   if (keywordTags.length) body.q_organization_keyword_tags = keywordTags;
   if (employeeRange) body.organization_num_employees_ranges = [employeeRange];
+  if (domains.length) {
+    body.q_organization_domains_list = domains.slice(0, APOLLO_DOMAIN_LIST_MAX);
+  }
   return body;
 }
 
@@ -282,15 +323,23 @@ export async function searchOrganizations(
     perPage = 25,
     context,
     usageLabel,
+    usageMetadata,
     employeeRange = null,
   } = options;
 
   const boundedPerPage = Math.min(Math.max(1, perPage), 100);
   const body = buildOrganizationSearchBody(options);
+  const eventMetadata = {
+    usageLabel,
+    page,
+    perPage: boundedPerPage,
+    employeeRange,
+    ...(usageMetadata ?? {}),
+  };
 
   await assertPaidEgressAllowed("apollo", "organizations/search", context, {
     estimatedCost: 1,
-    metadata: { usageLabel, page, perPage: boundedPerPage, employeeRange },
+    metadata: eventMetadata,
   });
 
   const resp = await fetch(`${APOLLO_BASE}/organizations/search`, {
@@ -320,7 +369,7 @@ export async function searchOrganizations(
     {
       recordsReturned: raw.length,
       estimatedCost: 1,
-      metadata: { usageLabel, page, perPage: boundedPerPage, employeeRange },
+      metadata: eventMetadata,
     },
   );
 

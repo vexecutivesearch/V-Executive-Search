@@ -160,6 +160,185 @@ Not legal advice. What a reasonable operator should know, from primary sources d
 
 ---
 
+## 4b. Quantify: closing the headcount gap with Apollo (implemented)
+
+The original version of this document reported one unresolved gap: Maps carries
+no headcount, so every Maps company landed `size_unknown`, which is a
+review-triggering state. Worse than the review noise, it meant the exclusion
+gate saw none of the structural signals it does most of its work with. The
+operator's response — "use both symbiotically" — is correct, and this section is
+the result.
+
+**Maps discovers; Apollo quantifies.** After a supplementary source returns rows
+and *before* candidate selection or the exclusion gate, Apollo backfills
+headcount, industry taxonomy, LinkedIn URL, annual revenue and any ticker,
+keyed on the normalised domain.
+
+### Which Apollo endpoint, and why it is not the obvious one
+
+Verified against <https://docs.apollo.io/docs/api-pricing> and the organization
+search reference:
+
+| Endpoint | Documented credit cost | Cost for 100 domains |
+|---|---|---|
+| `organizations/enrich` (single, by domain) | 1 credit **per organization** | **100 credits** |
+| `organizations/bulk_enrich` (batched, by domain) | 1 credit **per organization** | **100 credits** |
+| `organizations/search` with `q_organization_domains_list[]` | 1 credit **per page** of up to 100 results | **1 credit** |
+
+The intuitive choice is bulk enrichment, and it is a hundred times more
+expensive. Its batch ceiling (10 domains per request) saves *HTTP calls*, not
+credits — the pricing table is explicit that bulk organization enrichment bills
+per organization, exactly like the single-record endpoint. Organization search,
+meanwhile, bills per page and its `q_organization_domains_list[]` parameter is
+documented as accepting **up to 1,000 domains in a single request**. Since a page
+holds up to 100 results, one page of 100 domains is one credit.
+
+So the implementation uses organization search with a domain list, batched at
+100 domains per page. Nothing about this is a trick: it is the endpoint the
+pipeline already pays a credit for, asked a different question.
+
+### Where in the pipeline, and what a day costs
+
+**At discovery time, for the whole batch** — not lazily at approve time. The
+argument for laziness is that it only spends on companies the operator wants,
+but it also means the review queue shows `size unknown` for every Maps company,
+which is the exact problem being fixed. That trade would be worth arguing about
+if the batch cost real money. It does not:
+
+| | Searches / credits | Notes |
+|---|---|---|
+| SerpApi Maps sweep, ~100 companies | 5–6 searches | 20 results per search |
+| Apollo quantify, ~100 domains | **1 credit** | one page, one credit |
+| Apollo sized pass | 1 credit | unchanged |
+| Apollo unknown-size pass | 1 credit | unchanged |
+
+A day that discovers 100 Maps companies spends **one** Apollo credit
+quantifying them. Deferring that to approve time would save a fraction of a
+credit and cost the operator the ability to triage. The decision is not close.
+
+This does not touch the operator's hard rule: no *contact* is revealed. This is
+company-attribute qualification, it is metered through `assertPaidEgressAllowed`
+like every other paid call, it is capped per run
+(`APOLLO_QUANTIFY_RUN_CREDIT_CAP`, default 2) and per day
+(`APOLLO_DAILY_CREDIT_CAP`), and it is broken out in the run summary as
+`apolloQuantifyCredits` so it can never hide inside the search spend.
+
+### Is a domain-keyed lookup reliable enough?
+
+This is the part that can do real damage, because a wrong match attaches
+*another company's* headcount and silently converts an honest "operator decides"
+into a confident wrong verdict. Three guards:
+
+1. **Never key on a non-company host.** Maps' `website` is whatever the owner
+   typed, so it is regularly `facebook.com/theirpage`, a Yelp listing or a
+   link-in-bio. The existing denylist is reused: asking Apollo about
+   `facebook.com` returns Facebook — publicly traded, 70,000 employees — and
+   would hard-reject a roofing company as an enterprise. No domain means no
+   lookup and the company stays `size_unknown`, which is the correct answer.
+2. **Verify identity before trusting a headcount.** If the domain is shared by
+   several discovered rows, or Apollo's name for the domain does not agree with
+   the source's, the headcount is **withheld** and the row stays `size_unknown`.
+   Name agreement is containment first, then one shared *distinctive* token —
+   industry words are excluded, because "Apex Roofing" and "Beacon Roofing
+   Supply" otherwise agree on "roofing" and a $9B public distributor's numbers
+   land on a 14-person contractor.
+3. **Apply the enterprise signals anyway.** Revenue and ticker are merged even
+   when identity is unverified, and that asymmetry is deliberate: whether the
+   business behind a domain is a $1B public corporation is a true fact about the
+   brand, and a local outpost of one is precisely what the operator excluded.
+   Headcount is a property of a *site* and does not transfer; enterprise-ness is
+   a property of the *business* and does.
+
+**Franchises, in practice.** The shared-domain guard fires less often than the
+design implies, because the Maps normaliser already dedupes on domain *before*
+quantify runs: eleven Roto-Rooter locations arrive as one row, not eleven. So
+the realistic franchise outcome is that one location survives dedupe, gets the
+brand's headcount and revenue, and is rejected as an enterprise. For
+Roto-Rooter that is the intended answer. For a genuinely independent franchisee
+of a large brand it is a false reject, and it is not detectable from SERP-level
+data — recorded as a known limitation, not solved.
+
+### Precedence: what Apollo may and may not overwrite
+
+Following the rule `preferredIndustry` already established on `main` — a real
+value is never overwritten, a placeholder is:
+
+- **`phone` is never touched.** Maps' number is the published main line by
+  definition (`business_line`); Apollo's is often a national switchboard.
+- **`name`, `city`, `state`, `domain` stay with the source.** Maps knows which
+  *branch* this is; Apollo knows the parent's headquarters.
+- **Headcount, industry, LinkedIn, revenue, ticker fill holes only.**
+
+One deliberate exception, and it was a live bug before it was a rule: **the
+exclusion gate is given Apollo's industry, not the display winner.** A staffing
+agency with a polished Google Business Profile declares itself a "Business
+management consultant" — a real value, and nothing the Maps category filter can
+reject — so it wins display precedence over Apollo's "staffing & recruiting".
+Handing the gate the display value hid the only disqualifying signal and the
+agency was accepted at 22 employees, inside the band. The two values now have
+two jobs: `industry` is what the operator sees, and the gate reads Apollo's
+taxonomy, which is the vocabulary its industry sets are written in.
+
+### Provenance, without a schema change
+
+`size_unknown` triggers review and a confident band does not, so "Apollo says 18
+employees" and "nobody knows" must never render as the same thing. There is no
+free-form JSON column on `companies` and this did not justify adding one, so
+provenance lives in three places that already exist:
+
+- **Per field, in memory**, on the row as it moves through the pipeline, and
+  surfaced as `sizeSource` (`apollo` / `source` / `unknown`) on every company in
+  the run summary.
+- **Durably**, in `provider_usage_events.metadata` (existing `jsonb`) as a
+  zero-cost audit row per quantify pass: the domain asked, Apollo's name and
+  location for it, the headcount and where it came from, and why anything was
+  withheld. Zero cost because `dailyUsage` sums `estimated_cost`.
+- **Structurally**, in `companies.estimated_employees`, which is written only
+  when a provider actually supplied a number. Null still means nobody knows.
+
+### Traced end to end, against PR #52's gate
+
+Four companies through the real combined path — Maps result → domain
+normalisation → Apollo quantify → exclusion gate → dedupe → review queue — with
+fixtures, no live calls. "Before" is the verdict the same company got without
+quantification.
+
+| Company | Google category | Apollo said | Before | After |
+|---|---|---|---|---|
+| Summit Roofing & Restoration | Roofing contractor | 18 employees, construction, $4.1M | `review (size_unknown)` | **`accept (within_band)`** — 18 employees, band 15–750 |
+| Gulfstream Talent Partners | Employment agency | *never asked* | `review (size_unknown)` | **rejected before quantify** — the Maps category filter caught it, 0 credits |
+| Meridian Advisory Group | Business management consultant | 22 employees, **staffing & recruiting** | `review (size_unknown)` | **`reject (staffing_agency)`** — on Apollo's industry |
+| Roto-Rooter Plumbing (Boca Raton) | Plumber | 4,800 employees, $1.8B | `review (size_unknown)` | **`reject (revenue_above_max)`** — $1,800M |
+| Cintas Facility Services (Boynton Beach) | Uniform store | 45,000 employees, $9.6B, `CTAS` | `review (size_unknown)` | **`reject (publicly_traded)`** — CTAS |
+
+Five Maps companies, one Apollo credit, one company in the review queue —
+already sized at 18 with `sizeSource: apollo`. Before quantification, four of
+these five reached review as `size_unknown` and the operator triaged them by
+hand; the fifth was caught by the Maps category filter either way.
+
+Two things the trace showed that the design did not predict:
+
+- **The disguised staffing agency was initially ACCEPTED.** That is the industry
+  precedence bug described above, found here and fixed. Without the trace it
+  would have shipped.
+- **The second Roto-Rooter location never reached quantify at all** — the Maps
+  normaliser deduped it on domain first (`duplicate_in_batch`). That is why the
+  shared-domain guard fires less often than the design implies.
+
+Precedence held throughout: every company kept its Maps main line, its branch
+city and state, and its own name; Apollo only filled holes.
+
+### Verticals: does quantification change the recommendation?
+
+**No.** Finance & Accounting and General Professional Services stay off for
+Maps. Quantification fixes *sizing*, not *query precision*, and the reason those
+verticals were excluded is that their keywords do not map onto Google Business
+categories — a query that returns noise still bills a search whether or not the
+noise can now be sized and rejected. Revisit after reading a real rejection
+histogram for Construction and Legal.
+
+---
+
 ## 5. Deduplication and merge strategy
 
 A second source makes dedupe the highest-risk area in the whole change. Today `run.ts` matches **domain first, then `normalizeCompanyKey(name)`**, with domain as a UNIQUE column. That is the right skeleton; the additions needed are all on the domain side.
@@ -257,7 +436,16 @@ Everything here runs on SERP-level data only, before any credit is spent. The de
 1. Add `SERPAPI_API_KEY` to **Vercel** (it currently lives only on the Mac worker). Same key, same value.
 2. Set `SERPAPI_DISCOVERY_ENABLED=true` on Vercel. **Default is off**; the key alone does nothing.
 3. Optional caps, all documented in `.env.example`: `SERPAPI_DAILY_CREDIT_CAP` (default 400 searches/day ≈ 12,000/month ÷ 30), `SERPAPI_DISCOVERY_RUN_CAP` (default 12 searches/run), `SERPAPI_DISCOVERY_VERTICALS` (default `construction,legal`).
-4. **No migration.** No schema change. `provider_usage_events.provider` is a `text` column and already carries `'serpapi'` rows from the worker; the discovery cursor reuses `company_discovery_runs` with a new `pool` **value** (`serpapi_maps`) in an existing `text` column.
+4. **Nothing at all for Apollo quantify.** It is on by default and needs no new
+   variable. `APOLLO_QUANTIFY_DISABLED=true` turns it off and
+   `APOLLO_QUANTIFY_RUN_CREDIT_CAP` (default 2) lowers its per-run ceiling; both
+   are documented in `.env.example`. This is the only flag in the feature that
+   defaults ON, deliberately: it only runs when a supplementary source has
+   already returned rows (which needs its own explicit opt-in), it costs one
+   credit per 100 companies, and its OFF state is a review queue where no Maps
+   company has a headcount, a revenue figure or a ticker — which is exactly what
+   lets an enterprise branch office through the gate.
+5. **No migration.** No schema change. `provider_usage_events.provider` is a `text` column and already carries `'serpapi'` rows from the worker; the discovery cursor reuses `company_discovery_runs` with a new `pool` **value** (`serpapi_maps`) in an existing `text` column; quantify provenance goes in the existing `provider_usage_events.metadata` `jsonb`.
 
 Start with one vertical in one market, run it for a few days, and read the `searchesSpent` / net-new counts in the run summary before widening. The yield numbers in §2 are estimates, and the whole recommendation should be re-litigated against real ones.
 
@@ -288,9 +476,10 @@ Ordered by value per unit of risk.
 
 Found while reading, not touched by this change:
 
-1. **`run.ts` requests `per_page: limit` (default 25) for the sized pass.** Apollo bills 1 credit for up to 100 organizations either way, so the default run pays a full credit for a quarter of a page. The unknown-size pass already gets this right (`UNKNOWN_SIZE_PER_PAGE = 100`). Fetching 100 and slicing to `limit` would quadruple the candidate pool for the same credit — and, because `advanceCursor` counts `returned`, would also advance the cursor faster and reach pool exhaustion sooner, which is genuine information the operator wants. **The clearest available cost win in the discovery path, and it is free.**
+1. ~~**`run.ts` requests `per_page: limit` (default 25) for the sized pass.**~~ **FIXED** alongside the quantify work. Both passes now page at `APOLLO_PER_PAGE = 100` and `selectDiscoveryCandidates` slices to `limit`, so the same credit yields four times the candidate pool. Two details that had to be right: `advanceCursor` is now given the *page size* as `requested` rather than the run's limit (comparing a 100-row page against a limit of 25 would read a healthy page as short and declare the pool exhausted on the first run), and a cursor whose `consumed` was accumulated on the old 25-row grid lands mid-page on the 100-row grid, so a few organizations repeat once — dedupe absorbs them and the summary reports them as duplicates. Early exit is unaffected: it was always driven by `limit` at selection time, not by page size.
 2. **`buildDedupeIndex()` selects every row of `companies` on every run.** Fine at a few thousand rows, a problem at 50,000 inside a 120-second Vercel function (`maxDuration = 120`). It will degrade gradually and then fail.
 3. **Discovery labels itself with a fake manual-enrich context.** `manualEnrichContext(\`discovery:${vertical}:${market}\`)` produces `manual_enrich:discovery:legal:...` purely to satisfy `assertPaidEgressAllowed`, which rejects every non-`manual_enrich` context outright. The gate's own audit trail therefore cannot distinguish an operator clicking Approve from an automated discovery sweep — and that distinction is the entire point of the gate. A `discovery_search` context that is allowed but separately capped would be more honest. (My SerpApi source inherits this pattern rather than diverging from it mid-change.)
 4. **Apollo endpoint path may be stale.** The code calls `POST /api/v1/organizations/search`; Apollo's current docs document Organization Search as `POST /api/v1/mixed_companies/search`. The code defensively reads `data.organizations ?? data.accounts`, which suggests someone already hit a response-shape difference. It evidently still works today, so this is a "verify before it breaks" item, not a bug I can confirm.
 5. **Apollo's 50,000-record display limit is not modelled.** `advanceCursor` treats a short page as pool exhaustion, which happens to cover it, but the 500-page ceiling is a distinct condition that would be reported to the operator as "pool exhausted, rotate market" when the truth is "add more filters."
-6. **`companies.phone` is documented as Apollo-only.** The comment on `phoneClassification` says "Apollo organization search is the only writer of that column." After this change that is no longer true — Maps also writes it. The default `business_line` remains correct (a Google Business Profile phone is a published main line, not a personal mobile), but the comment is now stale and anyone reasoning about dial safety from it would be misled.
+6. **`selectDiscoveryCandidates` silently deletes a sized row from the unknown pool.** `dedupe(input.unknownSize, true)` drops any row with a non-null `estimatedEmployees` — correct for its original job (stopping Apollo's unfiltered second pass from re-reviewing companies its first pass already returned), and a trap for anything that *gains* a headcount later. A quantified Maps company left in that pool disappears with no note and no rejection count, so the quantify feature would have made the review queue smaller rather than better. `run.ts` now routes by what is known rather than by where the row came from, and a test asserts both halves. Worth knowing for anyone adding a third source: the pool is named for headcount state, not provenance, and it enforces that.
+7. **`companies.phone` is documented as Apollo-only.** The comment on `phoneClassification` says "Apollo organization search is the only writer of that column." After this change that is no longer true — Maps also writes it. The default `business_line` remains correct (a Google Business Profile phone is a published main line, not a personal mobile), but the comment is now stale and anyone reasoning about dial safety from it would be misled.

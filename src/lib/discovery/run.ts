@@ -51,13 +51,31 @@ import {
   keywordTagsForVertical,
 } from "./verticals";
 import { resolveSupplementarySources } from "./sources/source";
+import {
+  headcountProvenance,
+  quantifyOrganizations,
+  type FieldProvenance,
+} from "./sources/apollo-quantify";
 
 /**
- * The unknown-headcount pass pages at Apollo's maximum: companies Apollo has no
- * headcount for are a minority of any page, and a page costs the same one
- * credit whether it holds 25 rows or 100.
+ * Both Apollo passes page at Apollo's maximum: a page costs the same one credit
+ * whether it holds 25 rows or 100, so asking for the run's `limit` (25 by
+ * default) threw away three quarters of what the credit had already paid for.
+ *
+ * Decoupling page size from the requested limit is what makes the batch survive
+ * filtering. `selectDiscoveryCandidates` slices to `limit` at the end, so the
+ * extra rows are the depth that dedupe and the exclusion gate draw from — with
+ * 25 rows in hand, a run where half the page is already known or out of band
+ * returns twelve companies; with 100 it returns the twenty-five asked for. It
+ * also advances the cursor four times faster, so "pool exhausted, rotate
+ * market" becomes an honest signal instead of one that arrives months late.
+ *
+ * The one cost: on the first run after this change, a cursor whose `consumed`
+ * was accumulated at 25 rows a page lands mid-page on the 100-row grid and a
+ * few organizations repeat. Dedupe absorbs them and the summary reports them as
+ * duplicates.
  */
-const UNKNOWN_SIZE_PER_PAGE = 100;
+const APOLLO_PER_PAGE = 100;
 
 /** Deterministic flags that mean "the operator never wants to see this". */
 const AUTO_EXCLUDE_FLAGS = new Set(
@@ -70,6 +88,15 @@ export type DiscoveryRunResultCompany = {
   domain: string | null;
   estimatedEmployees: number | null;
   sizeUnknown: boolean;
+  /**
+   * Who supplied the headcount: `apollo` when the quantify step backfilled it,
+   * `source` when the discovering source already knew it, `unknown` when nobody
+   * does. Reported separately from `sizeUnknown` because "Apollo says 18" and
+   * "nobody knows" must never read the same — one is decided, the other needs a
+   * human, and conflating them is the fail-open behaviour the exclusion gate
+   * exists to prevent.
+   */
+  sizeSource: FieldProvenance;
   created: boolean;
   autoExcluded: boolean;
   jobSignal: JobSignalSummary;
@@ -94,7 +121,14 @@ export type DiscoveryRunSummary = {
   verticalLabel: string;
   market: string;
   limit: number;
+  /** Every Apollo credit this run spent: both search passes plus quantify. */
   creditsSpent: number;
+  /**
+   * The quantify share of `creditsSpent`, broken out so the operator can see
+   * what backfilling company attributes cost separately from searching, and so
+   * a change in one is never mistaken for a change in the other.
+   */
+  apolloQuantifyCredits: number;
   /** Per-source accounting for every supplementary source that ran. */
   sources: DiscoverySourceReport[];
   /** Supplementary sources that did not run, and why. */
@@ -438,14 +472,14 @@ export async function runCompanyDiscovery(
   const unknownCursor = await loadCursor(vertical, market, "unknown_size");
 
   let creditsSpent = 0;
-  const sizedPage = pageForCursor(sizedCursor, limit);
+  const sizedPage = pageForCursor(sizedCursor, APOLLO_PER_PAGE);
   const sizedResult = await searchOrganizations({
     apiKey,
     locations: [market],
     keywordTags: keywordTagsForVertical(vertical),
     employeeRange: apolloEmployeeRange(vertical),
     page: sizedPage,
-    perPage: limit,
+    perPage: APOLLO_PER_PAGE,
     context,
     usageLabel: `discovery:${vertical}:${market}:sized`,
   });
@@ -455,14 +489,14 @@ export async function runCompanyDiscovery(
   let unknownReturned = 0;
   let nextUnknownCursor = unknownCursor;
   if (includeUnknownSize && !unknownCursor.poolExhausted) {
-    const unknownPage = pageForCursor(unknownCursor, UNKNOWN_SIZE_PER_PAGE);
+    const unknownPage = pageForCursor(unknownCursor, APOLLO_PER_PAGE);
     const unknownResult = await searchOrganizations({
       apiKey,
       locations: [market],
       keywordTags: keywordTagsForVertical(vertical),
       employeeRange: null,
       page: unknownPage,
-      perPage: UNKNOWN_SIZE_PER_PAGE,
+      perPage: APOLLO_PER_PAGE,
       context,
       usageLabel: `discovery:${vertical}:${market}:unknown_size`,
     });
@@ -470,10 +504,10 @@ export async function runCompanyDiscovery(
     unknownOrganizations = unknownResult.organizations;
     unknownReturned = unknownResult.organizations.length;
     nextUnknownCursor = advanceCursor(unknownCursor, {
-      requested: UNKNOWN_SIZE_PER_PAGE,
+      requested: APOLLO_PER_PAGE,
       returned: unknownReturned,
       totalEntries: unknownResult.totalEntries,
-      perPage: UNKNOWN_SIZE_PER_PAGE,
+      perPage: APOLLO_PER_PAGE,
     });
     notes.push(
       "Unknown-headcount pass ran: Apollo's employee-range filter hides companies " +
@@ -486,18 +520,20 @@ export async function runCompanyDiscovery(
     );
   }
 
+  // `requested` is the PAGE size, not the run's limit: a short page is Apollo
+  // saying it has nothing left for these filters, and comparing against a
+  // smaller limit would read a full page as a short one and declare the pool
+  // exhausted on the first run.
   const nextSizedCursor = advanceCursor(sizedCursor, {
-    requested: limit,
+    requested: APOLLO_PER_PAGE,
     returned: sizedResult.organizations.length,
     totalEntries: sizedResult.totalEntries,
-    perPage: limit,
+    perPage: APOLLO_PER_PAGE,
   });
 
   /*
    * Supplementary sources (SerpApi Google Maps today) fan out AFTER Apollo and
-   * are strictly additive: their rows join the unknown-headcount pool, because
-   * none of them can report headcount, and that pool already has a reserved
-   * share of the batch. Everything downstream — dedupe, ICP annotation,
+   * are strictly additive. Everything downstream — dedupe, ICP annotation,
    * scoring, the review queue — is untouched, because a source hands back
    * `DiscoveredOrganization`s and nothing else.
    *
@@ -506,6 +542,7 @@ export async function runCompanyDiscovery(
    * says why the source contributed nothing.
    */
   const sourceReports: DiscoverySourceReport[] = [];
+  let supplementaryOrganizations: typeof sizedResult.organizations = [];
   const { sources, skipped: sourcesSkipped } =
     await resolveSupplementarySources(vertical);
   for (const source of sources) {
@@ -516,8 +553,8 @@ export async function runCompanyDiscovery(
         limit,
         context,
       });
-      unknownOrganizations = [
-        ...unknownOrganizations,
+      supplementaryOrganizations = [
+        ...supplementaryOrganizations,
         ...outcome.organizations,
       ];
       notes.push(...outcome.notes);
@@ -542,10 +579,59 @@ export async function runCompanyDiscovery(
     }
   }
 
+  /*
+   * QUANTIFY. Maps can name a company but never size one, so before anything
+   * downstream sees these rows Apollo backfills headcount, industry, LinkedIn,
+   * revenue and ticker keyed on the normalised domain — one credit per 100
+   * domains via `q_organization_domains_list`, not one credit per company.
+   *
+   * This runs HERE, ahead of candidate selection and ahead of the exclusion
+   * gate, on purpose. The gate does most of its work on structural signals
+   * (headcount band, revenue ≥ $1B, a ticker, the industry taxonomy) and Maps
+   * supplies none of them, so a gate that ran first would wave through exactly
+   * the enterprise branch offices and staffing agencies it exists to stop.
+   *
+   * It never throws and never blocks: a company Apollo has no row for keeps
+   * going, size-unknown, which is the pre-existing behaviour this improves on
+   * rather than replaces.
+   */
+  let quantifyCredits = 0;
+  // Kept separate from `sizedResult.organizations` so `returnedSized` and the
+  // saved cursor keep reporting what Apollo's sized page actually returned.
+  const quantifiedSized: typeof sizedResult.organizations = [];
+  if (supplementaryOrganizations.length) {
+    const quantified = await quantifyOrganizations({
+      apiKey,
+      organizations: supplementaryOrganizations,
+      vertical,
+      market,
+      context,
+    });
+    quantifyCredits = quantified.creditsSpent;
+    creditsSpent += quantified.creditsSpent;
+    notes.push(...quantified.notes);
+
+    /*
+     * Route by what we now know, not by where the row came from.
+     *
+     * `selectDiscoveryCandidates` drops any row in the unknown-size pool that
+     * HAS a headcount — the filter that stops Apollo's unfiltered second pass
+     * from re-reviewing companies its first pass already returned. A quantified
+     * Maps company would be deleted by it, silently, so a row Apollo just sized
+     * joins the sized pool where it belongs.
+     */
+    for (const org of quantified.organizations) {
+      if (org.estimatedEmployees == null) unknownOrganizations.push(org);
+      else quantifiedSized.push(org);
+    }
+  }
+
   const { candidates, duplicatesSkipped, sizeUnknownCount } =
     selectDiscoveryCandidates({
       vertical,
-      sized: sizedResult.organizations,
+      // Apollo's own page first, so its rows keep priority for the batch's
+      // slots; quantified supplementary rows fill what is left.
+      sized: [...sizedResult.organizations, ...quantifiedSized],
       unknownSize: unknownOrganizations,
       limit,
     });
@@ -731,6 +817,7 @@ export async function runCompanyDiscovery(
       domain: candidate.domain,
       estimatedEmployees: candidate.estimatedEmployees,
       sizeUnknown: candidate.sizeUnknown,
+      sizeSource: headcountProvenance(candidate),
       created,
       autoExcluded: autoExcludedIds.includes(id),
       jobSignal: summarizeJobSignals(listingsByCompany.get(id) ?? []),
@@ -754,6 +841,7 @@ export async function runCompanyDiscovery(
     market,
     limit,
     creditsSpent,
+    apolloQuantifyCredits: quantifyCredits,
     sources: sourceReports,
     sourcesSkipped,
     returnedSized: sizedResult.organizations.length,
