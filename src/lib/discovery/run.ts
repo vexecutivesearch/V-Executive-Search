@@ -50,6 +50,7 @@ import {
   getVerticalConfig,
   keywordTagsForVertical,
 } from "./verticals";
+import { resolveSupplementarySources } from "./sources/source";
 
 /**
  * The unknown-headcount pass pages at Apollo's maximum: companies Apollo has no
@@ -74,12 +75,30 @@ export type DiscoveryRunResultCompany = {
   jobSignal: JobSignalSummary;
 };
 
+/**
+ * What each non-Apollo source contributed, so the operator can see whether a
+ * supplementary source is earning its searches — and, when one is off or capped,
+ * why it contributed nothing.
+ */
+export type DiscoverySourceReport = {
+  name: string;
+  billingUnit: "credit" | "search";
+  unitsSpent: number;
+  returned: number;
+  rejected: Record<string, number>;
+  poolExhausted: boolean;
+};
+
 export type DiscoveryRunSummary = {
   vertical: string;
   verticalLabel: string;
   market: string;
   limit: number;
   creditsSpent: number;
+  /** Per-source accounting for every supplementary source that ran. */
+  sources: DiscoverySourceReport[];
+  /** Supplementary sources that did not run, and why. */
+  sourcesSkipped: Array<{ name: string; reason: string }>;
   returnedSized: number;
   returnedUnknownSize: number;
   companiesReviewed: number;
@@ -169,7 +188,13 @@ export async function getDiscoveryPoolStatuses(): Promise<
   }>
 > {
   const rows = await db.select().from(companyDiscoveryRuns);
-  return rows.map((row) => ({
+  return rows
+    // Supplementary sources keep their own cursors in this table under their
+    // own `pool` value. They page on a different grid (SerpApi search slots,
+    // not Apollo rows), so reporting them as an Apollo pool would put a second,
+    // wrong row under the same (vertical, market) in the launcher.
+    .filter((row) => row.pool === "sized" || row.pool === "unknown_size")
+    .map((row) => ({
     vertical: row.vertical,
     market: row.market,
     pool: row.pool === "unknown_size" ? "unknown_size" : "sized",
@@ -468,6 +493,55 @@ export async function runCompanyDiscovery(
     perPage: limit,
   });
 
+  /*
+   * Supplementary sources (SerpApi Google Maps today) fan out AFTER Apollo and
+   * are strictly additive: their rows join the unknown-headcount pool, because
+   * none of them can report headcount, and that pool already has a reserved
+   * share of the batch. Everything downstream — dedupe, ICP annotation,
+   * scoring, the review queue — is untouched, because a source hands back
+   * `DiscoveredOrganization`s and nothing else.
+   *
+   * A supplementary source can NEVER fail the run. If it is off, capped,
+   * erroring or misconfigured, the Apollo results still land and the summary
+   * says why the source contributed nothing.
+   */
+  const sourceReports: DiscoverySourceReport[] = [];
+  const { sources, skipped: sourcesSkipped } =
+    await resolveSupplementarySources(vertical);
+  for (const source of sources) {
+    try {
+      const outcome = await source.discover({
+        vertical,
+        market,
+        limit,
+        context,
+      });
+      unknownOrganizations = [
+        ...unknownOrganizations,
+        ...outcome.organizations,
+      ];
+      notes.push(...outcome.notes);
+      sourceReports.push({
+        name: source.name,
+        billingUnit: source.billingUnit,
+        unitsSpent: outcome.unitsSpent,
+        returned: outcome.organizations.length,
+        rejected: outcome.rejected,
+        poolExhausted: outcome.poolExhausted,
+      });
+    } catch (err) {
+      console.error(`Discovery source ${source.name} failed:`, err);
+      notes.push(
+        `Supplementary source ${source.name} failed and was skipped — ` +
+          "the Apollo results below are unaffected.",
+      );
+      sourcesSkipped.push({
+        name: source.name,
+        reason: err instanceof Error ? err.message : "source failed",
+      });
+    }
+  }
+
   const { candidates, duplicatesSkipped, sizeUnknownCount } =
     selectDiscoveryCandidates({
       vertical,
@@ -680,6 +754,8 @@ export async function runCompanyDiscovery(
     market,
     limit,
     creditsSpent,
+    sources: sourceReports,
+    sourcesSkipped,
     returnedSized: sizedResult.organizations.length,
     returnedUnknownSize: unknownReturned,
     companiesReviewed: resultCompanies.length,

@@ -3,7 +3,15 @@ import { db } from "@/lib/db";
 import { providerUsageEvents } from "@/lib/db/schema";
 import { businessDayStartUtc } from "@/lib/timezone";
 
-export type PaidProvider = "apollo" | "contactout";
+/**
+ * `serpapi` bills per search rather than per revealed record, and the Mac
+ * worker's Google Jobs scrape already posts `provider = 'serpapi'` usage
+ * events here. Bringing it into this union means CRM-side SerpApi callers get
+ * the same daily hard stop and the same audit trail as Apollo and ContactOut,
+ * and the daily total covers every SerpApi consumer the app can see rather
+ * than one of them.
+ */
+export type PaidProvider = "apollo" | "contactout" | "serpapi";
 
 export type PaidEgressContext =
   | `manual_enrich:${string}`
@@ -41,8 +49,14 @@ function triggerSource(context: PaidEgressContext): string {
   return context.split(":")[0] || context;
 }
 
+const ENV_PREFIX: Record<PaidProvider, string> = {
+  apollo: "APOLLO",
+  contactout: "CONTACTOUT",
+  serpapi: "SERPAPI",
+};
+
 function providerEnvPrefix(provider: PaidProvider): string {
-  return provider === "apollo" ? "APOLLO" : "CONTACTOUT";
+  return ENV_PREFIX[provider];
 }
 
 function envFlag(value: string | undefined, defaultValue: boolean): boolean {
@@ -62,13 +76,26 @@ export function paidEgressEnabled(provider: PaidProvider): boolean {
  * a bug can't drain the provider balance. NOT the provider's real balance.
  * ContactOut default follows the credit-governance formula in the playbook:
  * daily enrich quota (25) × contacts per company (3) × credits per contact (2).
+ *
+ * SerpApi's unit is a search, not a credit, and the plan is monthly: the
+ * default is the guarded monthly budget spread evenly over a month
+ * (SERPAPI_MONTHLY_PLAN 15000 × SERPAPI_BUDGET_PCT 0.8 ÷ 30 ≈ 400). This cap
+ * is shared with the worker's Google Jobs scrape, which posts its searches to
+ * the same table — deliberately, so one number bounds all SerpApi spend the
+ * app can see.
  */
+const DEFAULT_DAILY_CAP: Record<PaidProvider, number> = {
+  apollo: 200,
+  contactout: 150,
+  serpapi: 400,
+};
+
 export function providerDailyCap(provider: PaidProvider): number {
   const prefix = providerEnvPrefix(provider);
   const raw = process.env[`${prefix}_DAILY_CREDIT_CAP`];
   const parsed = raw ? Number.parseInt(raw, 10) : NaN;
   if (Number.isFinite(parsed) && parsed >= 0) return parsed;
-  return provider === "apollo" ? 200 : 150;
+  return DEFAULT_DAILY_CAP[provider];
 }
 
 /**
@@ -84,10 +111,14 @@ export function providerDailyCap(provider: PaidProvider): number {
  *
  * ContactOut's people/search is NOT free: it is sent with `reveal_info: true`
  * and bills per revealed profile, so it stays counted.
+ *
+ * SerpApi has none: it bills every successful search regardless of how many
+ * results come back, so no endpoint of theirs is free.
  */
 const ZERO_COST_ENDPOINTS: Record<PaidProvider, readonly string[]> = {
   apollo: ["mixed_people/api_search"],
   contactout: [],
+  serpapi: [],
 };
 
 export function endpointConsumesCredits(
