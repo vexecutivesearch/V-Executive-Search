@@ -11,7 +11,10 @@ import {
 import { CompanyCardData } from "@/components/CompanyCard";
 import { businessListDate, BUSINESS_TIMEZONE } from "@/lib/timezone";
 import type { ListDateRange } from "@/lib/list-date-range";
-import { applySharedLineFilter } from "@/lib/contact-phones";
+import {
+  applySharedLineFilter,
+  demoteCompanyMainLine,
+} from "@/lib/contact-phones";
 import { focusGeoLabel, getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
 import { isStaffingAgency } from "@/lib/icp-filter";
 import type { Contact, JobListing } from "@/lib/db/schema";
@@ -587,7 +590,15 @@ export async function enrichCompanies(
       vertical: company.vertical,
       city: company.city,
       state: company.state,
-      contacts: applySharedLineFilter(companyContacts),
+      // Rows revealed before the main-line check landed still carry the
+      // switchboard as a "mobile"; demote it on read so the badge the operator
+      // sees is the truth about that number.
+      contacts: applySharedLineFilter(
+        companyContacts.map((contact) => ({
+          ...contact,
+          phones: demoteCompanyMainLine(contact.phones, company.phone),
+        })),
+      ),
       jobListings: inFocusListings,
     };
   });

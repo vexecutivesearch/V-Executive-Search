@@ -30,6 +30,7 @@ import {
 import { markContactOutCreditsExhausted } from "@/lib/contactout-credits";
 import { normalizeContactChannels } from "@/lib/contact-enrichment-limits";
 import {
+  demoteCompanyMainLine,
   extractApolloPhones,
   mergeSourcedPhones,
 } from "@/lib/contact-phones";
@@ -469,6 +470,12 @@ export type RevealResult = {
   phonesRequested: number;
   /** Whether the ContactOut leg of the waterfall ran for this reveal. */
   contactOutUsed: boolean;
+  /**
+   * ContactOut answered with the sample/locked payload, meaning the credit
+   * balance is spent. Reported separately because it is indistinguishable from
+   * "no mobile on file" unless the caller is told.
+   */
+  contactOutLocked: boolean;
   /** Set when ContactOut errored (bad key, no credits, rate limit, 5xx). */
   contactOutError: string | null;
   /** The mobile source this reveal was allowed to use. */
@@ -515,6 +522,7 @@ export async function revealSelectedContacts(options: {
       phonesPending: 0,
       phonesRequested: 0,
       contactOutUsed: false,
+      contactOutLocked: false,
       contactOutError: null,
       mobileSource,
       apolloMobileSkipped: 0,
@@ -527,12 +535,23 @@ export async function revealSelectedContacts(options: {
     .where(inArray(contacts.id, ids));
   const byId = new Map(rows.map((r) => [r.id, r]));
 
+  // The published main line, so a provider "mobile" that is really the
+  // switchboard is stored as the company line and never texted or dialled as
+  // a personal cell.
+  const [companyRow] = await db
+    .select({ phone: companies.phone })
+    .from(companies)
+    .where(eq(companies.id, companyId))
+    .limit(1);
+  const companyMainLine = companyRow?.phone ?? null;
+
   let revealed = 0;
   let skippedAlreadyRevealed = 0;
   let emailsFound = 0;
   let phonesFound = 0;
   let phonesRequested = 0;
   let contactOutUsed = false;
+  let contactOutCreditsLocked = false;
   let contactOutError: string | null = null;
   let apolloMobileSkipped = 0;
   const pendingApolloPhoneIds: string[] = [];
@@ -693,6 +712,7 @@ export async function revealSelectedContacts(options: {
         contactOutError ??= describeContactOutError(co.apiError);
       } else if (co?.phoneApiLocked) {
         contactOutLocked = true;
+        contactOutCreditsLocked = true;
         await markContactOutCreditsExhausted();
       } else if (co) {
         phones = mergeSourcedPhones(phones, co.phones);
@@ -735,7 +755,7 @@ export async function revealSelectedContacts(options: {
       workEmail,
       personalEmail,
       email: personalEmail ?? workEmail,
-      phones,
+      phones: demoteCompanyMainLine(phones, companyMainLine),
     });
     // Keep up to 2 personal emails, primary first.
     const finalPersonalEmails = [
@@ -823,6 +843,7 @@ export async function revealSelectedContacts(options: {
     phonesPending,
     phonesRequested,
     contactOutUsed,
+    contactOutLocked: contactOutCreditsLocked,
     contactOutError,
     mobileSource,
     apolloMobileSkipped,
