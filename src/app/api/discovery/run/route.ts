@@ -97,12 +97,24 @@ export async function POST(request: NextRequest) {
 
     revalidatePath("/crm");
 
+    // Supplementary sources bill in their own unit (SerpApi searches, not
+    // Apollo credits), so the note names each one rather than summing them into
+    // a single fake number the operator cannot reconcile against a provider.
+    const supplementaryCost = summary.sources
+      .filter((source) => source.unitsSpent > 0)
+      .map(
+        (source) =>
+          `${source.unitsSpent} ${source.name} ${source.billingUnit}(es)`,
+      );
+
     return NextResponse.json({
       ok: true,
       ...summary,
       cost_note:
         `${summary.creditsSpent} Apollo organization-search credit(s) — ` +
-        "one per page of up to 100 organizations. No contact was revealed.",
+        "one per page of up to 100 organizations" +
+        (supplementaryCost.length ? `, plus ${supplementaryCost.join(", ")}` : "") +
+        ". No contact was revealed.",
     });
   } catch (err) {
     if (err instanceof PaidEgressBlockedError) {

@@ -13,14 +13,14 @@ let cursorReadFails = false;
 /** Running total the mocked daily-usage SELECT reports. */
 let usageToday = 0;
 
-const insertValues = vi.fn(async () => undefined);
+const insertValues = vi.fn(async (_row: Record<string, unknown>) => undefined);
 const onConflictDoUpdate = vi.fn(async () => undefined);
 
 vi.mock("@/lib/db", () => ({
   db: {
     insert: vi.fn(() => ({
       values: vi.fn((row: Record<string, unknown>) => {
-        void insertValues(row as never);
+        void insertValues(row);
         // provider_usage_events inserts are awaited directly; the cursor upsert
         // chains .onConflictDoUpdate. One object satisfies both shapes.
         return Object.assign(Promise.resolve(undefined), {
@@ -469,7 +469,7 @@ describe("cost accounting", () => {
     });
 
     const usage = insertValues.mock.calls
-      .map(([row]) => row as unknown as Record<string, unknown>)
+      .map(([row]) => row)
       .filter((row) => row.provider === "serpapi");
     expect(usage).toHaveLength(2);
     for (const row of usage) {
