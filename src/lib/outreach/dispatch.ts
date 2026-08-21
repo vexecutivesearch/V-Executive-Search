@@ -19,6 +19,7 @@ import {
   pickSendingProfile,
   tickWarmupStateMachine,
 } from "@/lib/outreach/profiles";
+import { ensureCatalogSendingProfiles } from "@/lib/outreach/sending-domains";
 import {
   defaultFromAddress,
   emailFooter,
@@ -124,6 +125,19 @@ export async function runOutreachDispatch(now = new Date()): Promise<DispatchSum
   };
 
   const settings = await getOrCreateOutreachSettings();
+
+  // Catalog domains (Cloudflare + Resend) become sending_profiles rows so
+  // pickSendingProfile can rotate them. Cheap and idempotent.
+  try {
+    const catalog = await ensureCatalogSendingProfiles(now);
+    if (catalog.created.length) {
+      console.info(
+        `[outreach] added sending domains: ${catalog.created.join(", ")}`,
+      );
+    }
+  } catch (error) {
+    console.error("[outreach] catalog sending domains failed", error);
+  }
 
   // Warm-up state machine ticks with the cron (cheap, idempotent).
   try {

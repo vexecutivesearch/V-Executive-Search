@@ -10,17 +10,20 @@ import {
   requiredDnsRecords,
   verifyProfileDns,
 } from "@/lib/outreach/profiles";
+import { ensureCatalogSendingProfiles } from "@/lib/outreach/sending-domains";
+import { rootDomainOf } from "@/lib/outreach/sending-domains-catalog";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function rootDomainOf(domain: string): string {
-  return domain.split(".").slice(-2).join(".");
-}
-
 export async function GET() {
   if (!(await isAdminAuthenticated())) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  try {
+    await ensureCatalogSendingProfiles();
+  } catch (error) {
+    console.error("[outreach] catalog sending domains failed", error);
   }
   const profiles = await db
     .select()

@@ -260,14 +260,75 @@ async function txtRecords(host: string): Promise<string[]> {
   }
 }
 
+const SPF_PREFIX = /^v=spf1\b/i;
+const RESEND_SPF_INCLUDE = /include:(?:[^\s]*\.)?amazonses\.com|include:[^\s]*resend/i;
+
+export function isAuthorizedResendSpf(record: string | undefined | null): boolean {
+  if (!record || !SPF_PREFIX.test(record)) return false;
+  return RESEND_SPF_INCLUDE.test(record);
+}
+
+export function spfIncludeHosts(record: string): string[] {
+  return [...record.matchAll(/include:([^\s]+)/gi)].map((match) => match[1]);
+}
+
+/**
+ * Resend publishes SPF on `send.<domain>`, not always the apex. Cloudflare /
+ * GoDaddy Domain Connect then wraps that in `include:dc-…_spfm.send.<domain>`,
+ * so a one-hop follow is required before declaring the record unauthorized.
+ */
+export function resolveAuthorizedSpf(
+  recordsByHost: Record<string, string[]>,
+  startHosts: string[],
+): { ok: boolean; detail: string } {
+  for (const host of startHosts) {
+    const spf = (recordsByHost[host] ?? []).find((record) =>
+      SPF_PREFIX.test(record),
+    );
+    if (!spf) continue;
+    if (isAuthorizedResendSpf(spf)) {
+      return { ok: true, detail: `${host}: ${spf}` };
+    }
+    for (const includeHost of spfIncludeHosts(spf)) {
+      const hop = (recordsByHost[includeHost] ?? []).find((record) =>
+        SPF_PREFIX.test(record),
+      );
+      if (isAuthorizedResendSpf(hop)) {
+        return { ok: true, detail: `${host} → ${includeHost}: ${hop}` };
+      }
+    }
+    return {
+      ok: false,
+      detail: `${host}: ${spf} (no amazonses/resend include)`,
+    };
+  }
+  return {
+    ok: false,
+    detail: `no v=spf1 TXT on ${startHosts.join(" or ")} (needs include for Resend/SES)`,
+  };
+}
+
 /**
  * DNS verification gate: SPF + DKIM + DMARC must resolve before a profile
  * can enter warm-up. Unverified profiles cannot send, period.
  */
 export async function verifyProfileDns(domain: string): Promise<DnsCheckResult> {
-  const spfRecords = await txtRecords(domain);
-  const spf = spfRecords.find((r) => r.toLowerCase().startsWith("v=spf1"));
-  const spfOk = Boolean(spf && /include:.*amazonses\.com|include:.*resend/i.test(spf));
+  const spfHosts = [domain, `send.${domain}`];
+  const recordsByHost: Record<string, string[]> = {};
+  for (const host of spfHosts) {
+    recordsByHost[host] = await txtRecords(host);
+  }
+  const apexSpf = (recordsByHost[domain] ?? []).find((record) =>
+    SPF_PREFIX.test(record),
+  );
+  const sendSpf = (recordsByHost[`send.${domain}`] ?? []).find((record) =>
+    SPF_PREFIX.test(record),
+  );
+  const hopHosts = [...spfIncludeHosts(apexSpf ?? ""), ...spfIncludeHosts(sendSpf ?? "")];
+  for (const host of hopHosts) {
+    recordsByHost[host] = await txtRecords(host);
+  }
+  const spf = resolveAuthorizedSpf(recordsByHost, spfHosts);
 
   const dkimHost = `resend._domainkey.${domain}`;
   const dkimRecords = await txtRecords(dkimHost);
@@ -281,11 +342,8 @@ export async function verifyProfileDns(domain: string): Promise<DnsCheckResult> 
   const dmarcOk = dmarcRecords.some((r) => r.toLowerCase().startsWith("v=dmarc1"));
 
   return {
-    ok: spfOk && dkimOk && dmarcOk,
-    spf: {
-      ok: spfOk,
-      detail: spf ?? `no v=spf1 TXT on ${domain} (needs include for Resend/SES)`,
-    },
+    ok: spf.ok && dkimOk && dmarcOk,
+    spf,
     dkim: {
       ok: dkimOk,
       detail: dkimOk ? `${dkimHost} present` : `no DKIM key at ${dkimHost}`,
@@ -298,7 +356,7 @@ export async function verifyProfileDns(domain: string): Promise<DnsCheckResult> 
   };
 }
 
-/** Records to create, shown in the Admin "add domain" flow. */
+/** Records to create, shown in the Admin "add domain" flow. Matches Resend. */
 export function requiredDnsRecords(domain: string): Array<{
   type: string;
   host: string;
@@ -308,9 +366,15 @@ export function requiredDnsRecords(domain: string): Array<{
   return [
     {
       type: "TXT",
-      host: domain,
+      host: `send.${domain}`,
       value: "v=spf1 include:amazonses.com ~all",
-      note: "SPF — authorizes Resend (SES) to send for this domain",
+      note: "SPF — Resend publishes this on the send subdomain, not the apex",
+    },
+    {
+      type: "MX",
+      host: `send.${domain}`,
+      value: "feedback-smtp.us-east-1.amazonses.com (priority 10)",
+      note: "SPF companion — Resend bounce/feedback MX",
     },
     {
       type: "TXT",
@@ -323,12 +387,6 @@ export function requiredDnsRecords(domain: string): Array<{
       host: `_dmarc.${domain}`,
       value: "v=DMARC1; p=none; rua=mailto:dmarc@" + domain,
       note: "DMARC — start at p=none, tighten after clean warm-up",
-    },
-    {
-      type: "MX",
-      host: domain,
-      value: "feedback-smtp.us-east-1.amazonses.com (priority 10)",
-      note: "Only if replies should route through this domain",
     },
   ];
 }
