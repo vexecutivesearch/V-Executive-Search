@@ -342,6 +342,8 @@ function org(overrides: Partial<DiscoveredOrganization> = {}): DiscoveredOrganiz
     city: "West Palm Beach",
     state: "FL",
     domainConfidence: "high",
+    annualRevenue: null,
+    publiclyTradedSymbol: null,
     ...overrides,
   };
 }

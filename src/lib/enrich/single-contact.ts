@@ -27,6 +27,10 @@ import {
   type DiscoveryCandidate,
 } from "@/lib/enrich/discovery";
 import { verticalTitleRank } from "@/lib/discovery/verticals";
+import {
+  TITLE_RANK_DEMOTED_BASE,
+  TITLE_RANK_UNMATCHED,
+} from "@/lib/discovery/title-match";
 import type { PaidEgressContext } from "@/lib/paid-egress";
 
 export type RankableCandidate = Pick<
@@ -60,17 +64,29 @@ export function pickSingleDecisionMaker(
   const rank = (candidate: RankableCandidate): number => {
     const byVertical = vertical
       ? verticalTitleRank(candidate.title, vertical)
-      : 900;
-    // The vertical list is the operator's own priority order; the sector
-    // ranking is the fallback for titles it does not name.
-    return byVertical < 900 ? byVertical : 100 + candidate.priorityRank;
+      : TITLE_RANK_UNMATCHED;
+    // Three bands, best to worst:
+    //   0..n     a target title, at its position in the operator's own order
+    //   100..    no target describes it; the sector ranking decides
+    //   300..    a target title held by an assistant or deputy
+    // The demoted band sits last on purpose. An unrecognised title with a good
+    // sector rank is a better use of the reveal credit than the assistant to
+    // the person we actually wanted.
+    if (byVertical < TITLE_RANK_DEMOTED_BASE) return byVertical;
+    if (byVertical === TITLE_RANK_UNMATCHED) return 100 + candidate.priorityRank;
+    return byVertical;
   };
 
+  // Total order: rank, then in-market, then name, then contact id. The last
+  // leg matters because the same candidate set must always spend the credit on
+  // the same person, and two contacts can share a name.
   return [...unrevealed].sort((a, b) => {
     const rankDiff = rank(a) - rank(b);
     if (rankDiff !== 0) return rankDiff;
     if (a.locationMatched !== b.locationMatched) return a.locationMatched ? -1 : 1;
-    return a.name.localeCompare(b.name);
+    const nameDiff = a.name.localeCompare(b.name);
+    if (nameDiff !== 0) return nameDiff;
+    return a.contactId.localeCompare(b.contactId);
   })[0];
 }
 

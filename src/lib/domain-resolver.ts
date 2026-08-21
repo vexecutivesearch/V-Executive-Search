@@ -66,9 +66,11 @@ type ApolloOrg = {
   city?: string;
   state?: string;
   country?: string;
+  /** Apollo returns revenue as `annual_revenue`; some plans use the alias. */
   annual_revenue?: number | string;
-  publicly_traded_symbol?: string;
-  publicly_traded_exchange?: string;
+  organization_revenue?: number | string;
+  publicly_traded_symbol?: string | null;
+  publicly_traded_exchange?: string | null;
 };
 
 function parseApolloOrg(org: ApolloOrg): OrgLookupResult {
@@ -167,18 +169,18 @@ export type DiscoveredOrganization = {
   state: string | null;
   domainConfidence: DomainConfidence;
   /**
-   * Annual revenue in USD, and the stock ticker when the company has one.
+   * Enterprise signals the exclusion gate reads. Both are free in the search
+   * payload and both survive the case employee count cannot catch: a large
+   * corporation's local office reports a small headcount but still carries the
+   * parent's ticker and revenue. Neither is stored on `companies`.
    *
-   * Neither is stored on `companies` — they exist so the discovery exclusion
-   * gate can hard-reject an enterprise on a structural signal instead of
-   * guessing from a local branch's headcount.
-   *
-   * Optional rather than nullable, because a source that does not model revenue
-   * at all (Google Maps) is a different statement from one that looked and
-   * found nothing, and only the second may be treated as evidence.
+   * Required-and-nullable rather than optional: a source that does not model
+   * the field must say so with `null` (Google Maps, before quantify) so every
+   * adapter and fixture supplies it, and the gate never has to guess whether
+   * absence means "not looked up" or "looked up and empty."
    */
-  annualRevenue?: number | null;
-  publiclyTradedSymbol?: string | null;
+  annualRevenue: number | null;
+  publiclyTradedSymbol: string | null;
 };
 
 export type OrganizationSearchResult = {
@@ -251,7 +253,9 @@ function parseDiscoveredOrg(org: ApolloOrg): DiscoveredOrganization | null {
     // A domain straight from organization search is Apollo's own primary
     // domain, not a name guess — that is the high-confidence case.
     domainConfidence: parsed.domain ? "high" : "low",
-    annualRevenue: parseEmployees(org.annual_revenue),
+    annualRevenue: parseEmployees(
+      org.annual_revenue ?? org.organization_revenue,
+    ),
     publiclyTradedSymbol: org.publicly_traded_symbol?.trim() || null,
   };
 }

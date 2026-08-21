@@ -19,7 +19,10 @@ import {
   jobListings,
 } from "@/lib/db/schema";
 import { companyNameKeyStrength, normalizeCompanyKey } from "@/lib/company-name";
-import { searchOrganizations } from "@/lib/domain-resolver";
+import {
+  searchOrganizations,
+  type DiscoveredOrganization,
+} from "@/lib/domain-resolver";
 import { evaluateIcp } from "@/lib/icp-filter";
 import { annotateCompaniesIcp } from "@/lib/icp/icp-annotate";
 import { HARD_EXCLUDE_FLAGS_BY_TOGGLE } from "@/lib/icp/icp-scorer";
@@ -35,6 +38,12 @@ import {
   selectDiscoveryCandidates,
   type DiscoveryCandidate,
 } from "./candidates";
+import {
+  describeGateRejections,
+  partitionByGate,
+  summarizeGateReasons,
+  type GateDecision,
+} from "./exclusion-gate";
 import { summarizeJobSignals, type JobSignalSummary } from "./job-signals";
 import {
   advanceCursor,
@@ -81,6 +90,37 @@ const APOLLO_PER_PAGE = 100;
 const AUTO_EXCLUDE_FLAGS = new Set(
   Object.values(HARD_EXCLUDE_FLAGS_BY_TOGGLE).flatMap((flags) => flags ?? []),
 );
+
+/**
+ * Apply the exclusion gate to a raw provider page, BEFORE dedupe and before
+ * anything is written. Rejected companies are never inserted, so they cannot
+ * reach the review queue at a lower rank the way an ICP score penalty allowed.
+ * They are counted by reason instead, which is what makes a short run
+ * diagnosable.
+ */
+export function gateOrganizations(
+  organizations: DiscoveredOrganization[],
+  vertical: string,
+  allowLargeCompanies = false,
+): { kept: DiscoveredOrganization[]; rejected: GateDecision[] } {
+  const partition = partitionByGate(
+    organizations,
+    (org) => ({
+      name: org.name,
+      domain: org.domain ?? org.websiteUrl,
+      industry: org.industry,
+      employeeCount: org.estimatedEmployees,
+      annualRevenue: org.annualRevenue,
+      publiclyTradedSymbol: org.publiclyTradedSymbol,
+      vertical,
+    }),
+    { allowLargeCompanies },
+  );
+  return {
+    kept: [...partition.accepted, ...partition.flagged.map((f) => f.item)],
+    rejected: partition.rejected.map((r) => r.decision),
+  };
+}
 
 export type DiscoveryRunResultCompany = {
   id: string;
@@ -141,6 +181,12 @@ export type DiscoveryRunSummary = {
   duplicatesSkipped: number;
   sizeUnknownCount: number;
   autoExcluded: number;
+  /** Companies the exclusion gate refused before anything was written. */
+  gateRejected: number;
+  /** Gate rejections keyed by reason enum, e.g. { employees_above_max: 7 }. */
+  gateRejectionsByReason: Record<string, number>;
+  /** True only when the operator deliberately opted into oversized companies. */
+  allowLargeCompanies: boolean;
   withJobSignals: number;
   pools: Record<DiscoveryPool, PoolStatus>;
   poolExhausted: boolean;
@@ -451,6 +497,13 @@ export type DiscoveryRunOptions = {
   market: string;
   limit: number;
   includeUnknownSize?: boolean;
+  /**
+   * The operator's "allow larger companies selectively" escape hatch. Never a
+   * default and never automatic — it must be passed per run, and it only
+   * relaxes the headcount ceiling, not the staffing/government/enterprise
+   * rejections.
+   */
+  allowLargeCompanies?: boolean;
   apiKey: string;
   context?: PaidEgressContext;
 };
@@ -464,6 +517,7 @@ export async function runCompanyDiscovery(
 
   const limit = Math.min(Math.max(1, Math.trunc(options.limit)), 100);
   const includeUnknownSize = options.includeUnknownSize !== false;
+  const allowLargeCompanies = options.allowLargeCompanies === true;
   const context =
     options.context ?? manualEnrichContext(`discovery:${vertical}:${market}`);
   const notes: string[] = [];
@@ -626,13 +680,34 @@ export async function runCompanyDiscovery(
     }
   }
 
+  // The gate runs AFTER quantify and BEFORE dedupe/write: the size-filtered
+  // pass can still return a staffing agency or a .gov, the unknown-headcount
+  // pass is unfiltered by construction, and Maps rows now carry Apollo's
+  // structural signals so the gate can actually reject them.
+  const sizedGate = gateOrganizations(
+    [...sizedResult.organizations, ...quantifiedSized],
+    vertical,
+    allowLargeCompanies,
+  );
+  // Only the genuinely headcount-less rows of the unknown pass are gated:
+  // candidate selection discards the rest anyway, and counting them as
+  // rejections would inflate the number the operator uses to diagnose a short
+  // run with companies that were never candidates.
+  const unknownGate = gateOrganizations(
+    unknownOrganizations.filter((org) => org.estimatedEmployees == null),
+    vertical,
+    allowLargeCompanies,
+  );
+  const gateRejections = [...sizedGate.rejected, ...unknownGate.rejected];
+  const gateRejectionsByReason = summarizeGateReasons(gateRejections);
+
   const { candidates, duplicatesSkipped, sizeUnknownCount } =
     selectDiscoveryCandidates({
       vertical,
-      // Apollo's own page first, so its rows keep priority for the batch's
-      // slots; quantified supplementary rows fill what is left.
-      sized: [...sizedResult.organizations, ...quantifiedSized],
-      unknownSize: unknownOrganizations,
+      // Apollo's own page first (already inside sizedGate.kept in page order),
+      // then quantified supplementary rows that survived the gate.
+      sized: sizedGate.kept,
+      unknownSize: unknownGate.kept,
       limit,
     });
 
@@ -794,6 +869,20 @@ export async function runCompanyDiscovery(
       `Sized pool exhausted for ${verticalConfig.label} in ${market} — rotate market.`,
     );
   }
+  const rejectionNote = describeGateRejections(gateRejectionsByReason);
+  if (rejectionNote) {
+    notes.push(
+      `${rejectionNote} These never entered the queue, so a short run is the ` +
+        "gate working, not Apollo running dry.",
+    );
+  }
+  if (allowLargeCompanies) {
+    notes.push(
+      "Large companies were allowed for this run — oversized firms are shown " +
+        "for review instead of rejected. Staffing, government, and known " +
+        "enterprises are still rejected.",
+    );
+  }
   if (sizeUnknownCount) {
     notes.push(
       `${sizeUnknownCount} company/companies have no Apollo headcount — shown as "size unknown", not filtered out.`,
@@ -852,6 +941,9 @@ export async function runCompanyDiscovery(
     duplicatesSkipped,
     sizeUnknownCount,
     autoExcluded: autoExcludedIds.length,
+    gateRejected: gateRejections.length,
+    gateRejectionsByReason,
+    allowLargeCompanies,
     withJobSignals: resultCompanies.filter((c) => c.jobSignal.openPositions > 0)
       .length,
     pools,

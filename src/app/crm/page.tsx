@@ -15,12 +15,14 @@ import {
   getCrmLeads,
   getCrmTabCounts,
   getLocationRailCounts,
+  getReviewBucketCounts,
   type CallListItem,
   type CrmLeadFilters,
   type CrmLeadsResult,
   type CrmListingsResult,
   type CrmListingSort,
   type CrmSort,
+  type ReviewBucketCounts,
 } from "@/lib/crm-queries";
 import {
   companyReviewStatusEnum,
@@ -28,17 +30,19 @@ import {
   type CompanyStatus,
 } from "@/lib/db/schema";
 import {
+  activeReviewFilters,
   EMPTY_LOCATION_SCOPE,
+  EMPTY_REVIEW_SCOPE,
   normalizeLocationScope,
+  normalizeReviewScope,
+  reviewQueueQueryFilters,
   type LocationScope,
+  type ReviewScope,
 } from "@/lib/crm-location-scope";
 import { isLeadSource } from "@/lib/lead-lanes";
 import {
   getReviewQueue,
-  getReviewQueueCounts,
   getReviewQueueFacets,
-  parseHiringFilter,
-  type ReviewQueueCounts,
   type ReviewQueueResult,
 } from "@/lib/discovery/review-queue";
 import { businessListDate } from "@/lib/timezone";
@@ -171,10 +175,11 @@ export default async function CrmPage({
   let listings: CrmListingsResult | null = null;
   let callListItems: CallListItem[] | null = null;
   let review: ReviewQueueResult | null = null;
-  let reviewCounts: ReviewQueueCounts | null = null;
+  let reviewCounts: ReviewBucketCounts | null = null;
   let reviewFacets: { verticals: string[]; markets: string[] } | null = null;
+  let reviewScope: ReviewScope = EMPTY_REVIEW_SCOPE;
+  let reviewQueueTotal = 0;
   const reviewStatus = parseReviewStatus(params.review);
-  const hiringFilter = parseHiringFilter(params.hiring);
   try {
     [filterOptions, counts, kpis, rail] = await Promise.all([
       getCrmFilterOptions(),
@@ -185,20 +190,24 @@ export default async function CrmPage({
     scope = normalizeLocationScope(params, filterOptions);
     filters = parseFilters(params, scope);
     if (tab === "discovery") {
-      [review, reviewCounts, reviewFacets] = await Promise.all([
-        getReviewQueue({
-          reviewStatus,
-          vertical: params.vertical?.trim() || undefined,
-          market: params.dmarket?.trim() || undefined,
-          state: filters.state,
-          city: filters.city,
-          search: filters.search,
-          hiring: hiringFilter,
-          page: filters.page,
-        }),
-        getReviewQueueCounts(),
-        getReviewQueueFacets(),
+      // Facets first: a vertical or market that no longer exists has no chip to
+      // clear, so it is dropped before it can narrow anything.
+      reviewFacets = await getReviewQueueFacets();
+      reviewScope = normalizeReviewScope(params, reviewFacets);
+      // One filter set feeds the list and the bucket counts, so they agree.
+      [review, reviewCounts] = await Promise.all([
+        getReviewQueue(
+          reviewQueueQueryFilters(reviewScope, {
+            reviewStatus,
+            page: filters.page ?? 1,
+          }),
+        ),
+        getReviewBucketCounts(reviewScope),
       ]);
+      reviewQueueTotal =
+        activeReviewFilters(reviewScope).length === 0
+          ? reviewCounts.total
+          : (await getReviewBucketCounts()).total;
     } else if (tab === "call-list") {
       callListItems = await getCallListItems();
     } else if (tab === "listings") {
@@ -273,8 +282,11 @@ export default async function CrmPage({
   function tabHref(nextTab: CrmTab): string {
     const qs = new URLSearchParams();
     // Filters carry across the data tabs; the Call List is a curated queue.
-    // Discovery review only filters on location and search, so carrying the
-    // job-shaped filters would show an active filter that does nothing.
+    // Discovery review filters on found-in market, vertical and search only, so
+    // carrying the job-shaped filters would show a filter that does nothing.
+    // state/city ride along solely to survive the round trip back to the other
+    // tabs, and to prefill the launcher's Apollo market — they do not narrow the
+    // queue, and the queue shows no location control that claims they do.
     if (nextTab === "discovery") {
       for (const key of ["state", "city", "q"] as const) {
         const value = carriedFilterEntries[key];
@@ -296,9 +308,10 @@ export default async function CrmPage({
     qs.set("tab", "discovery");
     const current: Record<string, string | undefined> = {
       review: params.review,
-      vertical: params.vertical,
-      dmarket: params.dmarket,
-      hiring: params.hiring,
+      // The normalized pair, so a dropped chip cannot ride along in links.
+      vertical: reviewScope.vertical || undefined,
+      dmarket: reviewScope.market || undefined,
+      hiring: reviewScope.hiring === "any" ? undefined : reviewScope.hiring,
       state: scope.state || undefined,
       city: scope.city || undefined,
       q: params.q,
@@ -309,30 +322,6 @@ export default async function CrmPage({
       else qs.delete(key);
     }
     return `/crm?${qs.toString()}`;
-  }
-
-  function locationHref(state: string | null, city?: string | null): string {
-    const qs = new URLSearchParams();
-    const carried: Record<string, string | undefined> =
-      tab === "discovery"
-        ? {
-            q: params.q,
-            review: params.review,
-            vertical: params.vertical,
-            dmarket: params.dmarket,
-            hiring: params.hiring,
-          }
-        : carriedFilterEntries;
-    for (const [key, value] of Object.entries(carried)) {
-      if (value && key !== "market" && key !== "state" && key !== "city") {
-        qs.set(key, value);
-      }
-    }
-    if (state) qs.set("state", state);
-    if (state && city) qs.set("city", city);
-    if (tab !== "all") qs.set("tab", tab);
-    const s = qs.toString();
-    return s ? `/crm?${s}` : "/crm";
   }
 
   // Pagination and export links rebuild the query string from these, so hand
@@ -398,20 +387,22 @@ export default async function CrmPage({
       </div>
 
       <div className="flex gap-6">
-        {tab !== "call-list" && (
+        {/* Browse-location summary — only beside the tabs it actually scopes.
+            The Call List is curated and Discovery review is scoped by found-in
+            market, so neither would be narrowed by what it reports. */}
+        {tab !== "call-list" && tab !== "discovery" && (
           <LocationRail
             total={rail!.total}
             states={rail!.states}
             activeState={scope.state}
             activeCity={scope.city}
-            buildHref={locationHref}
           />
         )}
 
         <div className="flex-1 min-w-0">
           {tab === "discovery" ? (
             <>
-            {/* The Apollo search leads; the browse filters sit against the
+            {/* The Apollo search leads; the queue's own filters sit against the
                 queue they narrow, so the two never read as one control row. */}
             <DiscoveryRunLauncher browseScope={scope} />
             <CrmFilterBar
@@ -419,8 +410,10 @@ export default async function CrmPage({
               tab={tab}
               variant="discovery"
               active={{
-                state: scope.state,
-                city: scope.city,
+                // Browse location does not scope this queue, so it is not
+                // reported as active here either.
+                state: "",
+                city: "",
                 sector: "",
                 lane: "",
                 status: "",
@@ -440,13 +433,9 @@ export default async function CrmPage({
             <DiscoveryReviewList
               result={review!}
               counts={reviewCounts!}
+              queueTotal={reviewQueueTotal}
               facets={reviewFacets!}
-              active={{
-                reviewStatus,
-                vertical: params.vertical ?? "",
-                market: params.dmarket ?? "",
-                hiring: hiringFilter,
-              }}
+              active={{ reviewStatus, ...reviewScope }}
               buildHref={discoveryHref}
             />
             </>
@@ -455,6 +444,7 @@ export default async function CrmPage({
           ) : tab === "listings" ? (
             <CrmListingsList
               result={listings!}
+              options={filterOptions!}
               params={{ ...scopedParams, tab: "listings" }}
               activeFilters={{
                 q: params.q ?? "",
@@ -463,6 +453,8 @@ export default async function CrmPage({
                   params.sort && LISTING_SORTS.has(params.sort)
                     ? params.sort
                     : "newest",
+                state: scope.state,
+                city: scope.city,
               }}
             />
           ) : (

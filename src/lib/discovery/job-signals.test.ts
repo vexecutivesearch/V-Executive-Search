@@ -25,7 +25,27 @@ describe("summarizeJobSignals", () => {
       oldestTitle: null,
       oldestOpenDays: null,
       label: null,
+      hasJobData: false,
     });
+  });
+
+  it("separates 'no job data' from 'zero open jobs'", () => {
+    // Never scraped: we know nothing, so reports must not print a 0.
+    expect(summarizeJobSignals([], NOW).hasJobData).toBe(false);
+
+    // Scraped, everything since closed: 0 is a real, reportable count.
+    const allClosed = summarizeJobSignals(
+      [
+        {
+          title: "Paralegal",
+          postedAt: new Date("2026-01-01T12:00:00Z"),
+          archivedAt: new Date("2026-02-01T12:00:00Z"),
+        },
+      ],
+      NOW,
+    );
+    expect(allClosed.hasJobData).toBe(true);
+    expect(allClosed.openPositions).toBe(0);
   });
 
   it("ignores archived listings", () => {

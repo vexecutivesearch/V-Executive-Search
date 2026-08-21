@@ -453,6 +453,11 @@ export function normalizeMapsResult(
       // The domain came out of the owner's own Business Profile, not a name
       // guess, so it is as high-confidence as Apollo's primary_domain.
       domainConfidence: domain ? "high" : "low",
+      // Maps has no revenue or ticker. Null, not omitted: quantify fills these
+      // in from Apollo, and the exclusion gate must be able to tell "not
+      // looked up" from a missing key.
+      annualRevenue: null,
+      publiclyTradedSymbol: null,
     },
   };
 }

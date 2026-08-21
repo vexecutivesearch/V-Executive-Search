@@ -148,6 +148,74 @@ describe("scoreCompanyFirst", () => {
   });
 });
 
+/**
+ * The +6 job-activity cap, the −22 contradicted-vertical penalty and the −45
+ * exclusion-flag penalty were each written on a separate branch, none of them
+ * seeing the others. These pin the arithmetic they produce together, since
+ * the review queue orders on exactly this number.
+ */
+describe("the combined penalties still produce a sane ordering", () => {
+  function company(over: Partial<Parameters<typeof scoreCompanyFirst>[0]> = {}) {
+    return scoreCompanyFirst({
+      vertical: "legal",
+      icpStatus: "pass",
+      estimatedEmployees: 20,
+      domainConfidence: "high",
+      hasPhone: true,
+      hasLinkedIn: true,
+      hiringSignals: { reposted_role: 3, multiple_openings: 2 },
+      openPositions: 10,
+      exclusionFlags: [],
+      verticalEvidence: "confirmed",
+      ...over,
+    });
+  }
+
+  it("tops out at 86, and a company with no jobs at all still reaches 80", () => {
+    // The whole gap between the best possible company and an identical one
+    // that happens not to be advertising is the 6-point cap. Both land in the
+    // same colour band, which is the point: hiring is a tiebreaker.
+    expect(company()).toBe(86);
+    expect(company({ hiringSignals: {}, openPositions: 0 })).toBe(80);
+  });
+
+  it("sinks a contradicted vertical without burying it", () => {
+    expect(company({ verticalEvidence: "contradicted" })).toBe(64);
+  });
+
+  it("stacks contradicted and a hard flag without going nonsensical", () => {
+    // 86 − 22 − 45 = 19: bottom of the queue, still a real number, still
+    // visible to an operator who wants to see what the gate let through.
+    const both = company({
+      verticalEvidence: "contradicted",
+      exclusionFlags: ["fortune_500"],
+    });
+    expect(both).toBe(19);
+    expect(both).toBeGreaterThan(0);
+    expect(both).toBeLessThan(company({ exclusionFlags: ["fortune_500"] }));
+  });
+
+  it("never leaves 0-100 for any combination of the three", () => {
+    for (const verticalEvidence of ["confirmed", "unverified", "contradicted"] as const) {
+      for (const exclusionFlags of [[], ["something_soft"], ["fortune_500"]]) {
+        for (const openPositions of [0, 1, 50]) {
+          for (const icpStatus of ["pass", "unknown", "fail"] as const) {
+            const score = company({
+              verticalEvidence,
+              exclusionFlags,
+              openPositions,
+              icpStatus,
+            });
+            expect(score).toBeGreaterThanOrEqual(0);
+            expect(score).toBeLessThanOrEqual(100);
+            expect(Number.isInteger(score)).toBe(true);
+          }
+        }
+      }
+    }
+  });
+});
+
 describe("job-scraped scoring is unchanged", () => {
   it("keeps the existing hiring-signal score for a scraped lead", () => {
     // Base 20 + in-focus 25 + 2 in-focus 10 + high domain 8 + reposted 28 +

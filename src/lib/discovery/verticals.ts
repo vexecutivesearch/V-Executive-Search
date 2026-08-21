@@ -7,6 +7,10 @@
  */
 
 import rawConfig from "../../../config/contact-targets.json";
+import {
+  rankTitleAgainstTargets,
+  TITLE_RANK_UNMATCHED,
+} from "./title-match";
 
 /**
  * What is allowed to CONFIRM or CONTRADICT the vertical for a company the
@@ -97,18 +101,19 @@ export function decisionMakerTitles(
   return getVerticalConfig(vertical)?.decision_maker_titles ?? [];
 }
 
-/** Lower is better; titles outside the list rank last. */
+/**
+ * Lower is better; titles no target describes rank last.
+ *
+ * Matching is token-based rather than substring — see `title-match.ts` for
+ * why, and for what stops token matching from being loose.
+ */
 export function verticalTitleRank(
   title: string | null | undefined,
   vertical: string | null | undefined,
 ): number {
   const titles = decisionMakerTitles(vertical);
-  const normalized = (title ?? "").toLowerCase().replace(/\s+/g, " ").trim();
-  if (!normalized || !titles.length) return 900;
-  for (let i = 0; i < titles.length; i += 1) {
-    if (normalized.includes(titles[i].toLowerCase())) return i;
-  }
-  return 900;
+  if (!titles.length) return TITLE_RANK_UNMATCHED;
+  return rankTitleAgainstTargets(title, titles);
 }
 
 export function discoveryMarkets(): string[] {

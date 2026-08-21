@@ -26,6 +26,8 @@ function apolloResult(count: number, totalEntries: number | null = 500) {
       city: "West Palm Beach",
       state: "FL",
       domainConfidence: "high" as const,
+      annualRevenue: null,
+      publiclyTradedSymbol: null,
     })),
     page: 1,
     perPage: 100,

@@ -21,6 +21,8 @@ function org(
     city: "Miami",
     state: "Florida",
     domainConfidence: "high",
+    annualRevenue: null,
+    publiclyTradedSymbol: null,
     ...overrides,
   };
 }

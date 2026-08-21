@@ -1,5 +1,9 @@
 import Link from "next/link";
-import type { CrmListingsResult, CrmListingRow } from "@/lib/crm-queries";
+import type {
+  CrmFilterOptions,
+  CrmListingsResult,
+  CrmListingRow,
+} from "@/lib/crm-queries";
 import { CRM_LISTINGS_PAGE_SIZE } from "@/lib/crm-queries";
 import { AddToCallListButton } from "@/components/AddToCallListButton";
 import { ContactPickerButton } from "@/components/enrich/ContactPickerButton";
@@ -41,12 +45,20 @@ function postedLabel(row: CrmListingRow): string {
  */
 export function CrmListingsList({
   result,
+  options,
   params,
   activeFilters,
 }: {
   result: CrmListingsResult;
+  options: CrmFilterOptions;
   params: Record<string, string | undefined>;
-  activeFilters: { q: string; board: string; sort: string };
+  activeFilters: {
+    q: string;
+    board: string;
+    sort: string;
+    state: string;
+    city: string;
+  };
 }) {
   function pageHref(page: number): string {
     const qs = new URLSearchParams();
@@ -63,7 +75,11 @@ export function CrmListingsList({
 
   return (
     <div>
-      <CrmListingsFilterBar boards={result.boards} active={activeFilters} />
+      <CrmListingsFilterBar
+        boards={result.boards}
+        options={options}
+        active={activeFilters}
+      />
 
       <p className="text-xs text-gray-500 mb-3">
         {result.totalMatched === 0

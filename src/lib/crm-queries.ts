@@ -18,6 +18,7 @@ import {
   outreachMessages,
   sequenceEnrollments,
   type CallListEntry,
+  type CompanyReviewStatus,
   type CompanyStatus,
   type LeadSource,
 } from "@/lib/db/schema";
@@ -32,6 +33,8 @@ import {
   type MarketIndex,
 } from "@/lib/market-attribution";
 import { parseJobLocation } from "@/lib/location-match";
+import { reviewQueueConditions } from "@/lib/discovery/review-queue";
+import type { HiringFilter } from "@/lib/crm-location-scope";
 import {
   bookingFromEventPayload,
   type CallListBooking,
@@ -176,17 +179,58 @@ export function companyHasListingInState(
   return false;
 }
 
-function companyMatchesState(row: CrmLeadRow, stateAbbr: string): boolean {
-  return companyHasListingInState(row.jobListings, stateAbbr);
+/** Abbreviation for a company's own HQ — Apollo stores full state names. */
+export function companyHqStateAbbr(company: {
+  city?: string | null;
+  state?: string | null;
+}): string | null {
+  const state = company.state?.trim();
+  if (!state) return null;
+  const parsed =
+    parseJobLocation(company.city ? `${company.city}, ${state}` : state) ??
+    parseJobLocation(state);
+  return parsed?.stateAbbr ?? (state.length === 2 ? state.toUpperCase() : null);
 }
 
-function companyMatchesCity(row: CrmLeadRow, city: string): boolean {
+/**
+ * A company with no job listings has no listing geography at all, so its own HQ
+ * is the only location it has. Company-first discovery rows (Apollo
+ * organization search) routinely have zero listings — without this fallback
+ * they are invisible under every State filter rather than under none of them.
+ *
+ * The fallback applies only in the absence of listings: a company posting in
+ * Miami stays a Florida company here even if its HQ is in Nashville.
+ */
+export function companyMatchesStateScope(
+  company: {
+    jobListings: Array<{ location?: string | null }>;
+    city?: string | null;
+    state?: string | null;
+  },
+  stateAbbr: string,
+): boolean {
+  if (company.jobListings.length > 0) {
+    return companyHasListingInState(company.jobListings, stateAbbr);
+  }
+  return companyHqStateAbbr(company) === stateAbbr.trim().toUpperCase();
+}
+
+export function companyMatchesCityScope(
+  company: {
+    jobListings: Array<{ location?: string | null }>;
+    city?: string | null;
+  },
+  city: string,
+): boolean {
   const target = city.trim().toLowerCase();
   if (!target) return true;
-  return row.jobListings.some((listing) => {
-    const parsed = listing.location ? parseJobLocation(listing.location) : null;
-    return parsed?.city?.trim().toLowerCase() === target;
-  });
+  if (company.jobListings.length > 0) {
+    return company.jobListings.some((listing) => {
+      const parsed = listing.location ? parseJobLocation(listing.location) : null;
+      return parsed?.city?.trim().toLowerCase() === target;
+    });
+  }
+  return (company.city ?? "").trim().toLowerCase() === target;
 }
 
 /**
@@ -260,6 +304,10 @@ function marketPrefilterSql(marketLabel: string, index: MarketIndex): SQL {
   )`;
 }
 
+const HAS_NO_LISTINGS = sql`NOT EXISTS (
+  SELECT 1 FROM job_listings AS jl WHERE jl.company_id = ${companies.id}
+)`;
+
 function statePrefilterSql(stateAbbr: string, stateName: string | null): SQL {
   const abbrPattern = `%, ${stateAbbr}%`;
   const namePattern = stateName ? `%${escapeLike(stateName)}%` : null;
@@ -267,17 +315,28 @@ function statePrefilterSql(stateAbbr: string, stateName: string | null): SQL {
     ? sql`jl.location ILIKE ${abbrPattern} OR jl.location ILIKE ${namePattern}`
     : sql`jl.location ILIKE ${abbrPattern}`;
   // Listing geography only — never companies.source_market (provenance).
-  return sql`EXISTS (
-    SELECT 1 FROM job_listings AS jl
-    WHERE jl.company_id = ${companies.id} AND (${inner})
+  // The HQ arm is reached only when there are no listings to speak for the
+  // company, so provenance still cannot pull an out-of-state company in.
+  const hqMatch = stateName
+    ? sql`(${companies.state} ILIKE ${stateAbbr} OR ${companies.state} ILIKE ${`${escapeLike(stateName)}%`})`
+    : sql`${companies.state} ILIKE ${stateAbbr}`;
+  return sql`(
+    EXISTS (
+      SELECT 1 FROM job_listings AS jl
+      WHERE jl.company_id = ${companies.id} AND (${inner})
+    )
+    OR (${HAS_NO_LISTINGS} AND ${hqMatch})
   )`;
 }
 
 function cityPrefilterSql(city: string): SQL {
   const pattern = `%${escapeLike(city.trim())}%`;
-  return sql`EXISTS (
-    SELECT 1 FROM job_listings AS jl
-    WHERE jl.company_id = ${companies.id} AND jl.location ILIKE ${pattern}
+  return sql`(
+    EXISTS (
+      SELECT 1 FROM job_listings AS jl
+      WHERE jl.company_id = ${companies.id} AND jl.location ILIKE ${pattern}
+    )
+    OR (${HAS_NO_LISTINGS} AND ${companies.city} ILIKE ${pattern})
   )`;
 }
 
@@ -574,8 +633,8 @@ export async function getCrmLeads(
       } else if (filters.market && row.marketLabel !== filters.market) {
         continue;
       }
-      if (filters.state && !companyMatchesState(row, filters.state)) continue;
-      if (filters.city && !companyMatchesCity(row, filters.city)) continue;
+      if (filters.state && !companyMatchesStateScope(row, filters.state)) continue;
+      if (filters.city && !companyMatchesCityScope(row, filters.city)) continue;
       reorderListingsForFilter(row, filters, index);
       matched.push(row);
     }
@@ -616,6 +675,56 @@ export async function getCrmTabCounts(): Promise<{
     db.select({ count: sql<number>`count(*)::int` }).from(callListEntries),
   ]);
   return { allLeads: all.count, hot: hot.count, callList: list.count };
+}
+
+export type ReviewBucketCounts = Record<CompanyReviewStatus | "total", number>;
+
+const EMPTY_REVIEW_BUCKET_COUNTS: ReviewBucketCounts = {
+  pending: 0,
+  approved: 0,
+  rejected: 0,
+  review_later: 0,
+  already_contacted: 0,
+  existing_client: 0,
+  do_not_contact: 0,
+  total: 0,
+};
+
+/**
+ * Per-bucket counts for the Discovery review tab, under the same scope the
+ * queue itself is read with (vertical / found-in market / search).
+ *
+ * The unscoped version of this count is what made the tab read
+ * "Discovery review (47)" over an empty list: the badge counted the whole
+ * queue while the list counted a filtered slice of it. The predicates come
+ * from reviewQueueConditions — the same builder getReviewQueue uses — so the
+ * two cannot drift. The chip for the bucket currently on screen is
+ * additionally driven by the list's own totalMatched.
+ */
+export async function getReviewBucketCounts(scope: {
+  vertical?: string;
+  market?: string;
+  search?: string;
+  hiring?: HiringFilter;
+} = {}): Promise<ReviewBucketCounts> {
+  const conditions = reviewQueueConditions(scope);
+
+  const rows = await db
+    .select({
+      reviewStatus: companies.reviewStatus,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(companies)
+    .where(and(...conditions.map((c) => sql`(${c})`)))
+    .groupBy(companies.reviewStatus);
+
+  const counts: ReviewBucketCounts = { ...EMPTY_REVIEW_BUCKET_COUNTS };
+  for (const row of rows) {
+    if (!row.reviewStatus) continue;
+    counts[row.reviewStatus] = row.count;
+    counts.total += row.count;
+  }
+  return counts;
 }
 
 export type CrmFilterOptions = {
@@ -974,12 +1083,14 @@ export type LocationRailState = {
 };
 
 /**
- * State → city hierarchy for the Pipeline rail.
+ * State → city hierarchy for the Pipeline location summary.
  *
  * Counts are based on actual job-listing locations, not source_market.
  * A company is counted once per state/city in which it has a listing —
  * the same rule as the server-side State/City Pipeline filters (provenance
- * stamps like "Nashville, TN" never move a Miami listing into Tennessee).
+ * stamps like "Nashville, TN" never move a Miami listing into Tennessee), and
+ * with the same HQ fallback for companies that have no listings at all, so the
+ * summary counts and the filtered list cannot disagree.
  */
 export async function getLocationRailCounts(): Promise<{
   total: number;
@@ -987,7 +1098,7 @@ export async function getLocationRailCounts(): Promise<{
 }> {
   const [companyRows, locationRows] = await Promise.all([
     db
-      .select({ id: companies.id })
+      .select({ id: companies.id, city: companies.city, state: companies.state })
       .from(companies)
       .where(not(ilike(companies.name, "(Listing)%"))),
     db
@@ -997,12 +1108,9 @@ export async function getLocationRailCounts(): Promise<{
       })
       .from(jobListings)
       .innerJoin(companies, eq(jobListings.companyId, companies.id))
-      .where(
-        and(
-          not(ilike(companies.name, "(Listing)%")),
-          sql`${jobListings.location} IS NOT NULL AND ${jobListings.location} <> ''`,
-        ),
-      ),
+      // Locationless listings are kept so a company that has listings is never
+      // mistaken for one that has none and counted under its HQ instead.
+      .where(not(ilike(companies.name, "(Listing)%"))),
   ]);
 
   const stateCompanies = new Map<
@@ -1011,24 +1119,42 @@ export async function getLocationRailCounts(): Promise<{
   >();
   const cityCompanies = new Map<string, Map<string, Set<string>>>();
 
-  for (const row of locationRows) {
-    const parsed = row.location ? parseJobLocation(row.location) : null;
-    if (!parsed?.stateAbbr || !parsed.stateName) continue;
-
+  const add = (
+    companyId: string,
+    parsed: { city?: string | null; stateAbbr?: string | null; stateName?: string | null },
+  ) => {
+    if (!parsed.stateAbbr || !parsed.stateName) return;
     const state = stateCompanies.get(parsed.stateAbbr) ?? {
       stateName: parsed.stateName,
       companies: new Set<string>(),
     };
-    state.companies.add(row.companyId);
+    state.companies.add(companyId);
     stateCompanies.set(parsed.stateAbbr, state);
 
     if (parsed.city?.trim()) {
       const byCity = cityCompanies.get(parsed.stateAbbr) ?? new Map();
       const companyIds = byCity.get(parsed.city) ?? new Set<string>();
-      companyIds.add(row.companyId);
+      companyIds.add(companyId);
       byCity.set(parsed.city, companyIds);
       cityCompanies.set(parsed.stateAbbr, byCity);
     }
+  };
+
+  const withListings = new Set<string>();
+  for (const row of locationRows) {
+    withListings.add(row.companyId);
+    const parsed = row.location ? parseJobLocation(row.location) : null;
+    if (parsed) add(row.companyId, parsed);
+  }
+
+  // Company-first discovery rows often have no listings; their HQ is the only
+  // location they have, and the State/City filters honour it.
+  for (const row of companyRows) {
+    if (withListings.has(row.id) || !row.state) continue;
+    const parsed =
+      parseJobLocation(row.city ? `${row.city}, ${row.state}` : row.state) ??
+      parseJobLocation(row.state);
+    if (parsed) add(row.id, parsed);
   }
 
   const states = [...stateCompanies.entries()]
