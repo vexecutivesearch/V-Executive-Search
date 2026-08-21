@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { CompanyReviewStatus } from "@/lib/db/schema";
 import type {
+  HiringFilter,
   ReviewQueueCounts,
   ReviewQueueResult,
 } from "@/lib/discovery/review-queue";
@@ -18,6 +19,12 @@ const STATUS_TABS: Array<{ value: CompanyReviewStatus | "all"; label: string }> 
   { value: "all", label: "All" },
 ];
 
+const HIRING_FILTERS: Array<{ value: HiringFilter; label: string }> = [
+  { value: "any", label: "Hiring or not" },
+  { value: "hiring", label: "Has open roles" },
+  { value: "no_hiring", label: "No job postings" },
+];
+
 export function DiscoveryReviewList({
   result,
   counts,
@@ -32,6 +39,7 @@ export function DiscoveryReviewList({
     reviewStatus: CompanyReviewStatus | "all";
     vertical: string;
     market: string;
+    hiring: HiringFilter;
   };
   buildHref: (changes: Record<string, string | null>) => string;
 }) {
@@ -90,6 +98,25 @@ export function DiscoveryReviewList({
           ))}
         </div>
       )}
+
+      {/* Hiring is a signal, not a requirement — and the queue is ordered by
+          lead score, so these chips are how the operator gets straight to the
+          companies that are not advertising a role. */}
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        <span className={groupLabelClass}>Job signals</span>
+        {HIRING_FILTERS.map((option) => (
+          <Link
+            key={option.value}
+            href={buildHref({
+              hiring: option.value === "any" ? null : option.value,
+              page: null,
+            })}
+            className={chipClass(active.hiring === option.value)}
+          >
+            {option.label}
+          </Link>
+        ))}
+      </div>
 
       {facets.markets.length > 0 && (
         /* The market a row was *found in*, not a search target. */

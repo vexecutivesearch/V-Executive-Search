@@ -220,6 +220,53 @@ function parseDiscoveredOrg(org: ApolloOrg): DiscoveredOrganization | null {
 }
 
 /**
+ * Every Apollo organization-search parameter that would silently restrict
+ * results to companies that are currently hiring. Discovery is deliberately
+ * hiring-agnostic — a law firm with no open roles is still a valid prospect —
+ * so none of these may ever appear in the request body. Asserted by test.
+ */
+export const JOB_ACTIVITY_SEARCH_KEYS = [
+  "q_organization_job_titles",
+  "organization_job_locations",
+  "organization_job_posted_at_range",
+  "organization_num_jobs_range",
+  "organization_num_jobs_min",
+  "organization_num_jobs_max",
+  "currently_hiring",
+  "q_organization_job_keyword_tags",
+] as const;
+
+/**
+ * Request body for the discovery organization search — pure, so the shape can
+ * be asserted without spending a credit.
+ *
+ * Filters on WHAT the company is (vertical keyword tags), WHERE it is
+ * (market), and HOW BIG it is (employee band). Never on whether it is hiring.
+ */
+export function buildOrganizationSearchBody(
+  options: Omit<OrganizationSearchOptions, "apiKey" | "context" | "usageLabel">,
+): Record<string, unknown> {
+  const {
+    locations,
+    notLocations = [],
+    keywordTags = [],
+    employeeRange = null,
+    page = 1,
+    perPage = 25,
+  } = options;
+
+  const body: Record<string, unknown> = {
+    page,
+    per_page: Math.min(Math.max(1, perPage), 100),
+  };
+  if (locations.length) body.organization_locations = locations;
+  if (notLocations.length) body.organization_not_locations = notLocations;
+  if (keywordTags.length) body.q_organization_keyword_tags = keywordTags;
+  if (employeeRange) body.organization_num_employees_ranges = [employeeRange];
+  return body;
+}
+
+/**
  * Filter-based organization search — the discovery source.
  *
  * Apollo bills ONE credit per page of up to 100 organizations, so a 25-company
@@ -231,25 +278,15 @@ export async function searchOrganizations(
 ): Promise<OrganizationSearchResult> {
   const {
     apiKey,
-    locations,
-    notLocations = [],
-    keywordTags = [],
-    employeeRange = null,
     page = 1,
     perPage = 25,
     context,
     usageLabel,
+    employeeRange = null,
   } = options;
 
   const boundedPerPage = Math.min(Math.max(1, perPage), 100);
-  const body: Record<string, unknown> = {
-    page,
-    per_page: boundedPerPage,
-  };
-  if (locations.length) body.organization_locations = locations;
-  if (notLocations.length) body.organization_not_locations = notLocations;
-  if (keywordTags.length) body.q_organization_keyword_tags = keywordTags;
-  if (employeeRange) body.organization_num_employees_ranges = [employeeRange];
+  const body = buildOrganizationSearchBody(options);
 
   await assertPaidEgressAllowed("apollo", "organizations/search", context, {
     estimatedCost: 1,

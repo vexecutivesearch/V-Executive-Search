@@ -1,6 +1,7 @@
 import { eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { companies, companyIcp, contacts, jobListings } from "@/lib/db/schema";
+import { verticalEvidence } from "@/lib/discovery/vertical-evidence";
 import { getGeoFocusSettings, jobLocationInFocus } from "@/lib/geo-focus";
 import {
   evaluateIcp,
@@ -102,6 +103,11 @@ export async function recomputeCompanyScores(
           hiringSignals: signals,
           openPositions: listings.filter((l) => !l.archivedAt).length,
           exclusionFlags: flagsByCompany.get(company.id) ?? [],
+          verticalEvidence: verticalEvidence({
+            vertical: company.vertical,
+            name: company.name,
+            industry: company.industry,
+          }).status,
         })
       : scoreCompanyPreEnrich({
           icpStatus,

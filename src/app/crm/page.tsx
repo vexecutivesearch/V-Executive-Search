@@ -37,6 +37,7 @@ import {
   getReviewQueue,
   getReviewQueueCounts,
   getReviewQueueFacets,
+  parseHiringFilter,
   type ReviewQueueCounts,
   type ReviewQueueResult,
 } from "@/lib/discovery/review-queue";
@@ -77,6 +78,8 @@ type CrmSearchParams = {
   vertical?: string;
   /** Discovery market filter — separate from the legacy `market` param. */
   dmarket?: string;
+  /** Discovery hiring filter (any | hiring | no_hiring). */
+  hiring?: string;
   market?: string;
   state?: string;
   city?: string;
@@ -171,6 +174,7 @@ export default async function CrmPage({
   let reviewCounts: ReviewQueueCounts | null = null;
   let reviewFacets: { verticals: string[]; markets: string[] } | null = null;
   const reviewStatus = parseReviewStatus(params.review);
+  const hiringFilter = parseHiringFilter(params.hiring);
   try {
     [filterOptions, counts, kpis, rail] = await Promise.all([
       getCrmFilterOptions(),
@@ -189,6 +193,7 @@ export default async function CrmPage({
           state: filters.state,
           city: filters.city,
           search: filters.search,
+          hiring: hiringFilter,
           page: filters.page,
         }),
         getReviewQueueCounts(),
@@ -293,6 +298,7 @@ export default async function CrmPage({
       review: params.review,
       vertical: params.vertical,
       dmarket: params.dmarket,
+      hiring: params.hiring,
       state: scope.state || undefined,
       city: scope.city || undefined,
       q: params.q,
@@ -309,7 +315,13 @@ export default async function CrmPage({
     const qs = new URLSearchParams();
     const carried: Record<string, string | undefined> =
       tab === "discovery"
-        ? { q: params.q, review: params.review, vertical: params.vertical, dmarket: params.dmarket }
+        ? {
+            q: params.q,
+            review: params.review,
+            vertical: params.vertical,
+            dmarket: params.dmarket,
+            hiring: params.hiring,
+          }
         : carriedFilterEntries;
     for (const [key, value] of Object.entries(carried)) {
       if (value && key !== "market" && key !== "state" && key !== "city") {
@@ -433,6 +445,7 @@ export default async function CrmPage({
                 reviewStatus,
                 vertical: params.vertical ?? "",
                 market: params.dmarket ?? "",
+                hiring: hiringFilter,
               }}
               buildHref={discoveryHref}
             />

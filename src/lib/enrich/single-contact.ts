@@ -7,9 +7,13 @@
  * contact only happens when the operator explicitly asks for one, which is what
  * `allowAdditional` is for.
  *
- * Phone is an explicit opt-in here, NOT the picker's default-on behaviour: an
- * Apollo fallback mobile is 9 credits against 1 for an email, and the whole
- * point of this flow is one cheap, verified way to reach one person.
+ * Phone is an explicit opt-in here, NOT the picker's default-on behaviour, and
+ * the mobile comes from ContactOut ONLY. ContactOut mobile data is materially
+ * more accurate than Apollo's and costs 1 ContactOut credit; the Apollo mobile
+ * is 9 Apollo credits (1 match + an 8-credit surcharge) against a 2,920/month
+ * plan. Paying nine times as much for the less accurate number is not a
+ * fallback worth having, so this flow does not have one: no ContactOut mobile
+ * means no mobile.
  */
 
 import { eq } from "drizzle-orm";
@@ -96,7 +100,7 @@ export async function revealSingleDecisionMaker(options: {
   apiKey: string;
   contactOutApiKey?: string;
   contactOutAvailable?: boolean;
-  /** Explicit opt-in — an Apollo fallback mobile costs 9 credits vs 1. */
+  /** Explicit opt-in — a ContactOut mobile lookup (1 ContactOut credit). */
   includePhone?: boolean;
   /** "Find Additional Contact": reveal one more on top of what exists. */
   allowAdditional?: boolean;
@@ -172,6 +176,9 @@ export async function revealSingleDecisionMaker(options: {
     apiKey,
     contactOutApiKey,
     contactOutAvailable,
+    // ContactOut is the mobile source for this flow — never the 9-credit
+    // Apollo mobile.
+    mobileSource: "contactout_only",
     context,
   });
 
@@ -214,11 +221,11 @@ export async function revealSingleDecisionMaker(options: {
     parts.push(
       includePhone
         ? reveal.phonesFound > 0
-          ? "phone found"
-          : reveal.phonesPending > 0
-            ? "phone still loading from Apollo"
-            : "no phone found"
-        : "phone not requested (opt-in)",
+          ? "mobile found via ContactOut"
+          : reveal.contactOutUsed
+            ? "ContactOut has no mobile for this contact (no Apollo fallback — it is 9 credits and less accurate)"
+            : "ContactOut unavailable — no mobile looked up"
+        : "mobile not requested (opt-in)",
     );
     parts.push("Stopped at one contact — use Find Additional Contact for more.");
   } else if (reveal.skippedAlreadyRevealed > 0) {

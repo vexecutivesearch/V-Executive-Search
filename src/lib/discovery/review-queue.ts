@@ -16,8 +16,13 @@ import {
   jobListings,
   type CompanyReviewStatus,
 } from "@/lib/db/schema";
+import { isCoarseSectorRollup } from "@/lib/industry-sectors";
 import { parseJobLocation } from "@/lib/location-match";
 import { getVerticalConfig } from "./verticals";
+import {
+  verticalEvidence,
+  type VerticalEvidence,
+} from "./vertical-evidence";
 import { summarizeJobSignals, type JobSignalSummary } from "./job-signals";
 
 export const REVIEW_QUEUE_PAGE_SIZE = 100;
@@ -48,6 +53,13 @@ export type ReviewQueueRow = {
   linkedinUrl: string | null;
   vertical: string | null;
   verticalLabel: string | null;
+  /** Whether the company's own data backs the search vertical. */
+  verticalEvidence: VerticalEvidence;
+  /**
+   * True when `industry` is a coarse pipeline rollup label rather than an
+   * Apollo industry — the UI must not present it as Apollo's answer.
+   */
+  industryIsRollup: boolean;
   reviewStatus: CompanyReviewStatus;
   leadScore: number;
   icpAdjustedScore: number | null;
@@ -61,6 +73,18 @@ export type ReviewQueueRow = {
   firstSeen: string;
 };
 
+/**
+ * Hiring is a signal, never a requirement — but the queue is ordered by lead
+ * score, and any hiring bonus pushes companies with open roles to the front.
+ * This lets the operator look at the non-hiring companies directly instead of
+ * paging past everything that happens to be advertising a job.
+ */
+export type HiringFilter = "any" | "hiring" | "no_hiring";
+
+export function parseHiringFilter(value: unknown): HiringFilter {
+  return value === "hiring" || value === "no_hiring" ? value : "any";
+}
+
 export type ReviewQueueFilters = {
   reviewStatus?: CompanyReviewStatus | "all";
   vertical?: string;
@@ -68,6 +92,7 @@ export type ReviewQueueFilters = {
   state?: string;
   city?: string;
   search?: string;
+  hiring?: HiringFilter;
   page?: number;
 };
 
@@ -140,6 +165,14 @@ function buildConditions(filters: ReviewQueueFilters): SQL[] {
         WHERE jl.company_id = ${companies.id} AND jl.location ILIKE ${pattern}
       )
     )`);
+  }
+  const hiring = filters.hiring ?? "any";
+  if (hiring !== "any") {
+    const openListing = sql`EXISTS (
+      SELECT 1 FROM job_listings AS jl
+      WHERE jl.company_id = ${companies.id} AND jl.archived_at IS NULL
+    )`;
+    conditions.push(hiring === "hiring" ? openListing : sql`NOT ${openListing}`);
   }
   const term = filters.search?.trim();
   if (term) {
@@ -230,6 +263,12 @@ export async function getReviewQueue(
       linkedinUrl: company.linkedinUrl,
       vertical: company.vertical,
       verticalLabel: getVerticalConfig(company.vertical)?.label ?? null,
+      verticalEvidence: verticalEvidence({
+        vertical: company.vertical,
+        name: company.name,
+        industry: company.industry,
+      }),
+      industryIsRollup: isCoarseSectorRollup(company.industry),
       reviewStatus: (company.reviewStatus ?? "pending") as CompanyReviewStatus,
       leadScore: company.leadScore ?? 0,
       icpAdjustedScore: icp?.icpAdjustedScore ?? null,

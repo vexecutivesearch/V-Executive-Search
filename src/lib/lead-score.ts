@@ -87,7 +87,24 @@ export type CompanyFirstScoreInput = {
   /** Active job listings matched to the company — a bonus, never a gate. */
   openPositions: number;
   exclusionFlags?: string[];
+  /**
+   * Whether the company's own data backs the search vertical. Only
+   * "contradicted" changes the score: an off-target company must not outrank a
+   * genuine one just because the search that found it said otherwise.
+   */
+  verticalEvidence?: "confirmed" | "unverified" | "contradicted";
 };
+
+/**
+ * Ceiling on everything job activity can add to a company-first score.
+ *
+ * The operator's rule is that a company with no open roles is a full-value
+ * prospect. The review queue orders by lead score, so a large hiring bonus is
+ * an ordering penalty for every company that is not advertising — the +24 this
+ * used to grant put hiring companies on page 1 and everyone else behind them.
+ * Job activity stays a visible tiebreaker instead.
+ */
+const MAX_JOB_ACTIVITY_BONUS = 6;
 
 /**
  * Company-first score — for companies that entered via discovery rather than a
@@ -118,9 +135,15 @@ export function scoreCompanyFirst(input: CompanyFirstScoreInput): number {
   if (input.hasLinkedIn) score += 6;
   if (input.domainConfidence === "high") score += 8;
 
-  if (input.openPositions > 0) score += 8;
-  if (input.openPositions >= 3) score += 4;
-  score += Math.min(signalScoreBonus(input.hiringSignals), 12);
+  let jobBonus = 0;
+  if (input.openPositions > 0) jobBonus += 4;
+  if (input.openPositions >= 3) jobBonus += 2;
+  jobBonus += signalScoreBonus(input.hiringSignals);
+  score += Math.min(jobBonus, MAX_JOB_ACTIVITY_BONUS);
+
+  // The company's own name/industry says it is not in this vertical, so the
+  // vertical credit above is not earned and the row needs to sink.
+  if (input.verticalEvidence === "contradicted") score -= 22;
 
   const flags = input.exclusionFlags ?? [];
   if (flags.some((f) => HARD_EXCLUSION_FLAGS.has(f))) score -= 45;
