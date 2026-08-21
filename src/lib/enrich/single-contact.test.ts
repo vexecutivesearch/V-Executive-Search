@@ -14,7 +14,7 @@ function candidate(
   return {
     contactId: `c-${over.name}`,
     title: null,
-    revealStatus: null,
+    revealStatus: "discovered",
     locationMatched: true,
     priorityRank: 50,
     hasEmail: false,
