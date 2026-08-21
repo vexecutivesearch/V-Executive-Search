@@ -78,14 +78,23 @@ describe("vertical decision-maker titles", () => {
     expect(verticalTitleRank(null, "legal")).toBe(900);
   });
 
-  it("documents that matching is substring-only, so reordered titles miss", () => {
-    // Known limitation: the config lists "HR Director", and the matcher is a
-    // plain substring test, so these common real-world orderings fall through
-    // to the sector fallback rank instead of the vertical list. Widening the
-    // match would change which contact a reveal credit is spent on, so it is
-    // left as an explicit operator decision rather than a silent change.
-    expect(verticalTitleRank("Director of HR", "legal")).toBe(900);
-    expect(verticalTitleRank("Director, Human Resources", "legal")).toBe(900);
+  it("matches a reordered or expanded title, which substring matching did not", () => {
+    // These used to return 900 and fall through to the generic sector rank,
+    // which decided the reveal credit went to whoever that ranking liked.
+    // "HR Director" is index 3 in the legal list; all three spellings are the
+    // same job. See title-match.test.ts for the full matrix.
+    expect(verticalTitleRank("HR Director", "legal")).toBe(3);
+    expect(verticalTitleRank("Director of HR", "legal")).toBe(3);
+    expect(verticalTitleRank("Director, Human Resources", "legal")).toBe(3);
+  });
+
+  it("does not hand the credit to an assistant that carries the title", () => {
+    // Ranked below the sector fallback rather than matched — the precision
+    // that substring matching got for free has to be paid for explicitly.
+    expect(
+      verticalTitleRank("Assistant to the HR Director", "legal"),
+    ).toBeGreaterThan(verticalTitleRank("HR Director", "legal"));
+    expect(verticalTitleRank("HR Coordinator", "legal")).toBe(900);
   });
 });
 

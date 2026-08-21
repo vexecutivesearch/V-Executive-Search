@@ -123,10 +123,6 @@ export function stateAbbrFor(
   return parsed?.stateAbbr ?? (state.length === 2 ? state.toUpperCase() : null);
 }
 
-function stateNameFor(abbr: string): string | null {
-  return parseJobLocation(abbr)?.stateName ?? null;
-}
-
 /**
  * The single definition of what the Discovery review queue is scoped to.
  *
