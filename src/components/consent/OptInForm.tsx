@@ -18,7 +18,14 @@ type FieldErrors = Record<string, string>;
 const FIELD_CLASS =
   "mt-1 block w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm";
 
-export function OptInForm({ disclosure }: { disclosure: DisclosureCopy }) {
+export function OptInForm({
+  disclosure,
+  sourceTag,
+}: {
+  disclosure: DisclosureCopy;
+  /** `src` from the link, e.g. `call:<companyId>` — attribution only. */
+  sourceTag?: string | null;
+}) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -86,6 +93,7 @@ export function OptInForm({ disclosure }: { disclosure: DisclosureCopy }) {
         name="disclosure_version"
         value={disclosure.version}
       />
+      {sourceTag && <input type="hidden" name="src" value={sourceTag} />}
 
       <label className="block text-sm font-medium">
         Company name

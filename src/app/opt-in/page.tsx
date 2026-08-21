@@ -13,7 +13,12 @@ export const metadata: Metadata = {
  * point here rather than at a native lead form, because this page controls the
  * disclosure wording that carrier review and E-SIGN both depend on.
  */
-export default function OptInPage() {
+export default async function OptInPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ src?: string }>;
+}) {
+  const { src } = await searchParams;
   const disclosure = currentDisclosure();
   const businessName = consentBusinessName();
 
@@ -27,7 +32,7 @@ export default function OptInPage() {
       </p>
 
       <div className="mt-6 rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 p-5 shadow-sm">
-        <OptInForm disclosure={disclosure} />
+        <OptInForm disclosure={disclosure} sourceTag={src ?? null} />
       </div>
     </div>
   );

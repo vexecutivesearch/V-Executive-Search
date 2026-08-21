@@ -36,6 +36,12 @@ export type InboundLeadSubmission = {
   /** Unchecked by default and not required to submit. */
   smsConsent: boolean;
   disclosureVersion: string;
+  /**
+   * `src` from the link that brought them here, e.g. `call:<companyId>` from
+   * an opt-in link emailed off a call. Attribution only — it never affects
+   * what is captured or whether the submission is accepted.
+   */
+  sourceTag: string;
 };
 
 export type InboundLeadFieldErrors = Partial<
@@ -68,6 +74,7 @@ export function parseInboundLeadSubmission(
       body.sms_consent === "true" ||
       body.smsConsent === true,
     disclosureVersion: str(body.disclosure_version ?? body.disclosureVersion),
+    sourceTag: str(body.src ?? body.sourceTag).slice(0, 120),
   };
 
   const errors: InboundLeadFieldErrors = {};
@@ -219,7 +226,9 @@ export async function landInboundLead(options: {
         channelScope: "both",
         disclosureText: disclosure.text,
         source: options.source,
-        sourceIdentifier: options.sourceIdentifier,
+        sourceIdentifier: submission.sourceTag
+          ? `${options.sourceIdentifier} src=${submission.sourceTag}`
+          : options.sourceIdentifier,
         ipAddress: options.ipAddress ?? null,
         userAgent: options.userAgent ?? null,
       });
