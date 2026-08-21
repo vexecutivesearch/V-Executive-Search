@@ -148,6 +148,20 @@ export function isKnownSectorName(value: string): boolean {
   return (INDUSTRY_SECTORS as readonly string[]).includes(v);
 }
 
+/**
+ * True when `companies.industry` holds a coarse rollup label rather than a real
+ * industry. The job-scrape worker derives one from job titles and the company
+ * name when Apollo returned nothing (`worker/src/coarse_sector.py`), so a value
+ * like "Professional & Business Services" is a placeholder, not Apollo data —
+ * an actual Apollo industry from organization search should replace it.
+ */
+export function isCoarseSectorRollup(
+  value: string | null | undefined,
+): boolean {
+  const v = value?.trim();
+  return Boolean(v) && isKnownSectorName(v!);
+}
+
 /** All sector labels for filters (12 + Other). */
 export function allSectorFilterOptions(): string[] {
   return [...INDUSTRY_SECTORS, OTHER_SECTOR];

@@ -441,6 +441,23 @@ export type RevealSelection = {
   channels: "email" | "email_phone";
 };
 
+/**
+ * Where a mobile number may come from.
+ *
+ * `contactout_only` — ContactOut is the ONLY mobile source. If ContactOut has
+ * no cell for the person, the person has no cell; nothing else is charged.
+ * 1 ContactOut credit.
+ *
+ * `contactout_then_apollo` — the legacy waterfall: fall back to an Apollo
+ * people/match phone reveal, which is 1 match credit plus an 8-credit mobile
+ * surcharge (9 total) against a 2,920/month plan, and is the less accurate of
+ * the two sources.
+ *
+ * Company-first discovery uses `contactout_only`; the multi-contact picker
+ * keeps the waterfall it has always had.
+ */
+export type MobileSource = "contactout_only" | "contactout_then_apollo";
+
 export type RevealResult = {
   revealed: number;
   skippedAlreadyRevealed: number;
@@ -454,6 +471,13 @@ export type RevealResult = {
   contactOutUsed: boolean;
   /** Set when ContactOut errored (bad key, no credits, rate limit, 5xx). */
   contactOutError: string | null;
+  /** The mobile source this reveal was allowed to use. */
+  mobileSource: MobileSource;
+  /**
+   * Phone requests that found no ContactOut mobile and were NOT escalated to
+   * Apollo because the caller pinned the mobile source to ContactOut.
+   */
+  apolloMobileSkipped: number;
 };
 
 /**
@@ -466,6 +490,8 @@ export async function revealSelectedContacts(options: {
   apiKey: string;
   contactOutApiKey?: string;
   contactOutAvailable?: boolean;
+  /** Defaults to the legacy waterfall; discovery pins this to ContactOut. */
+  mobileSource?: MobileSource;
   context: PaidEgressContext;
 }): Promise<RevealResult> {
   const {
@@ -474,8 +500,10 @@ export async function revealSelectedContacts(options: {
     apiKey,
     contactOutApiKey,
     contactOutAvailable = false,
+    mobileSource = "contactout_then_apollo",
     context,
   } = options;
+  const apolloMobileAllowed = mobileSource === "contactout_then_apollo";
 
   const ids = selections.map((s) => s.contactId);
   if (!ids.length) {
@@ -488,6 +516,8 @@ export async function revealSelectedContacts(options: {
       phonesRequested: 0,
       contactOutUsed: false,
       contactOutError: null,
+      mobileSource,
+      apolloMobileSkipped: 0,
     };
   }
 
@@ -504,6 +534,7 @@ export async function revealSelectedContacts(options: {
   let phonesRequested = 0;
   let contactOutUsed = false;
   let contactOutError: string | null = null;
+  let apolloMobileSkipped = 0;
   const pendingApolloPhoneIds: string[] = [];
 
   for (const selection of selections) {
@@ -537,12 +568,15 @@ export async function revealSelectedContacts(options: {
     const needPersonalEmail =
       !hasPersonalEmail && contactOutReady && Boolean(contact.linkedinUrl);
     // Phone is needed if we don't yet have a ContactOut cell (preferred), OR
-    // — when ContactOut can't run — no direct phone at all.
+    // — when ContactOut can't run AND Apollo is allowed to supply the mobile —
+    // no direct phone at all. Pinned to ContactOut, no ContactOut lookup means
+    // no phone work to do at all.
+    const contactOutCanFetchPhone = contactOutReady && Boolean(contact.linkedinUrl);
     const needPhone =
       wantsPhone &&
-      (contactOutReady && contact.linkedinUrl
+      (contactOutCanFetchPhone
         ? !hasContactOutMobile
-        : !hasDirectPhoneNow);
+        : apolloMobileAllowed && !hasDirectPhoneNow);
 
     // NEVER re-reveal when there is genuinely nothing new to fetch.
     if (!needName && !needEmail && !needPersonalEmail && !needPhone) {
@@ -573,8 +607,11 @@ export async function revealSelectedContacts(options: {
      *     email, and — when the phone channel was selected — the mobile.
      *     This is the primary phone source.
      *  3. Apollo phone reveal ONLY as the last resort when phone was
-     *     requested and ContactOut couldn't supply one (async via webhook —
-     *     awaited below so the result isn't misreported as "not found").
+     *     requested, ContactOut couldn't supply one, AND the caller allows the
+     *     Apollo mobile at all (async via webhook — awaited below so the
+     *     result isn't misreported as "not found"). Pinned to ContactOut, this
+     *     step never runs: 9 Apollo credits for a number the operator trusts
+     *     less than ContactOut's is not a trade worth making.
      */
     let workEmail = contact.workEmail ?? null;
     let personalEmail = contact.personalEmail ?? null;
@@ -599,7 +636,7 @@ export async function revealSelectedContacts(options: {
       Boolean(contact.apolloId) && (!workEmail || !linkedinUrl || needName);
     if (needsApolloMatch && contact.apolloId) {
       const requestApolloPhone =
-        wantsPhone && !hasDirectPhone() && !contactOutReady;
+        apolloMobileAllowed && wantsPhone && !hasDirectPhone() && !contactOutReady;
       if (requestApolloPhone) apolloPhoneRequested = true;
       const enriched = await matchPerson(
         apiKey,
@@ -677,16 +714,20 @@ export async function revealSelectedContacts(options: {
       contact.apolloId &&
       !apolloPhoneRequested
     ) {
-      apolloPhoneRequested = true;
-      const enriched = await matchPerson(
-        apiKey,
-        contact.apolloId,
-        true,
-        context,
-        companyId,
-      );
-      if (enriched) {
-        phones = mergeSourcedPhones(phones, extractApolloPhones(enriched));
+      if (apolloMobileAllowed) {
+        apolloPhoneRequested = true;
+        const enriched = await matchPerson(
+          apiKey,
+          contact.apolloId,
+          true,
+          context,
+          companyId,
+        );
+        if (enriched) {
+          phones = mergeSourcedPhones(phones, extractApolloPhones(enriched));
+        }
+      } else {
+        apolloMobileSkipped += 1;
       }
     }
 
@@ -783,5 +824,7 @@ export async function revealSelectedContacts(options: {
     phonesRequested,
     contactOutUsed,
     contactOutError,
+    mobileSource,
+    apolloMobileSkipped,
   };
 }

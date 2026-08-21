@@ -18,11 +18,15 @@ import {
   companyIcp,
   jobListings,
 } from "@/lib/db/schema";
-import { normalizeCompanyKey } from "@/lib/company-name";
+import { companyNameKeyStrength, normalizeCompanyKey } from "@/lib/company-name";
 import { searchOrganizations } from "@/lib/domain-resolver";
 import { evaluateIcp } from "@/lib/icp-filter";
 import { annotateCompaniesIcp } from "@/lib/icp/icp-annotate";
 import { HARD_EXCLUDE_FLAGS_BY_TOGGLE } from "@/lib/icp/icp-scorer";
+import {
+  allSectorFilterOptions,
+  isCoarseSectorRollup,
+} from "@/lib/industry-sectors";
 import { recomputeCompanyScores } from "@/lib/recompute-company-scores";
 import { manualEnrichContext, type PaidEgressContext } from "@/lib/paid-egress";
 import { businessListDate } from "@/lib/timezone";
@@ -234,6 +238,15 @@ async function buildDedupeIndex(): Promise<{
   return { byDomain, byName };
 }
 
+/**
+ * Match a discovered company to a row the pipeline already has.
+ *
+ * This is also what attaches job signals: the review queue reads
+ * `job_listings` by `company_id`, so a wrong match here hands one company's
+ * open roles, industry and identity to another. Two guards keep the name leg
+ * honest — it may not overrule a domain that disagrees, and it may not fire on
+ * a key the suffix stripper reduced to one generic word.
+ */
 export function matchExistingCompany(
   candidate: { name: string; domain: string | null },
   index: {
@@ -246,9 +259,32 @@ export function matchExistingCompany(
     const hit = index.byDomain.get(domain);
     if (hit) return hit;
   }
+  if (companyNameKeyStrength(candidate.name) !== "strong") return null;
   const nameKey = normalizeCompanyKey(candidate.name);
   if (!nameKey) return null;
-  return index.byName.get(nameKey) ?? null;
+  const byName = index.byName.get(nameKey);
+  if (!byName) return null;
+  // Two different registered domains mean two different companies, however
+  // close the names read.
+  const existingDomain = byName.domain?.trim().toLowerCase();
+  if (domain && existingDomain && existingDomain !== domain) return null;
+  return byName;
+}
+
+/**
+ * Which industry string to keep. Apollo's fine-grained value ("law practice",
+ * "marketing & advertising") beats the coarse rollup the job-scrape worker
+ * writes when Apollo gave it nothing — otherwise every discovered company that
+ * already existed from the scrape keeps showing a bucket label like
+ * "Professional & Business Services" instead of what it actually is.
+ */
+export function preferredIndustry(
+  existing: string | null,
+  fromApollo: string | null,
+): string | null {
+  if (!fromApollo?.trim()) return existing;
+  if (!existing?.trim()) return fromApollo;
+  return isCoarseSectorRollup(existing) ? fromApollo : existing;
 }
 
 async function upsertCandidate(
@@ -284,7 +320,7 @@ async function upsertCandidate(
             : domain
               ? candidate.domainConfidence
               : existing.domainConfidence,
-        industry: existing.industry ?? candidate.industry,
+        industry: preferredIndustry(existing.industry, candidate.industry),
         estimatedEmployees:
           existing.estimatedEmployees ?? candidate.estimatedEmployees,
         phone: existing.phone ?? candidate.phone,
@@ -330,7 +366,18 @@ async function upsertCandidate(
         linkedinUrl: sql`COALESCE(${companies.linkedinUrl}, ${candidate.linkedinUrl})`,
         city: sql`COALESCE(${companies.city}, ${candidate.city})`,
         state: sql`COALESCE(${companies.state}, ${candidate.state})`,
-        industry: sql`COALESCE(${companies.industry}, ${candidate.industry})`,
+        // Same rule as the update path: a coarse rollup placeholder yields to
+        // Apollo's real industry, a real value is never overwritten.
+        industry: candidate.industry
+          ? sql`CASE
+              WHEN ${companies.industry} IS NULL THEN ${candidate.industry}
+              WHEN ${companies.industry} IN (${sql.join(
+                allSectorFilterOptions().map((label) => sql`${label}`),
+                sql`, `,
+              )}) THEN ${candidate.industry}
+              ELSE ${companies.industry}
+            END`
+          : sql`${companies.industry}`,
         estimatedEmployees: sql`COALESCE(${companies.estimatedEmployees}, ${candidate.estimatedEmployees})`,
         updatedAt: new Date(),
       },

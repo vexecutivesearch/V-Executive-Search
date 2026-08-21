@@ -21,8 +21,9 @@ export const maxDuration = 60;
  * verifies the email, and stops. `{ additional: true }` is the explicit
  * "Find Additional Contact" action that reveals one more.
  *
- * Phone is opt-in (`include_phone`), NOT defaulted on: an Apollo fallback
- * mobile costs 9 credits against 1 for an email.
+ * Phone is opt-in (`include_phone`), NOT defaulted on, and the mobile comes
+ * from ContactOut only — 1 ContactOut credit, no 9-credit Apollo mobile
+ * fallback on this path.
  */
 export async function POST(
   request: NextRequest,
@@ -98,8 +99,8 @@ export async function POST(
       ok: true,
       ...result,
       cost_note: includePhone
-        ? "One contact revealed: 1 email credit (+8 only if an Apollo fallback mobile is returned)."
-        : "One contact revealed: 1 email credit. Phone was not requested.",
+        ? "One contact revealed: 1 Apollo email credit + 1 ContactOut credit for the mobile. Apollo's 9-credit mobile is never used here."
+        : "One contact revealed: 1 Apollo email credit. Mobile was not requested.",
     });
   } catch (err) {
     if (err instanceof PaidEgressBlockedError) {

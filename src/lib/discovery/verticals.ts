@@ -8,6 +8,18 @@
 
 import rawConfig from "../../../config/contact-targets.json";
 
+/**
+ * What is allowed to CONFIRM or CONTRADICT the vertical for a company the
+ * search returned. See `discovery/vertical-evidence.ts` — the search vertical
+ * is never proof on its own.
+ */
+export type VerticalVerify = {
+  industry_any?: string[];
+  name_any?: string[];
+  industry_not?: string[];
+  name_not?: string[];
+};
+
 export type VerticalConfig = {
   label: string;
   /** Existing contact_targets sector to reuse for candidate ranking. */
@@ -16,6 +28,7 @@ export type VerticalConfig = {
   employee_max: number;
   apollo_keyword_tags: string[];
   decision_maker_titles: string[];
+  verify?: VerticalVerify;
 };
 
 type DiscoveryConfigShape = {

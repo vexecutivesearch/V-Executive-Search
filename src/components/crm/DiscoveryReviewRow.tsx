@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { CompanyReviewStatus } from "@/lib/db/schema";
 import type { ReviewQueueRow } from "@/lib/discovery/review-queue";
+import { verticalBadgeLabel } from "@/lib/discovery/vertical-evidence";
 
 const REVIEW_ACTIONS: Array<{
   status: CompanyReviewStatus;
@@ -32,13 +33,27 @@ function linkedInHref(url: string): string {
   return url.startsWith("http") ? url : `https://${url.replace(/^\/+/, "")}`;
 }
 
+/**
+ * The vertical badge asserts the vertical only when the company's own Apollo
+ * industry or name backs it. Otherwise it says how the company was FOUND,
+ * which is all discovery actually knows.
+ */
+const VERTICAL_BADGE_CLASS: Record<ReviewQueueRow["verticalEvidence"]["status"], string> = {
+  confirmed:
+    "bg-blue-50 text-blue-800 dark:bg-blue-950/50 dark:text-blue-200",
+  unverified:
+    "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300",
+  contradicted:
+    "bg-red-50 text-red-800 dark:bg-red-950/50 dark:text-red-200",
+};
+
 export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Phone is an explicit opt-in: an Apollo fallback mobile is 9 credits
-  // against 1 for an email, and this flow buys exactly one contact.
+  // Mobile is an explicit opt-in and comes from ContactOut only — see
+  // lib/enrich/single-contact.ts.
   const [includePhone, setIncludePhone] = useState(false);
 
   async function review(status: CompanyReviewStatus) {
@@ -96,6 +111,13 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
   const location = [row.city, row.stateAbbr ?? row.state]
     .filter(Boolean)
     .join(", ");
+  const evidence = row.verticalEvidence;
+  const verticalBadge = verticalBadgeLabel(row.verticalLabel, evidence.status);
+  const industryLabel = !row.industry
+    ? "Industry unknown"
+    : row.industryIsRollup
+      ? `${row.industry} (pipeline rollup — no Apollo industry)`
+      : row.industry;
 
   return (
     <article className="border border-gray-200 dark:border-gray-800 rounded-xl p-4 bg-white dark:bg-gray-950">
@@ -108,9 +130,14 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
             >
               {row.name}
             </Link>
-            {row.verticalLabel && (
-              <span className="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 dark:bg-blue-950/50 dark:text-blue-200">
-                {row.verticalLabel}
+            {verticalBadge && (
+              <span
+                title={evidence.reason}
+                className={`text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded ${
+                  VERTICAL_BADGE_CLASS[evidence.status]
+                }`}
+              >
+                {verticalBadge}
               </span>
             )}
             {row.sizeUnknown && (
@@ -129,10 +156,22 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
           </div>
 
           <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-            {[row.industry ?? "Industry unknown", location || "Location unknown", sizeLabel]
+            {[industryLabel, location || "Location unknown", sizeLabel]
               .filter(Boolean)
               .join(" · ")}
           </p>
+
+          {evidence.status !== "confirmed" && row.verticalLabel && (
+            <p
+              className={`text-xs mt-1 ${
+                evidence.status === "contradicted"
+                  ? "text-red-700 dark:text-red-400"
+                  : "text-gray-500"
+              }`}
+            >
+              {evidence.reason}
+            </p>
+          )}
 
           <p className="text-xs text-gray-500 mt-1 flex flex-wrap gap-x-3 gap-y-1">
             {row.website ? (
@@ -233,14 +272,18 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
           </button>
         )}
 
-        <label className="inline-flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 cursor-pointer">
+        <label
+          className="inline-flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 cursor-pointer"
+          title="ContactOut is the only mobile source on this path. If ContactOut has no mobile for the contact, none is returned — Apollo's mobile is 9 Apollo credits and less accurate."
+        >
           <input
             type="checkbox"
             checked={includePhone}
             onChange={(e) => setIncludePhone(e.target.checked)}
             className="rounded border-gray-300"
           />
-          Also reveal phone (+8 credits if Apollo supplies the mobile)
+          Also look up mobile via ContactOut (1 ContactOut credit, no Apollo
+          fallback)
         </label>
 
         <span className="mx-1 h-4 w-px bg-gray-200 dark:bg-gray-700" aria-hidden />

@@ -50,14 +50,61 @@
     "max_candidates": 8,
     "search_per_page": 10
   },
-  "$verticals_comment": "Company-first discovery (Feature 3). Each vertical drives THREE things: the Apollo organization-search filters (keyword tags + employee range), the vertical-aware ICP employee band, and the single decision-maker title priority used when the operator approves enrichment. contact_sector links a vertical to an existing contact_targets entry so legal keeps its firm-specific ranking.",
+  "$verticals_comment": "Company-first discovery (Feature 3). Each vertical drives FOUR things: the Apollo organization-search filters (keyword tags + employee range), the vertical-aware ICP employee band, the single decision-maker title priority used when the operator approves enrichment, and the `verify` block below. contact_sector links a vertical to an existing contact_targets entry so legal keeps its firm-specific ranking.",
+  "$verticals_verify_comment": "Apollo's q_organization_keyword_tags matches the company's own keyword list, which includes who a company SELLS TO — a marketing agency that serves law firms carries legal keywords. So the search vertical is never proof of what a company is. `verify` decides what the review queue is allowed to ASSERT: industry_any / name_any confirm the vertical, industry_not / name_not contradict it, and anything else stays honestly unverified ('found via <vertical> search'). name patterns match on whole words only, so 'law' never fires on 'Lawson'.",
   "verticals": {
     "legal": {
       "label": "Legal",
       "contact_sector": "legal",
       "employee_min": 10,
       "employee_max": 500,
-      "apollo_keyword_tags": ["law firm", "attorney", "legal services", "litigation"],
+      "apollo_keyword_tags": ["law firm", "attorneys at law", "law offices", "litigation"],
+      "verify": {
+        "industry_any": ["law practice", "legal services", "alternative dispute resolution"],
+        "name_any": [
+          "law",
+          "laws",
+          "lawyer",
+          "lawyers",
+          "legal",
+          "attorney",
+          "attorneys",
+          "llp",
+          "pllc",
+          "esq",
+          "counsel",
+          "litigation",
+          "advocates",
+          "barristers",
+          "solicitors"
+        ],
+        "industry_not": [
+          "marketing & advertising",
+          "public relations & communications",
+          "staffing & recruiting",
+          "cosmetics",
+          "consumer goods",
+          "apparel & fashion",
+          "health, wellness & fitness",
+          "construction",
+          "restaurants",
+          "retail"
+        ],
+        "name_not": [
+          "agency",
+          "marketing",
+          "advertising",
+          "media",
+          "staffing",
+          "recruiting",
+          "recruitment",
+          "salon",
+          "spa",
+          "roofing",
+          "hvac",
+          "plumbing"
+        ]
+      },
       "decision_maker_titles": [
         "Managing Partner",
         "Firm Administrator",
@@ -73,7 +120,44 @@
       "label": "Finance & Accounting",
       "employee_min": 25,
       "employee_max": 750,
-      "apollo_keyword_tags": ["accounting", "CPA", "tax", "audit", "advisory"],
+      "apollo_keyword_tags": ["accounting", "CPA", "tax preparation", "audit", "bookkeeping"],
+      "verify": {
+        "industry_any": [
+          "accounting",
+          "financial services",
+          "banking",
+          "investment banking",
+          "investment management",
+          "venture capital & private equity",
+          "insurance"
+        ],
+        "name_any": [
+          "cpa",
+          "cpas",
+          "accounting",
+          "accountants",
+          "accountancy",
+          "tax",
+          "audit",
+          "auditors",
+          "bookkeeping",
+          "financial",
+          "finance",
+          "wealth",
+          "advisors",
+          "capital"
+        ],
+        "industry_not": [
+          "law practice",
+          "legal services",
+          "construction",
+          "cosmetics",
+          "restaurants",
+          "retail",
+          "marketing & advertising"
+        ],
+        "name_not": ["law", "attorney", "attorneys", "roofing", "hvac", "salon", "spa"]
+      },
       "decision_maker_titles": [
         "Managing Partner",
         "CEO",
@@ -88,16 +172,79 @@
       "label": "Construction & Trades",
       "employee_min": 15,
       "employee_max": 750,
+      "$apollo_keyword_tags_comment": "Bare 'restoration' pulled in hair-restoration and beauty brands (Keratin Complex), so the trade is spelled out.",
       "apollo_keyword_tags": [
         "roofing",
         "HVAC",
         "general contractor",
         "electrical contractor",
         "plumbing",
-        "restoration",
+        "water damage restoration",
         "mechanical contractor",
         "specialty contractor"
       ],
+      "verify": {
+        "industry_any": [
+          "construction",
+          "building materials",
+          "civil engineering",
+          "architecture & planning",
+          "mechanical or industrial engineering",
+          "electrical/electronic manufacturing"
+        ],
+        "name_any": [
+          "construction",
+          "contractor",
+          "contractors",
+          "contracting",
+          "builders",
+          "building",
+          "roofing",
+          "roofers",
+          "hvac",
+          "plumbing",
+          "electric",
+          "electrical",
+          "mechanical",
+          "concrete",
+          "paving",
+          "excavation",
+          "masonry",
+          "drywall",
+          "remodeling",
+          "restoration",
+          "landscaping",
+          "flooring",
+          "glazing",
+          "millwork"
+        ],
+        "industry_not": [
+          "cosmetics",
+          "consumer goods",
+          "apparel & fashion",
+          "health, wellness & fitness",
+          "law practice",
+          "legal services",
+          "marketing & advertising",
+          "restaurants",
+          "retail",
+          "staffing & recruiting"
+        ],
+        "name_not": [
+          "salon",
+          "spa",
+          "beauty",
+          "cosmetics",
+          "keratin",
+          "law",
+          "attorney",
+          "attorneys",
+          "agency",
+          "marketing",
+          "staffing",
+          "recruiting"
+        ]
+      },
       "decision_maker_titles": [
         "Owner",
         "President",
@@ -115,12 +262,37 @@
       "employee_max": 750,
       "apollo_keyword_tags": [
         "professional services",
-        "business services",
-        "consulting",
+        "management consulting",
+        "business consulting",
         "marketing agency",
-        "sales operations",
         "operations consulting"
       ],
+      "verify": {
+        "industry_any": [
+          "management consulting",
+          "marketing & advertising",
+          "public relations & communications",
+          "professional training & coaching",
+          "human resources",
+          "design",
+          "business supplies & equipment",
+          "information technology & services",
+          "facilities services"
+        ],
+        "name_any": [
+          "consulting",
+          "consultants",
+          "consultancy",
+          "advisors",
+          "advisory",
+          "agency",
+          "marketing",
+          "communications",
+          "solutions"
+        ],
+        "industry_not": ["staffing & recruiting", "construction", "restaurants", "retail"],
+        "name_not": ["staffing", "recruiting", "recruitment", "roofing", "hvac"]
+      },
       "decision_maker_titles": [
         "Owner",
         "CEO",
