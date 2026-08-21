@@ -70,7 +70,7 @@ export async function recordCallListOutreachEvent(options: {
           canAutoAdvanceStatus(entry.callStatus, options.callStatus));
       const nextStatus = advance ? options.callStatus! : entry.callStatus;
       const statusChanged = nextStatus !== entry.callStatus;
-      await db
+      const [row] = await db
         .update(callListEntries)
         .set({
           notes: nextNotes,
@@ -82,7 +82,9 @@ export async function recordCallListOutreachEvent(options: {
             : entry.callStatusUpdatedAt,
           updatedAt: new Date(),
         })
-        .where(eq(callListEntries.id, entry.id));
+        .where(eq(callListEntries.id, entry.id))
+        .returning();
+      updated = row ?? null;
     }
   } catch (error) {
     console.error("[outreach] call-list note prepend failed", error);
@@ -94,11 +96,13 @@ export async function recordCallListOutreachEvent(options: {
       contactId: options.contactId ?? null,
       type: options.activityType ?? "note",
       summary: options.summary,
-      source: "outreach",
+      source: options.source ?? "outreach",
     });
   } catch (error) {
     console.error("[outreach] company activity insert failed", error);
   }
+
+  return updated;
 }
 
 /**
