@@ -40,6 +40,49 @@ export function buildMessageId(fromAddress: string): string {
   return `<${randomUUID()}@${domain}>`;
 }
 
+/** A send we already made on this thread (outreach_messages, status sent). */
+export type ThreadedSend = {
+  messageId: string | null;
+  subject: string | null;
+  sentAt: Date | null;
+};
+
+export type ThreadHeaders = {
+  /** Message-ID of the newest send on the thread. */
+  inReplyTo: string | null;
+  /** Whole chain, oldest first, space separated per RFC 5322. */
+  references: string | null;
+  /** The thread's subject with a single Re: prefix, or null for a new thread. */
+  subject: string | null;
+};
+
+/**
+ * Put a follow-up inside the thread the intro started.
+ *
+ * A follow-up sent with fresh headers and its own subject arrives as an
+ * unrelated cold email, so the recipient reads "checking in on my note" with
+ * no note above it to check. Threading is what makes the earlier email part of
+ * the message.
+ *
+ * The subject is the FIRST send's, not the newest one's: mail clients group on
+ * References, but people read the subject, and a thread that renames itself at
+ * every step does not look like one conversation.
+ */
+export function threadHeaders(previous: readonly ThreadedSend[]): ThreadHeaders {
+  const chain = previous
+    .filter((m): m is ThreadedSend & { messageId: string } => Boolean(m.messageId))
+    .sort((a, b) => (a.sentAt?.getTime() ?? 0) - (b.sentAt?.getTime() ?? 0));
+  if (!chain.length) {
+    return { inReplyTo: null, references: null, subject: null };
+  }
+  const root = chain[0].subject?.trim();
+  return {
+    inReplyTo: chain[chain.length - 1].messageId,
+    references: chain.map((m) => m.messageId).join(" "),
+    subject: root ? `Re: ${root.replace(/^(?:re:\s*)+/i, "")}` : null,
+  };
+}
+
 /** CAN-SPAM footer: identity + physical address (no unsubscribe-link games —
  * plain-text reply opt-out is honored by the classifier + suppression). */
 export function emailFooter(options: {
@@ -73,6 +116,8 @@ export async function sendOutreachEmail(options: {
   textBody: string;
   /** For threaded replies: Message-ID being replied to. */
   inReplyTo?: string | null;
+  /** Full References chain, oldest first. Defaults to inReplyTo alone. */
+  references?: string | null;
   /**
    * RFC 8058 one-click unsubscribe URL. Gmail/Yahoo treat a missing
    * List-Unsubscribe as a junk signal on cold sends.
@@ -87,7 +132,7 @@ export async function sendOutreachEmail(options: {
   };
   if (options.inReplyTo) {
     headers["In-Reply-To"] = options.inReplyTo;
-    headers["References"] = options.inReplyTo;
+    headers["References"] = options.references ?? options.inReplyTo;
   }
   if (options.unsubscribeUrl) {
     const mailto = options.replyTo

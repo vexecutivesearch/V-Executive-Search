@@ -24,6 +24,7 @@ import {
   emailFooter,
   resolveProfileApiKey,
   sendOutreachEmail,
+  threadHeaders,
 } from "@/lib/outreach/resend-send";
 import { sentTodayOnChannel } from "@/lib/outreach/send-caps";
 import { getOrCreateOutreachSettings } from "@/lib/outreach/settings";
@@ -34,8 +35,8 @@ import { buildUnsubscribeUrl } from "@/lib/outreach/unsubscribe";
  * Dispatch pass (Vercel cron, every 15 min in window):
  *   1. advance active enrollments through their flow graphs
  *   2. send due queued EMAIL messages (suppression re-check → approval gate →
- *      profile pick → Resend send → activity log; company → contacted on
- *      first send)
+ *      profile pick → Resend send, threaded onto the intro → activity log;
+ *      company → contacted on first send)
  * iMessage sends are NOT dispatched here — the Mac worker polls its queue.
  *
  * Safety order (checked per message): global kill switch → dry-run →
@@ -276,13 +277,35 @@ export async function runOutreachDispatch(now = new Date()): Promise<DispatchSum
       physicalAddress: settings.physicalAddress,
     });
 
+    // Every step after the intro replies to the intro's own Message-ID, so a
+    // follow-up lands in the thread it refers to instead of arriving as a
+    // second unconnected cold email.
+    const priorSends = await db
+      .select({
+        messageId: outreachMessages.messageId,
+        subject: outreachMessages.subject,
+        sentAt: outreachMessages.sentAt,
+      })
+      .from(outreachMessages)
+      .where(
+        and(
+          eq(outreachMessages.enrollmentId, enrollment.id),
+          eq(outreachMessages.channel, "email"),
+          eq(outreachMessages.status, "sent"),
+        ),
+      );
+    const thread = threadHeaders(priorSends);
+    const subject = thread.subject ?? message.subject ?? "Quick question";
+
     const result = await sendOutreachEmail({
       apiKey,
       from,
       to: enrollment.emailAddress!,
       replyTo: profile?.replyToAddress ?? settings.replyToAddress,
-      subject: message.subject ?? "Quick question",
+      subject,
       textBody: `${message.body}\n${footer}`,
+      inReplyTo: thread.inReplyTo,
+      references: thread.references,
       unsubscribeUrl: buildUnsubscribeUrl(enrollment.emailAddress!),
     });
 
@@ -295,6 +318,9 @@ export async function runOutreachDispatch(now = new Date()): Promise<DispatchSum
         .set({
           status: "sent",
           sentAt: now,
+          // The threaded subject is what the contact received; storing the
+          // drafted one instead would make the record disagree with the inbox.
+          subject,
           resendId: result.resendId,
           messageId: result.messageId,
           sendingProfileId: profile?.id ?? null,
@@ -305,7 +331,7 @@ export async function runOutreachDispatch(now = new Date()): Promise<DispatchSum
         .where(eq(outreachMessages.id, message.id));
       if (profile) await bumpProfileCounters(profile.id, { totalSent: 1 });
       await markCompanyContacted(enrollment);
-      await logSendActivity(enrollment, message, result.resendId ?? null);
+      await logSendActivity(enrollment, { ...message, subject }, result.resendId ?? null);
       await logEnrollmentEvent({
         enrollmentId: enrollment.id,
         eventType: "sent",
@@ -316,6 +342,7 @@ export async function runOutreachDispatch(now = new Date()): Promise<DispatchSum
           profile: profile?.label ?? "default",
           to: enrollment.emailAddress,
           contact: contact?.name,
+          threaded_to: thread.inReplyTo,
         },
       });
       // Nudge the flow: the send node can now advance past this step.
