@@ -13,14 +13,18 @@ import { summarizeGateReasons } from "@/lib/discovery/exclusion-gate";
 import { summarizeJobSignals } from "@/lib/discovery/job-signals";
 import { canAddToCallList } from "@/lib/discovery/review-actions";
 import { gateOrganizations, preferredIndustry } from "@/lib/discovery/run";
+import {
+  headcountProvenance,
+  mergeQuantified,
+} from "@/lib/discovery/sources/apollo-quantify";
 import { verticalEvidence } from "@/lib/discovery/vertical-evidence";
 import { pickSingleDecisionMaker } from "@/lib/enrich/single-contact";
 
 /**
- * One company, end to end, through every stage four separate branches
- * rewrote: provider page → exclusion gate → dedupe/attach → vertical evidence
- * → scoring → review-queue filtering → approve → single-contact pick → call
- * list → CSV export.
+ * One company, end to end, through every stage these branches rewrote:
+ * provider page → Apollo quantify → exclusion gate → dedupe/attach → vertical
+ * evidence → scoring → review-queue filtering → approve → single-contact pick
+ * → call list → CSV export.
  *
  * Each of those stages has its own unit tests. This asserts they COMPOSE:
  * that the shape one stage emits is the shape the next one reads, and that a
@@ -79,14 +83,115 @@ describe("one discovered company, all the way through", () => {
     }),
   ];
 
-  const gated = gateOrganizations(providerPage, VERTICAL, false);
+  /*
+   * The SerpApi Google Maps page. Maps can name a company and give it a Google
+   * Business category, but it never knows headcount, revenue or a ticker — so
+   * these rows arrive with nothing the gate's structural rules can read.
+   */
+  const mapsPage = [
+    org({
+      name: "Harbor Point Legal",
+      domain: "harborpointlegal.com",
+      websiteUrl: "https://harborpointlegal.com",
+      industry: "Law firm",
+      estimatedEmployees: null,
+      linkedinUrl: null,
+    }),
+    org({
+      name: "Meridian Advisory Group",
+      domain: "meridianadvisory.com",
+      websiteUrl: "https://meridianadvisory.com",
+      // A staffing agency with a polished Google Business Profile. Nothing in
+      // this row is rejectable.
+      industry: "Business management consultant",
+      estimatedEmployees: null,
+      linkedinUrl: null,
+    }),
+  ];
+
+  // What Apollo returns for those two domains, keyed on the normalised domain.
+  const quantified = [
+    mergeQuantified(
+      mapsPage[0],
+      org({
+        name: "Harbor Point Legal",
+        domain: "harborpointlegal.com",
+        industry: "law practice",
+        estimatedEmployees: 30,
+      }),
+      { domain: "harborpointlegal.com" },
+    ),
+    mergeQuantified(
+      mapsPage[1],
+      org({
+        name: "Meridian Advisory Group",
+        domain: "meridianadvisory.com",
+        industry: "staffing & recruiting",
+        estimatedEmployees: 22,
+      }),
+      { domain: "meridianadvisory.com" },
+    ),
+  ];
+
+  it("stage 0 — Apollo sizes the Maps rows, and display precedence holds", () => {
+    expect(quantified.map((o) => o.estimatedEmployees)).toEqual([30, 22]);
+    expect(quantified.map((o) => headcountProvenance(o))).toEqual([
+      "apollo",
+      "apollo",
+    ]);
+    // A real value is never overwritten by a second provider's, so the
+    // operator's screen still reads the Google category.
+    expect(quantified.map((o) => o.industry)).toEqual([
+      "Law firm",
+      "Business management consultant",
+    ]);
+    // But Apollo's taxonomy is kept alongside it rather than discarded — the
+    // gate is about to need it.
+    expect(quantified.map((o) => o.quantification.apolloIndustry)).toEqual([
+      "law practice",
+      "staffing & recruiting",
+    ]);
+  });
+
+  /*
+   * Quantify runs BEFORE the gate. A gate that ran first would see two
+   * size-unknown rows with unrejectable Google categories and wave both
+   * through — including the staffing agency.
+   *
+   * Quantified rows join the SIZED pool, not the unknown one: candidate
+   * selection drops any unknown-pool row that has a headcount, so routing by
+   * where the row came from rather than by what is now known about it would
+   * silently delete the company Apollo just paid to size.
+   */
+  const gated = gateOrganizations(
+    [...providerPage, ...quantified.filter((o) => o.estimatedEmployees != null)],
+    VERTICAL,
+    false,
+  );
 
   it("stage 1 — the gate rejects before dedupe and before any write", () => {
-    expect(gated.kept.map((o) => o.name)).toEqual(["Kessler & Vance"]);
-    expect(gated.rejected).toHaveLength(3);
+    expect(gated.kept.map((o) => o.name)).toEqual([
+      "Kessler & Vance",
+      "Harbor Point Legal",
+    ]);
+    expect(gated.rejected).toHaveLength(4);
     // Counted by reason, which is what makes a short run diagnosable.
     const reasons = summarizeGateReasons(gated.rejected);
-    expect(Object.values(reasons).reduce((a, b) => a + b, 0)).toBe(3);
+    expect(Object.values(reasons).reduce((a, b) => a + b, 0)).toBe(4);
+  });
+
+  it("stage 1b — the gate judges the Maps row on Apollo's taxonomy", () => {
+    // The fail-open this pipeline order exists to close. Handing the gate the
+    // display industry hides "staffing & recruiting" behind "Business
+    // management consultant", and a 22-person staffing agency — comfortably
+    // inside the legal band — is ACCEPTED into review.
+    const agency = gated.rejected.find((d) =>
+      d.detail.includes("staffing & recruiting"),
+    );
+    expect(agency?.reason).toBe("staffing_agency");
+    expect(gated.kept.map((o) => o.name)).not.toContain(
+      "Meridian Advisory Group",
+    );
   });
 
   const selection = selectDiscoveryCandidates({
@@ -99,9 +204,17 @@ describe("one discovered company, all the way through", () => {
 
   it("stage 2 — dedupe reads the gate's output, not the raw page", () => {
     // If the ordering ever flipped, the rejected companies would be here.
-    expect(selection.candidates).toHaveLength(1);
+    expect(selection.candidates.map((c) => c.name)).toEqual([
+      "Kessler & Vance",
+      "Harbor Point Legal",
+    ]);
     expect(candidate.name).toBe("Kessler & Vance");
     expect(candidate.sizeUnknown).toBe(false);
+    // The quantified Maps row survived selection with its headcount and its
+    // provenance, so the review queue can say WHO sized it.
+    const harbor = selection.candidates[1];
+    expect(harbor.sizeUnknown).toBe(false);
+    expect(headcountProvenance(harbor)).toBe("apollo");
   });
 
   it("stage 3 — attach keeps Apollo's industry over a pipeline rollup", () => {
