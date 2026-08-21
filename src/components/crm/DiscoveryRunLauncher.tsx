@@ -267,8 +267,11 @@ export function DiscoveryRunLauncher({
 
       {!marketChoice && suggestedMarket && browseScope?.state && (
         <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
-          Prefilled from the {stateLabel(browseScope.state)} browse filter. Any
-          market can be searched, whatever the queue below is scoped to.
+          {/* The browse filter is not rendered on this tab, so naming it as
+              though it were on screen sends the operator looking for a control
+              that is not there. */}
+          {`Prefilled from your last browse scope (${stateLabel(browseScope.state)}). `}
+          Any market can be searched, whatever the queue below is scoped to.
         </p>
       )}
 
