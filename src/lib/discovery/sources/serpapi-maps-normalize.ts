@@ -19,7 +19,7 @@
  * discovery pipeline already reserves a share of the batch for.
  */
 
-import { normalizeCompanyKey } from "@/lib/company-name";
+import { companyNameKeyStrength, normalizeCompanyKey } from "@/lib/company-name";
 import type { DiscoveredOrganization } from "@/lib/domain-resolver";
 import { getIcpConfig, type IcpConfig } from "@/lib/icp/icp-config";
 import { parseJobLocation } from "@/lib/location-match";
@@ -468,6 +468,13 @@ export function normalizeMapsResult(
  * batch cannot contain two rows that would then fight over the same UNIQUE
  * domain on insert.
  *
+ * The name leg honours `companyNameKeyStrength` for the same reason `run.ts`
+ * does: the suffix stripper reduces "Smith Group" and "Smith Holdings" both to
+ * "smith", and merging on that would silently discard a real company. Being
+ * stricter here than the database dedupe would also be an outright bug — this
+ * pass can only drop rows, and a row it drops never gets the chance to be
+ * matched properly downstream.
+ *
  * `seenKeys` lets a caller carry keys across pages of one sweep.
  */
 export function dedupeMapsOrganizations(
@@ -480,11 +487,20 @@ export function dedupeMapsOrganizations(
   for (const org of organizations) {
     const keys: string[] = [];
     if (org.domain) keys.push(`domain:${org.domain}`);
-    const nameKey = normalizeCompanyKey(org.name);
-    // Same name in two different cities is two businesses (franchises), so the
-    // name key is scoped by state when we have one.
-    if (nameKey) keys.push(`name:${nameKey}|${org.state ?? ""}`);
-    if (!keys.length) continue;
+    if (companyNameKeyStrength(org.name) === "strong") {
+      const nameKey = normalizeCompanyKey(org.name);
+      // Same name in two different states is two businesses (franchises), so
+      // the name key is scoped by state when we have one.
+      if (nameKey) keys.push(`name:${nameKey}|${org.state ?? ""}`);
+    }
+
+    // No usable key: keep it. It cannot be deduped here, but dropping a real
+    // company to avoid a duplicate the operator can see and reject is the worse
+    // trade.
+    if (!keys.length) {
+      out.push(org);
+      continue;
+    }
 
     if (keys.some((key) => seenKeys.has(key))) {
       duplicates += 1;

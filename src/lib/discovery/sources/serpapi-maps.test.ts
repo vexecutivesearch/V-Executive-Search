@@ -13,7 +13,7 @@ let cursorReadFails = false;
 /** Running total the mocked daily-usage SELECT reports. */
 let usageToday = 0;
 
-const insertValues = vi.fn(async (_row: Record<string, unknown>) => undefined);
+const insertValues = vi.fn<(row: Record<string, unknown>) => void>();
 const onConflictDoUpdate = vi.fn(async () => undefined);
 
 vi.mock("@/lib/db", () => ({

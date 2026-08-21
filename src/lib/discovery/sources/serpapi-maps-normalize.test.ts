@@ -386,6 +386,28 @@ describe("dedupeMapsOrganizations", () => {
   });
 
   /*
+   * The suffix stripper reduces both of these to the single word "smith".
+   * run.ts refuses to merge the database on a key that weak, and this pass must
+   * not be stricter than the pass downstream of it — a row dropped here never
+   * gets the chance to be matched properly.
+   */
+  it("refuses to merge on a name key too generic to identify a company", () => {
+    const { organizations, duplicates } = dedupeMapsOrganizations([
+      org({ domain: null, name: "Smith Group" }),
+      org({ domain: null, name: "Smith Holdings" }),
+    ]);
+    expect(organizations).toHaveLength(2);
+    expect(duplicates).toBe(0);
+  });
+
+  it("keeps a company with no usable dedupe key at all", () => {
+    const { organizations } = dedupeMapsOrganizations([
+      org({ domain: null, name: "&&&" }),
+    ]);
+    expect(organizations).toHaveLength(1);
+  });
+
+  /*
    * ...but a shared corporate domain still collapses franchise locations. This
    * is a deliberate, documented tradeoff, not an oversight: one domain usually
    * means one hiring authority.

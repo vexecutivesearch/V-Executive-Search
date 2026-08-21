@@ -179,6 +179,23 @@ A second source makes dedupe the highest-risk area in the whole change. Today `r
 - **Suite/unit noise.** `address` includes `Unit B`, `# D30`, `Front`. Only the city/state tail is parsed; the street line is not used for matching.
 - **Same business, two profiles.** Google itself has duplicates (an old profile plus a claimed one). Same-name-same-city entries are deduped in-batch by the existing name key.
 
+### Interaction with the name-key strength gate
+
+`run.ts` will not merge two companies on a normalised name key that the suffix
+stripper reduced to a single generic word — "Smith Group" and "Smith Holdings"
+both become `smith`, and merging on that discards a real company.
+
+The in-batch dedupe in this source honours the same `companyNameKeyStrength`
+gate, and it must: this pass can only *drop* rows, and a row it drops never
+reaches the database dedupe to be matched properly. Being stricter here than the
+pass downstream of it would be an outright bug, not a conservative choice. A
+company with no usable key at all is kept — a duplicate the operator can see and
+reject beats a real company silently discarded.
+
+Incidentally this gate also reduces the DBA/trade-name risk above, because it
+prevents the most dangerous class of accidental merge on Maps titles, which are
+often short and generic.
+
 ### What I did not do
 
 No fuzzy or probabilistic matching (trigram similarity, address-based clustering, `place_id` persisted as an external identity). Persisting Maps `place_id` / `data_cid` would be the principled fix for franchise and multi-office cases — it is a stable Google identity — but it needs a schema column, and this project has a documented history of production 500s from unapplied migrations. Deliberately deferred. See §10.
@@ -257,6 +274,13 @@ Ordered by value per unit of risk.
 5. **`site:linkedin.com/company` lookup for approved companies only** — 1 search per company, post-Approve, capped. Fills the one field Maps structurally cannot.
 6. **Surface `reviews` / `rating`** as an ICP size proxy for headcount-unknown companies, so the operator has something better than "size unknown" to triage on.
 7. **Show the SerpApi pool cursor in the launcher UI.** Currently `getDiscoveryPoolStatuses` only reports the two Apollo pools; the SerpApi cursor is reported in run-summary notes instead.
+8. **Teach `vertical-evidence.ts` about Google Business categories.** `verticalEvidence` matches `companies.industry` *exactly* against Apollo's taxonomy, so a Maps industry ("Roofing contractor", "Law firm") can never confirm a vertical on the industry leg — it falls through to the name leg. In practice construction is fine, because `name_any` already contains `roofing`, `hvac`, `plumbing`, `contractor`; Legal is weaker, because a Maps title like "Smith & Jones, P.A." matches none of `llp`/`pllc`/`law`/`attorney` and lands as *unverified*.
+
+   Two consequences worth knowing, neither of which is a correctness bug:
+   - a Maps company reads "found via Legal search" rather than a confirmed badge. That is honest — Apollo genuinely has not confirmed anything — but the reason text says "Apollo returned nothing that confirms…", which is misleading when Apollo never saw the company at all;
+   - `preferredIndustry` treats a Google category as a real industry (it is not a coarse rollup), so once Maps writes "Roofing contractor" a later Apollo industry will not replace it. Arguably correct, since the Google category is more specific, but it does permanently close the industry-leg confirmation path for that company.
+
+   The fix is a category → Apollo-industry mapping, or an `industry_any` list that accepts Google categories. Left alone here because `vertical-evidence.ts` and `review-queue.ts` were being actively changed alongside this work.
 
 ---
 
