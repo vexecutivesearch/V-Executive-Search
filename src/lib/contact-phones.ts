@@ -21,6 +21,25 @@ export type SourcedPhone = {
 /** Max personal/direct-dial numbers stored or shown per contact. */
 export const MAX_PERSONAL_PHONES_PER_CONTACT = 3;
 
+/**
+ * The one derivation of dial class from provenance, so extraction-time
+ * stamping and read-time backfill of older rows cannot disagree.
+ *
+ * Apollo's company/HQ numbers are published main lines. ContactOut sells
+ * personal mobiles, so every ContactOut number is a mobile. Everything else —
+ * including an Apollo "work" direct dial, which is as likely to be a cell —
+ * stays unknown, and unknown is treated as a mobile.
+ */
+export function deriveClassification(
+  source: PhoneSource,
+  kind?: PhoneKind,
+): PhoneClassification {
+  if (kind === "company") return "business_line";
+  if (source === "contactout") return "mobile";
+  if (kind === "mobile") return "mobile";
+  return "unknown";
+}
+
 export function phoneKindLabel(kind?: PhoneKind): string {
   if (kind === "mobile") return "Mobile";
   if (kind === "work") return "Work";
@@ -157,7 +176,11 @@ export function dedupeSourcedPhones(phones: SourcedPhone[]): SourcedPhone[] {
     const key = `${p.source}:${phoneDigits(number)}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ ...p, number });
+    out.push({
+      ...p,
+      number,
+      classification: p.classification ?? deriveClassification(p.source, p.kind),
+    });
   }
   return out;
 }

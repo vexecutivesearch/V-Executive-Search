@@ -1,6 +1,7 @@
-import type {
-  PhoneClassification,
-  SourcedPhone,
+import {
+  deriveClassification,
+  type PhoneClassification,
+  type SourcedPhone,
 } from "@/lib/contact-phones";
 import { isDialablePhone, parsePhoneValue } from "@/lib/phone-utils";
 
@@ -49,20 +50,11 @@ export const BLOCKED_DIAL_REASONS: Record<PhoneClassification, string | null> = 
     "Number type is unverified, and an unverified number is treated as a mobile. Email the opt-in link instead.",
 };
 
-/**
- * Derive a class from provenance when the stored value is missing.
- *
- * Apollo's `company`/HQ numbers are published main lines. ContactOut sells
- * personal mobiles, so every ContactOut number is a mobile. Everything else,
- * including an Apollo "work" direct dial (which is just as likely to be a
- * cell), stays unknown and is therefore blocked.
- */
+/** The stored class, or the provenance derivation for rows predating it. */
 export function classifySourcedPhone(phone: PhoneLike): PhoneClassification {
   if (phone.classification) return phone.classification;
-  if (phone.kind === "company") return "business_line";
-  if (phone.source === "contactout") return "mobile";
-  if (phone.kind === "mobile") return "mobile";
-  return "unknown";
+  if (!phone.source) return phone.kind === "company" ? "business_line" : "unknown";
+  return deriveClassification(phone.source, phone.kind);
 }
 
 /** Stamp the derived class onto phones that predate the column. */
