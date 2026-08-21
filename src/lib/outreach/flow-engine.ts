@@ -250,6 +250,24 @@ async function handleSendNode(
   const settings = await getOrCreateOutreachSettings();
   const sendWindow = resolveSendWindow(settings, now);
 
+  if (config.channel === "imessage" && !settings.textEnabled) {
+    // Enrollments pin an immutable flow version, so live ones still walk the
+    // text nodes of the graph they started on. Walk straight past without
+    // drafting anything, and deliberately without touching messages already
+    // queued: the switch holds them for a decision, it does not cancel them.
+    await logEnrollmentEvent({
+      enrollmentId: enrollment.id,
+      eventType: "rule_action",
+      payload: {
+        node: node.id,
+        action: "skip_text_step",
+        step: config.stepKind,
+        reason: "the text channel is switched off in Admin, Safety switches",
+      },
+    });
+    return "advance";
+  }
+
   if (config.channel === "email" && !enrollment.emailAddress) {
     // Text-only enrollments never draft email steps, but the flow graph
     // still walks through email send nodes — skip them, and never fall into

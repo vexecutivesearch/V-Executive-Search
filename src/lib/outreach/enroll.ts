@@ -351,10 +351,18 @@ export async function enrollContact(
     hasPhone: Boolean(phone),
     imessageCapable: contact.imessageCapable,
     phoneSuppressed,
+    textEnabled: settings.textEnabled,
   });
   if (!channelPlan) {
-    // Unreachable in practice: no-email-no-phone already failed above.
-    return { enrolled: false, reason: "no reachable channel" };
+    // No usable email and no permission to text: the only plan that could
+    // have carried this contact was text_only.
+    return {
+      enrolled: false,
+      reason:
+        channelPlanReason === "text_channel_off"
+          ? `${emailReason ?? "no usable email"}, and ${channelPlanReasonLabel(channelPlanReason)}`
+          : "no reachable channel",
+    };
   }
   const textEligible = channelPlan === "email_and_text";
 

@@ -8,6 +8,7 @@ import {
 import { logEnrollmentEvent } from "@/lib/outreach/events";
 import { workerCanClaim } from "@/lib/outreach/imessage-queue";
 import { sanitizeOutreachBody } from "@/lib/outreach/sanitizer";
+import { getOrCreateOutreachSettings } from "@/lib/outreach/settings";
 
 /**
  * "Your meeting is booked" text for conversations that live on SMS.
@@ -119,6 +120,11 @@ export async function queueBookingConfirmationText(options: {
   bookingKey?: string | null;
 }): Promise<BookingConfirmationResult> {
   const { enrollment } = options;
+
+  const settings = await getOrCreateOutreachSettings();
+  if (!settings.textEnabled) {
+    return skip("the text channel is switched off in Admin, Safety switches");
+  }
 
   if (!enrollment.phoneNumber) {
     return skip("enrollment has no phone number");
