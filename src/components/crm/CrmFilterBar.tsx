@@ -8,11 +8,14 @@ import {
   normalizeLocationScope,
   stateLabel,
 } from "@/lib/crm-location-scope";
+import { LEAD_SOURCE_LABELS, LEAD_SOURCES } from "@/lib/lead-lanes";
 
 export type CrmActiveFilters = {
   state: string;
   city: string;
   sector: string;
+  /** Lead source lane — "" for all lanes. */
+  lane: string;
   status: string;
   q: string;
   callable: boolean;
@@ -132,6 +135,7 @@ export function CrmFilterBar({
     active.state,
     active.city,
     active.sector,
+    active.lane,
     active.status,
     active.callable,
     active.enriched,
@@ -236,6 +240,20 @@ export function CrmFilterBar({
           {options.sectors.map((s) => (
             <option key={s} value={s}>
               {s}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={active.lane}
+          onChange={(e) => apply({ lane: e.target.value || null })}
+          className={selectClass}
+          aria-label="Filter by lead source"
+        >
+          <option value="">All lead sources</option>
+          {LEAD_SOURCES.map((source) => (
+            <option key={source} value={source}>
+              {LEAD_SOURCE_LABELS[source]}
             </option>
           ))}
         </select>

@@ -32,6 +32,7 @@ import {
   normalizeLocationScope,
   type LocationScope,
 } from "@/lib/crm-location-scope";
+import { isLeadSource } from "@/lib/lead-lanes";
 import {
   getReviewQueue,
   getReviewQueueCounts,
@@ -80,6 +81,8 @@ type CrmSearchParams = {
   state?: string;
   city?: string;
   sector?: string;
+  /** Lead source lane (cold_discovery | inbound_form | inbound_meta). */
+  lane?: string;
   status?: string;
   board?: string;
   q?: string;
@@ -122,6 +125,7 @@ function parseFilters(
     state: scope.state || undefined,
     city: scope.city || undefined,
     sector: params.sector?.trim() || undefined,
+    leadSource: isLeadSource(params.lane) ? params.lane : undefined,
     status:
       params.status && COMPANY_STATUSES.has(params.status)
         ? (params.status as CompanyStatus)
@@ -245,6 +249,7 @@ export default async function CrmPage({
     state: scope.state || undefined,
     city: scope.city || undefined,
     sector: params.sector,
+    lane: params.lane,
     status: params.status,
     board: params.board,
     q: params.q,
@@ -405,6 +410,7 @@ export default async function CrmPage({
                 state: scope.state,
                 city: scope.city,
                 sector: "",
+                lane: "",
                 status: "",
                 q: params.q ?? "",
                 callable: false,
@@ -455,6 +461,7 @@ export default async function CrmPage({
                   state: scope.state,
                   city: scope.city,
                   sector: params.sector ?? "",
+                  lane: filters.leadSource ?? "",
                   status: params.status ?? "",
                   q: params.q ?? "",
                   callable: params.callable === "1",
@@ -491,6 +498,7 @@ function CrmExportLink({
     state: params.state,
     city: params.city,
     sector: params.sector,
+    lane: params.lane,
     status: params.status,
     q: params.q,
     callable: params.callable,

@@ -1,4 +1,10 @@
-import { Contact, JobListing, type IcpStatus } from "@/lib/db/schema";
+import {
+  Contact,
+  JobListing,
+  type IcpStatus,
+  type LeadSource,
+  type StoredPhoneClassification,
+} from "@/lib/db/schema";
 import { CompanyStatus } from "@/lib/db/schema";
 import Link from "next/link";
 import { AddToCallListButton } from "./AddToCallListButton";
@@ -28,6 +34,10 @@ export interface CompanyCardData {
   sourceMarket?: string | null;
   /** Company-first discovery fields (Apollo organization search). */
   phone?: string | null;
+  /** Dial class of `phone` — the Apollo organization line. */
+  phoneClassification?: StoredPhoneClassification | null;
+  /** Lane the lead arrived on; decides which channels are permitted. */
+  leadSource?: LeadSource | null;
   linkedinUrl?: string | null;
   vertical?: string | null;
   city?: string | null;

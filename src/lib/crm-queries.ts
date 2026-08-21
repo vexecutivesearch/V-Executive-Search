@@ -19,6 +19,7 @@ import {
   sequenceEnrollments,
   type CallListEntry,
   type CompanyStatus,
+  type LeadSource,
 } from "@/lib/db/schema";
 import type { CompanyCardData } from "@/components/CompanyCard";
 import { enrichCompanies } from "@/lib/queries";
@@ -70,6 +71,8 @@ export type CrmLeadFilters = {
   city?: string;
   /** Broad industry sector (rollup of raw Apollo industries). */
   sector?: string;
+  /** Lane the lead arrived on (cold vs the consented inbound lanes). */
+  leadSource?: LeadSource;
   status?: CompanyStatus;
   search?: string;
   callableOnly?: boolean;
@@ -293,6 +296,10 @@ async function buildSqlConditions(
 
   if (filters.status) {
     conditions.push(sql`${eq(companies.status, filters.status)}`);
+  }
+
+  if (filters.leadSource) {
+    conditions.push(sql`${eq(companies.leadSource, filters.leadSource)}`);
   }
 
   const term = filters.search?.trim();

@@ -9,7 +9,8 @@ import {
 } from "@/lib/csv-export";
 import { resolveListDateRange } from "@/lib/list-date-range";
 import type { CrmLeadFilters } from "@/lib/crm-queries";
-import type { CompanyStatus } from "@/lib/db/schema";
+import type { CompanyStatus, LeadSource } from "@/lib/db/schema";
+import { isLeadSource } from "@/lib/lead-lanes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -60,6 +61,9 @@ export async function GET(request: NextRequest) {
         state: params.get("state") ?? undefined,
         city: params.get("city") ?? undefined,
         sector: params.get("sector") ?? undefined,
+        leadSource: isLeadSource(params.get("lane"))
+          ? (params.get("lane") as LeadSource)
+          : undefined,
         status:
           status && COMPANY_STATUSES.has(status)
             ? (status as CompanyStatus)
