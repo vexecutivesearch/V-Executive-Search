@@ -41,6 +41,8 @@ export function AddToCallListButton({
   jobListingId,
   initialOnList,
   compact = false,
+  label,
+  title,
   onAdded,
 }: {
   companyId: string;
@@ -49,6 +51,10 @@ export function AddToCallListButton({
   /** Pass when membership is known server-side; omit to resolve on click. */
   initialOnList?: boolean;
   compact?: boolean;
+  /** Override the button text, e.g. "Add to Call List (main line)". */
+  label?: string;
+  /** Override the tooltip when the default job-listing wording would mislead. */
+  title?: string;
   onAdded?: (entry: CallListEntry) => void;
 }) {
   const [state, setState] = useState<OnListState>(
@@ -137,12 +143,15 @@ export function AddToCallListButton({
         type="button"
         onClick={handleAdd}
         disabled={loading}
-        title="Add to call list and draft a personalized outreach sequence from this job listing"
+        title={
+          title ??
+          "Add to call list and draft a personalized outreach sequence from this job listing"
+        }
         className={`rounded-md font-medium transition-colors disabled:opacity-50 whitespace-nowrap border border-emerald-700 text-emerald-800 dark:text-emerald-300 dark:border-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 ${
           compact ? "px-2 py-1 text-xs" : "px-3 py-1.5 text-sm"
         }`}
       >
-        {loading ? "Adding + drafting…" : "Add to Call List"}
+        {loading ? "Adding + drafting…" : (label ?? "Add to Call List")}
       </button>
       {error && (
         <span className="text-[10px] text-red-700 dark:text-red-400">{error}</span>

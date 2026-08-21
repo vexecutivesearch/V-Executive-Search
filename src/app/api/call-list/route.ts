@@ -153,6 +153,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Company not found" }, { status: 404 });
   }
 
+  // Do Not Contact has to mean it here too. Enrollment already refuses these
+  // (setCompanyReviewStatus parks them at status 'skipped'), but without this
+  // the row would still land on the Call List and in the CSV export as if it
+  // were callable.
+  if (company.reviewStatus === "do_not_contact") {
+    return NextResponse.json(
+      {
+        error:
+          "This company is marked Do Not Contact. Change the review status before adding it to the call list.",
+      },
+      { status: 409 },
+    );
+  }
+
   const [existing] = await db
     .select()
     .from(callListEntries)
