@@ -1,16 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AddToCallListButton } from "@/components/AddToCallListButton";
-import type { CompanyReviewStatus } from "@/lib/db/schema";
+import type { CompanyCardData } from "@/components/CompanyCard";
+import type { CompanyReviewStatus, Contact } from "@/lib/db/schema";
 import {
   canAddToCallList,
   REVIEW_STATUS_LABELS as STATUS_LABELS,
 } from "@/lib/discovery/review-actions";
 import type { ReviewQueueRow } from "@/lib/discovery/review-queue";
+import {
+  describeRevealFailure,
+  describeRevealNetworkFailure,
+  describeRevealSuccess,
+  type ApproveEnrichmentSuccess,
+  type RevealOutcome,
+} from "@/lib/discovery/reveal-outcome";
 import { verticalBadgeLabel } from "@/lib/discovery/vertical-evidence";
+import { contactIsCallable } from "@/lib/lead-score";
+import { DiscoveryContactPanel } from "./DiscoveryContactPanel";
 
 const REVIEW_ACTIONS: Array<{
   status: CompanyReviewStatus;
@@ -23,6 +33,17 @@ const REVIEW_ACTIONS: Array<{
   { status: "existing_client", label: "Existing client", tone: "neutral" },
   { status: "do_not_contact", label: "Do not contact", tone: "danger" },
 ];
+
+type ApproveEnrichmentResponse = Partial<ApproveEnrichmentSuccess> & {
+  company?: CompanyCardData | null;
+  cost_note?: string;
+  contactout_configured?: boolean;
+  contactout_retry_at?: string | null;
+  contactOutRetryAt?: string | null;
+  review_status?: CompanyReviewStatus | null;
+  review_status_applied?: boolean;
+  error?: string;
+};
 
 function linkedInHref(url: string): string {
   return url.startsWith("http") ? url : `https://${url.replace(/^\/+/, "")}`;
@@ -51,6 +72,56 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
   // lib/enrich/single-contact.ts.
   const [includePhone, setIncludePhone] = useState(false);
 
+  const [expanded, setExpanded] = useState(false);
+  const [contacts, setContacts] = useState<Contact[] | null>(null);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<RevealOutcome | null>(null);
+  const [costNote, setCostNote] = useState<string | null>(null);
+  const [jobLocation, setJobLocation] = useState<string | null>(null);
+  // Approving moves the company out of the Pending bucket. The badge has to
+  // reflect that locally, because the row deliberately does NOT re-fetch the
+  // queue — a refresh would drop the row and take the result with it.
+  const [reviewStatus, setReviewStatus] = useState(row.reviewStatus);
+
+  const panelId = `discovery-contacts-${row.id}`;
+
+  const applyCompany = useCallback((company: CompanyCardData) => {
+    setContacts(company.contacts);
+    setJobLocation(
+      company.jobListings[0]?.location ??
+        company.contacts.find((c) => c.jobLocation)?.jobLocation ??
+        null,
+    );
+  }, []);
+
+  /** Free read — the company row and its contacts, no provider call. */
+  const loadContacts = useCallback(async () => {
+    setContactsLoading(true);
+    setLoadError(null);
+    try {
+      const res = await fetch(`/api/companies/${row.id}?skipGeo=1`, {
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        setLoadError("Could not load the contacts on file for this company.");
+        return;
+      }
+      const data = (await res.json()) as { company: CompanyCardData };
+      applyCompany(data.company);
+    } catch {
+      setLoadError("Network error — could not load the contacts on file.");
+    } finally {
+      setContactsLoading(false);
+    }
+  }, [applyCompany, row.id]);
+
+  function toggleExpanded() {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && contacts === null && !contactsLoading) void loadContacts();
+  }
+
   async function review(status: CompanyReviewStatus) {
     setBusy(status);
     setError(null);
@@ -67,6 +138,8 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
         return;
       }
       setNotice(`Marked ${STATUS_LABELS[status].toLowerCase()}`);
+      // A disposition is meant to move the row out of the bucket, so refreshing
+      // the queue is the right behaviour here.
       router.refresh();
     } catch {
       setError("Network error — review not saved");
@@ -79,21 +152,50 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
     setBusy(additional ? "additional" : "approve");
     setError(null);
     setNotice(null);
+    setOutcome(null);
+    setCostNote(null);
+    setExpanded(true);
     try {
       const res = await fetch(`/api/companies/${row.id}/approve-enrichment`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ include_phone: includePhone, additional }),
       });
-      const data = (await res.json()) as { message?: string; error?: string };
+      const data = (await res.json()) as ApproveEnrichmentResponse;
       if (!res.ok) {
-        setError(data.error ?? "Enrichment failed");
+        if (data.review_status_applied) setReviewStatus("approved");
+        setOutcome(
+          describeRevealFailure(res.status, data.error, {
+            contactOutRetryAt: data.contactout_retry_at ?? null,
+            reviewStatusApplied: data.review_status_applied,
+          }),
+        );
         return;
       }
-      setNotice(data.message ?? "Enriched");
-      router.refresh();
+      if (data.review_status) setReviewStatus(data.review_status);
+      if (data.company) applyCompany(data.company);
+      else await loadContacts();
+      setCostNote(data.cost_note ?? null);
+      setOutcome(
+        describeRevealSuccess({
+          revealed: data.revealed ?? 0,
+          candidatesFound: data.candidatesFound ?? 0,
+          alreadyRevealedCount: data.alreadyRevealedCount ?? 0,
+          phoneRequested: data.phoneRequested ?? false,
+          phonesFound: data.phonesFound ?? 0,
+          emailDeliverable: data.emailDeliverable ?? null,
+          emailVerifyReason: data.emailVerifyReason ?? null,
+          contactOutUsed: data.contactOutUsed ?? false,
+          contactOutLocked: data.contactOutLocked ?? false,
+          contactOutError: data.contactOutError ?? null,
+          contactOutConfigured: data.contactout_configured ?? false,
+          contactOutRetryAt: data.contactout_retry_at ?? null,
+          apolloMobileSkipped: data.apolloMobileSkipped ?? 0,
+          contact: data.contact ?? null,
+        }),
+      );
     } catch {
-      setError("Network error — enrichment did not run");
+      setOutcome(describeRevealNetworkFailure());
     } finally {
       setBusy(null);
     }
@@ -113,8 +215,15 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
     : row.industryIsRollup
       ? `${row.industry} (pipeline rollup — no Apollo industry)`
       : row.industry;
-  const hasContact = row.revealedContactCount > 0;
-  const addable = canAddToCallList(row.reviewStatus);
+  // Local contacts win once loaded: they are newer than the server-rendered
+  // queue row, which is exactly the case right after a reveal.
+  const revealedCount = contacts
+    ? contacts.filter(contactIsCallable).length
+    : row.revealedContactCount;
+  const knownCount = contacts ? contacts.length : row.contactCount;
+  const hasContact = revealedCount > 0;
+  const addable = canAddToCallList(reviewStatus);
+  const enriching = busy === "approve" || busy === "additional";
 
   return (
     <article className="border border-gray-200 dark:border-gray-800 rounded-xl p-4 bg-white dark:bg-gray-950">
@@ -145,9 +254,9 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
                 size unknown
               </span>
             )}
-            {row.reviewStatus !== "pending" && (
+            {reviewStatus !== "pending" && (
               <span className="text-[10px] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">
-                {STATUS_LABELS[row.reviewStatus]}
+                {STATUS_LABELS[reviewStatus]}
               </span>
             )}
           </div>
@@ -218,57 +327,74 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
               ICP flags: {row.icpFlags.join(", ")}
             </p>
           )}
-
-          {row.primaryContact && (
-            <p className="text-xs text-gray-700 dark:text-gray-300 mt-1.5">
-              {row.primaryContact.name}
-              {row.primaryContact.title ? ` · ${row.primaryContact.title}` : ""}
-              {row.primaryContact.email ? ` · ${row.primaryContact.email}` : ""}
-              {row.primaryContact.emailDeliverable === true
-                ? " (verified)"
-                : row.primaryContact.emailDeliverable === false
-                  ? " (unverified)"
-                  : ""}
-              {row.primaryContact.phone ? ` · ${row.primaryContact.phone}` : ""}
-            </p>
-          )}
         </div>
 
-        <div className="text-right shrink-0">
-          <p className="text-sm font-semibold tabular-nums">
-            {row.leadScore}
-            <span className="text-xs font-normal text-gray-500"> score</span>
-          </p>
-          {row.icpAdjustedScore != null && (
-            <p className="text-xs text-gray-500 tabular-nums">
-              ICP {row.icpAdjustedScore}
+        <div className="flex items-start gap-2 shrink-0">
+          <div className="text-right">
+            <p className="text-sm font-semibold tabular-nums">
+              {row.leadScore}
+              <span className="text-xs font-normal text-gray-500"> score</span>
             </p>
-          )}
+            {row.icpAdjustedScore != null && (
+              <p className="text-xs text-gray-500 tabular-nums">
+                ICP {row.icpAdjustedScore}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={toggleExpanded}
+            aria-expanded={expanded}
+            aria-controls={panelId}
+            className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            aria-label={expanded ? "Hide contacts" : "Show contacts"}
+          >
+            <span
+              className={`inline-block transition-transform ${expanded ? "rotate-180" : ""}`}
+              aria-hidden
+            >
+              ▾
+            </span>
+          </button>
         </div>
       </div>
+
+      {/* The disclosure summary doubles as the toggle, so the contact state is
+          readable without expanding and reachable by keyboard. */}
+      <button
+        type="button"
+        onClick={toggleExpanded}
+        aria-expanded={expanded}
+        aria-controls={panelId}
+        className="mt-1.5 text-xs text-left text-blue-700 dark:text-blue-400 hover:underline"
+      >
+        {revealedCount > 0
+          ? `${revealedCount} revealed contact${revealedCount === 1 ? "" : "s"}${
+              knownCount > revealedCount
+                ? ` · ${knownCount - revealedCount} found, not revealed`
+                : ""
+            }`
+          : knownCount > 0
+            ? `${knownCount} contact${knownCount === 1 ? "" : "s"} found, none revealed`
+            : "No contacts on file"}
+        {expanded ? " — hide" : " — show"}
+      </button>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           type="button"
           disabled={busy !== null}
           onClick={() => enrich(false)}
+          aria-controls={panelId}
           title="Reveals exactly ONE top-ranked decision-maker, verifies the email, then stops"
           className="px-3 py-1.5 rounded-md text-sm font-medium bg-green-700 text-white hover:bg-green-800 disabled:opacity-50"
         >
           {busy === "approve" ? "Enriching…" : "Approve for enrichment"}
         </button>
 
-        {row.revealedContactCount > 0 && (
-          <button
-            type="button"
-            disabled={busy !== null}
-            onClick={() => enrich(true)}
-            className="px-3 py-1.5 rounded-md text-sm font-medium border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50"
-          >
-            {busy === "additional" ? "Finding…" : "Find additional contact"}
-          </button>
-        )}
-
+        {/* Find additional contact lives in the dropdown, next to the contact
+            it would add to. Add to Call List stays here: it also covers the
+            main-line-only company, which has no contact to expand to. */}
         {addable && (
           <AddToCallListButton
             companyId={row.id}
@@ -321,6 +447,30 @@ export function DiscoveryReviewRow({ row }: { row: ReviewQueueRow }) {
       )}
       {error && (
         <p className="text-xs text-red-700 dark:text-red-400 mt-2">{error}</p>
+      )}
+
+      {expanded && (
+        <DiscoveryContactPanel
+          panelId={panelId}
+          companyId={row.id}
+          contacts={contacts}
+          jobLocation={jobLocation}
+          loading={contactsLoading}
+          loadError={loadError}
+          pending={enriching}
+          pendingLabel={
+            busy === "additional"
+              ? "Revealing one more decision-maker — Apollo match, then ContactOut…"
+              : "Revealing one decision-maker — Apollo match, email verify, then ContactOut…"
+          }
+          outcome={outcome}
+          costNote={costNote}
+          onFindAdditional={() => void enrich(true)}
+          additionalBusy={busy === "additional"}
+          // The action bar already carries it, and it covers the main-line-only
+          // company the panel's callable check would skip.
+          showAddToCallList={false}
+        />
       )}
     </article>
   );

@@ -104,6 +104,12 @@ export type SingleContactResult = {
   candidatesFound: number;
   alreadyRevealedCount: number;
   phoneRequested: boolean;
+  /** Mobiles actually returned for this reveal (ContactOut only on this path). */
+  phonesFound: number;
+  /** Whether the ContactOut leg ran at all — "no mobile" only means something if it did. */
+  contactOutUsed: boolean;
+  /** ContactOut answered locked: credits are spent, not "no mobile on file". */
+  contactOutLocked: boolean;
   emailDeliverable: boolean | null;
   emailVerifyReason: string | null;
   searchesSpent: number;
@@ -152,6 +158,9 @@ export async function revealSingleDecisionMaker(options: {
       candidatesFound: discovery.candidates.length,
       alreadyRevealedCount: revealedAlready,
       phoneRequested: false,
+      phonesFound: 0,
+      contactOutUsed: false,
+      contactOutLocked: false,
       emailDeliverable: null,
       emailVerifyReason: null,
       searchesSpent: discovery.searchesSpent,
@@ -171,6 +180,9 @@ export async function revealSingleDecisionMaker(options: {
       candidatesFound: discovery.candidates.length,
       alreadyRevealedCount: revealedAlready,
       phoneRequested: false,
+      phonesFound: 0,
+      contactOutUsed: false,
+      contactOutLocked: false,
       emailDeliverable: null,
       emailVerifyReason: null,
       searchesSpent: discovery.searchesSpent,
@@ -238,9 +250,11 @@ export async function revealSingleDecisionMaker(options: {
       includePhone
         ? reveal.phonesFound > 0
           ? "mobile found via ContactOut"
-          : reveal.contactOutUsed
-            ? "ContactOut has no mobile for this contact (no Apollo fallback — it is 9 credits and less accurate)"
-            : "ContactOut unavailable — no mobile looked up"
+          : reveal.contactOutLocked
+            ? "ContactOut credits exhausted — no mobile looked up"
+            : reveal.contactOutUsed
+              ? "ContactOut has no mobile for this contact (no Apollo fallback — it is 9 credits and less accurate)"
+              : "ContactOut unavailable — no mobile looked up"
         : "mobile not requested (opt-in)",
     );
     parts.push("Stopped at one contact — use Find Additional Contact for more.");
@@ -267,6 +281,9 @@ export async function revealSingleDecisionMaker(options: {
     candidatesFound: discovery.candidates.length,
     alreadyRevealedCount: revealedAlready,
     phoneRequested: includePhone,
+    phonesFound: reveal.phonesFound,
+    contactOutUsed: reveal.contactOutUsed,
+    contactOutLocked: reveal.contactOutLocked,
     emailDeliverable,
     emailVerifyReason,
     searchesSpent: discovery.searchesSpent,

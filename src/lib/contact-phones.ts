@@ -206,11 +206,14 @@ export function pickPrimaryFromPhones(phones: SourcedPhone[]): {
   const directDial = sorted.find((p) => p.kind !== "company");
   const companyLine = sorted.find((p) => p.kind === "company");
 
+  // A company line is never a personal phone, whoever supplied it: ContactOut
+  // does return the published switchboard as a "mobile" for owner-operators.
+  const personal = sorted.filter((p) => p.kind !== "company");
   const personalPhone =
-    sorted.find((p) => p.source === "contactout" && p.kind === "mobile")
+    personal.find((p) => p.source === "contactout" && p.kind === "mobile")
       ?.number ??
-    sorted.find((p) => p.source === "contactout")?.number ??
-    sorted.find((p) => p.source === "apollo" && p.kind === "mobile")?.number ??
+    personal.find((p) => p.source === "contactout")?.number ??
+    personal.find((p) => p.source === "apollo" && p.kind === "mobile")?.number ??
     null;
 
   const phone = directDial?.number ?? companyLine?.number ?? null;
@@ -243,6 +246,31 @@ export function syncContactPhoneFields(contact: {
     personalPhone: primary.personalPhone,
     companyPhone: primary.companyPhone,
   };
+}
+
+/**
+ * Reclassify a contact's number as the company line when it IS the company
+ * line.
+ *
+ * `applySharedLineFilter` only spots a switchboard by repetition, so it needs
+ * two contacts carrying the same number. With one revealed contact — which is
+ * exactly what company-first discovery produces — a ContactOut "mobile" that
+ * is really the published main line stays `kind: "mobile"`, and `pickPhone`
+ * then hands it to the texter as a personal cell. Comparing against
+ * `companies.phone` catches it on the first contact.
+ */
+export function demoteCompanyMainLine(
+  phones: SourcedPhone[] | null | undefined,
+  companyPhone: string | null | undefined,
+): SourcedPhone[] {
+  const list = phones ?? [];
+  const mainLine = phoneDigits(parsePhoneValue(companyPhone ?? null) ?? "");
+  if (!mainLine) return list;
+  return list.map((phone) =>
+    phoneDigits(phone.number) === mainLine
+      ? { ...phone, kind: "company" as PhoneKind, classification: "business_line" as PhoneClassification }
+      : phone,
+  );
 }
 
 /** Hide shared company lines from primary dial when repeated across contacts. */
