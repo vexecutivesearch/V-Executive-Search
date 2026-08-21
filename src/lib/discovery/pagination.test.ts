@@ -82,6 +82,89 @@ describe("discovery pagination cursor", () => {
     expect(pageForCursor(cursor, 50)).toBe(2);
   });
 
+  /*
+   * Both Apollo passes now page at 100 while the operator still asks for 25 a
+   * run, because a page costs one credit either way. These assert that the
+   * cursor stays honest once page size and requested limit are decoupled.
+   */
+  describe("page size decoupled from the requested limit", () => {
+    it("counts every row the credit paid for, not just the ones reviewed", () => {
+      // 100 rows fetched, 25 handed to the operator. All 100 have been seen for
+      // this (vertical, market), so re-buying them tomorrow would be waste.
+      const after = advanceCursor(EMPTY_CURSOR, {
+        requested: 100,
+        returned: 100,
+        totalEntries: 310,
+        perPage: 100,
+      });
+      expect(after.consumed).toBe(100);
+      expect(pageForCursor(after, 100)).toBe(2);
+      expect(after.poolExhausted).toBe(false);
+    });
+
+    it("reaches honest exhaustion four times sooner", () => {
+      let cursor = { ...EMPTY_CURSOR };
+      let pages = 0;
+      // A 310-company pool: four pages of 100 (the last one short), versus the
+      // thirteen runs the old 25-row page needed to admit it was empty.
+      while (!cursor.poolExhausted && pages < 20) {
+        const returned = Math.min(100, 310 - cursor.consumed);
+        cursor = advanceCursor(cursor, {
+          requested: 100,
+          returned,
+          totalEntries: 310,
+          perPage: 100,
+        });
+        pages += 1;
+      }
+      expect(pages).toBe(4);
+      expect(cursor.consumed).toBe(310);
+      expect(poolStatus(cursor).exhausted).toBe(true);
+    });
+
+    it("does not read a full page as a short one", () => {
+      // The trap in the fix: comparing `returned` against the run's limit (25)
+      // instead of the page size would see 100 > 25, or a 30-row page as short,
+      // and declare a healthy pool exhausted on the first run.
+      const full = advanceCursor(EMPTY_CURSOR, {
+        requested: 100,
+        returned: 100,
+        totalEntries: null,
+        perPage: 100,
+      });
+      expect(full.poolExhausted).toBe(false);
+
+      const short = advanceCursor(EMPTY_CURSOR, {
+        requested: 100,
+        returned: 30,
+        totalEntries: null,
+        perPage: 100,
+      });
+      expect(short.poolExhausted).toBe(true);
+    });
+
+    it("moves forward, not back, on the run that switches page size", () => {
+      // A cursor accumulated at 25 rows a page lands mid-page on the 100 grid,
+      // so a few organizations repeat once. Dedupe absorbs them; what must not
+      // happen is the offset rewinding and re-reviewing a whole page.
+      const legacy = {
+        perPage: 25,
+        consumed: 75,
+        totalEntries: 310,
+        poolExhausted: false,
+      };
+      expect(pageForCursor(legacy, 100)).toBe(1);
+      const next = advanceCursor(legacy, {
+        requested: 100,
+        returned: 100,
+        totalEntries: 310,
+        perPage: 100,
+      });
+      expect(next.consumed).toBe(175);
+      expect(pageForCursor(next, 100)).toBe(2);
+    });
+  });
+
   it("leaves pool size unknown before the first run", () => {
     expect(poolStatus(EMPTY_CURSOR)).toEqual({
       poolSize: null,
