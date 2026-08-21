@@ -97,11 +97,15 @@ vi.mock("@/lib/outreach/node-draft", () => ({
 vi.mock("@/lib/outreach/calendar", () => ({
   suggestAvailability: async () => ({ lines: [], fromCalendar: false }),
 }));
+const settings = {
+  enabled: true,
+  dryRun: false,
+  textEnabled: true,
+  physicalAddress: "869 Donald Ross Rd, Juno Beach, FL 33408",
+  replyToAddress: "odv@vexecutivesearch.com",
+};
 vi.mock("@/lib/outreach/settings", () => ({
-  getOrCreateOutreachSettings: async () => ({
-    physicalAddress: "869 Donald Ross Rd, Juno Beach, FL 33408",
-    replyToAddress: "odv@vexecutivesearch.com",
-  }),
+  getOrCreateOutreachSettings: async () => settings,
 }));
 vi.mock("@/lib/outreach/enroll", () => ({
   cancelSiblingEnrollments: async () => 0,
@@ -118,7 +122,8 @@ vi.mock("@/lib/outreach/suppression", () => ({
 vi.mock("@/lib/outreach/profiles", () => ({
   pickSendingProfile: async () => ({ profile: null }),
 }));
-vi.mock("@/lib/outreach/resend-send", () => ({
+vi.mock("@/lib/outreach/resend-send", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/outreach/resend-send")>()),
   defaultFromAddress: () => "odv@vexecsearch.com",
   emailFooter: () => "\nAlejandro",
   resolveProfileApiKey: () => "re_test_key",
@@ -167,6 +172,9 @@ function sentEmailReply(createdAt: Date): Row {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  settings.enabled = true;
+  settings.dryRun = false;
+  settings.textEnabled = true;
   isSuppressed.mockResolvedValue({ suppressed: false, reason: null });
   selectResults.clear();
   updateReturning.clear();
@@ -422,6 +430,104 @@ describe("a positive reply by email alone", () => {
     expect(sendOutreachEmail).toHaveBeenCalledTimes(1);
     expect(queuedTexts()).toHaveLength(0);
     expect(outcome.actionTaken).toContain("via email");
+  });
+});
+
+/*
+ * With the text channel off there is no such thing as answering on the thread
+ * they used. A texted reply is still a live prospect, so it gets an email
+ * rather than silence.
+ */
+describe("a texted reply while the text channel is switched off", () => {
+  beforeEach(() => {
+    settings.textEnabled = false;
+  });
+
+  it("answers by email instead of queueing a text", async () => {
+    selectResults.set("outreach_messages", []);
+    const { applyReplyRules } = await import("@/lib/outreach/rules");
+    const outcome = await applyReplyRules(
+      enrollment,
+      inboundOn("imessage"),
+      "positive",
+    );
+
+    expect(queuedTexts()).toHaveLength(0);
+    expect(sendOutreachEmail).toHaveBeenCalledTimes(1);
+    expect(outcome.actionTaken).toContain("via email");
+  });
+
+  it("drafts in the email voice, not the texting one", async () => {
+    selectResults.set("outreach_messages", []);
+    const { applyReplyRules } = await import("@/lib/outreach/rules");
+    await applyReplyRules(enrollment, inboundOn("imessage"), "info_request");
+    expect(draftEnrollmentReply).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "email" }),
+    );
+  });
+
+  it("queues no text on any reply intent", async () => {
+    const { applyReplyRules } = await import("@/lib/outreach/rules");
+    for (const intent of ["positive", "info_request", "negative"] as const) {
+      selectResults.set("outreach_messages", []);
+      await applyReplyRules(enrollment, inboundOn("imessage"), intent);
+    }
+    expect(queuedTexts()).toHaveLength(0);
+  });
+});
+
+/*
+ * Auto-replies called Resend directly and never re-read the switches, so the
+ * master kill switch did not stop one and dry-run did not hold one. Every
+ * other send path checks both; this one has to as well.
+ */
+describe("an auto-reply while the send switches say no", () => {
+  it("sends nothing with the master send switch off", async () => {
+    settings.enabled = false;
+    selectResults.set("outreach_messages", []);
+    const { applyReplyRules } = await import("@/lib/outreach/rules");
+    const outcome = await applyReplyRules(
+      enrollment,
+      inboundOn("email"),
+      "positive",
+    );
+
+    expect(sendOutreachEmail).not.toHaveBeenCalled();
+    expect(queuedTexts()).toHaveLength(0);
+    // Not even drafted: a held reply must not cost a model call.
+    expect(draftEnrollmentReply).not.toHaveBeenCalled();
+    expect(outcome.actionTaken).toContain("FAILED");
+    const failure = events().find((e) => e.payload.auto_reply_failed === true);
+    expect(failure?.eventType).toBe("error");
+    expect(String(failure?.payload.reason)).toContain("master send switch");
+    expect(failure?.payload.manual_note).toBeTruthy();
+  });
+
+  it("holds the reply in dry-run instead of sending it", async () => {
+    settings.dryRun = true;
+    selectResults.set("outreach_messages", []);
+    const { applyReplyRules } = await import("@/lib/outreach/rules");
+    await applyReplyRules(enrollment, inboundOn("email"), "info_request");
+
+    expect(sendOutreachEmail).not.toHaveBeenCalled();
+    const failure = events().find((e) => e.payload.auto_reply_failed === true);
+    expect(String(failure?.payload.reason)).toContain("dry-run");
+  });
+
+  it("holds a texted reply too, on either switch", async () => {
+    const { applyReplyRules } = await import("@/lib/outreach/rules");
+    for (const flip of [
+      () => (settings.enabled = false),
+      () => (settings.dryRun = true),
+    ]) {
+      settings.enabled = true;
+      settings.dryRun = false;
+      flip();
+      selectResults.set("outreach_messages", []);
+      await applyReplyRules(enrollment, inboundOn("imessage"), "positive");
+    }
+    expect(queuedTexts()).toHaveLength(0);
+    expect(sendOutreachEmail).not.toHaveBeenCalled();
   });
 });
 

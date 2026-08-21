@@ -28,6 +28,7 @@ import {
   emailFooter,
   resolveProfileApiKey,
   sendOutreachEmail,
+  threadHeaders,
 } from "@/lib/outreach/resend-send";
 import { resolveSchedulingLink } from "@/lib/outreach/scheduling-link";
 import { getOrCreateOutreachSettings } from "@/lib/outreach/settings";
@@ -129,9 +130,9 @@ async function setEnrollmentStatus(
     .where(eq(sequenceEnrollments.id, enrollment.id));
 }
 
-/** The most recent message the contact replied to (for threading). */
-async function lastSentEmail(enrollmentId: string) {
-  const rows = await db
+/** Everything we have already sent on this email thread (for threading). */
+async function sentEmails(enrollmentId: string) {
+  return db
     .select()
     .from(outreachMessages)
     .where(
@@ -141,9 +142,6 @@ async function lastSentEmail(enrollmentId: string) {
         eq(outreachMessages.channel, "email"),
       ),
     );
-  return rows.sort(
-    (a, b) => (b.sentAt?.getTime() ?? 0) - (a.sentAt?.getTime() ?? 0),
-  )[0];
 }
 
 export type AutoReplyResult = {
@@ -205,10 +203,31 @@ async function sendThreadedAutoReply(options: {
   const { enrollment, inbound, replyKind } = options;
   const settings = await getOrCreateOutreachSettings();
 
-  // Reply on the same channel they used.
+  // Reply on the same channel they used, unless texting is switched off — a
+  // texted reply is still owed an answer, and email is the only way left to
+  // give it.
   const preferSms =
-    inbound.channel === "imessage" && Boolean(enrollment.phoneNumber);
+    inbound.channel === "imessage" &&
+    Boolean(enrollment.phoneNumber) &&
+    settings.textEnabled;
   const channel: "email" | "imessage" = preferSms ? "imessage" : "email";
+
+  // Auto-replies used to call Resend directly without re-reading the switches,
+  // so the master kill switch did not stop one and dry-run did not hold one.
+  // Checked before drafting, in the same order dispatch uses, so a held reply
+  // costs no model call either.
+  if (!settings.enabled || settings.dryRun) {
+    return failAutoReply({
+      enrollmentId: enrollment.id,
+      replyKind,
+      channel,
+      reason: settings.enabled
+        ? "dry-run mode is on, so no auto-reply can be sent. Answer this contact by hand, " +
+          "or turn dry-run off to let auto-replies send."
+        : "the master send switch is off, so no auto-reply can be sent. Answer this " +
+          "contact by hand, or turn the master send switch on.",
+    });
+  }
 
   // A suppressed contact who writes again gets no answer, because the queue and
   // the dispatcher both re-check suppression and drop the message. Catching it
@@ -345,7 +364,7 @@ async function sendThreadedAutoReply(options: {
     };
   }
 
-  const previous = await lastSentEmail(enrollment.id);
+  const thread = threadHeaders(await sentEmails(enrollment.id));
   const { pickSendingProfile } = await import("@/lib/outreach/profiles");
   const pick = await pickSendingProfile("email_domain");
   const sendFrom = pick?.profile?.fromAddress ?? defaultFromAddress();
@@ -370,16 +389,16 @@ async function sendThreadedAutoReply(options: {
     physicalAddress: settings.physicalAddress,
   });
 
+  const subject = thread.subject ?? "Re: your reply";
   const result = await sendOutreachEmail({
     apiKey: sendKey,
     from: sendFrom,
     to: enrollment.emailAddress!,
     replyTo: settings.replyToAddress,
-    subject: previous?.subject
-      ? `Re: ${previous.subject.replace(/^re:\s*/i, "")}`
-      : "Re: your reply",
+    subject,
     textBody: `${body}\n${footer}`,
-    inReplyTo: previous?.messageId ?? null,
+    inReplyTo: thread.inReplyTo,
+    references: thread.references,
   });
 
   if (result.ok) {
@@ -388,7 +407,7 @@ async function sendThreadedAutoReply(options: {
       stepKind: replyKind,
       channel: "email",
       status: "sent",
-      subject: previous?.subject ? `Re: ${previous.subject}` : "Re: your reply",
+      subject,
       body,
       resendId: result.resendId,
       messageId: result.messageId,
@@ -402,7 +421,7 @@ async function sendThreadedAutoReply(options: {
         auto_reply: true,
         reply_kind: replyKind,
         channel: "email",
-        threaded_to: previous?.messageId ?? null,
+        threaded_to: thread.inReplyTo,
         from_calendar: availability.fromCalendar,
         scheduling_link: Boolean(schedulingLink),
       },
