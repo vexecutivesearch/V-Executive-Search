@@ -848,6 +848,12 @@ export const outreachSettings = pgTable("outreach_settings", {
   id: uuid("id").defaultRandom().primaryKey(),
   /** Global kill switch: nothing sends while false. Ships OFF. */
   enabled: boolean("enabled").default(false).notNull(),
+  /**
+   * Per-channel switch for iMessage/SMS. Ships OFF and stays OFF: Apple
+   * disabled the operator's iMessage for using a consumer account for business
+   * messaging, so every text path is gated on this while email keeps running.
+   */
+  textEnabled: boolean("text_enabled").default(false).notNull(),
   /** Dry-run: draft + schedule but never send; messages held for preview. */
   dryRun: boolean("dry_run").default(true).notNull(),
   /** Approval gate: every message needs approvedAt before dispatch. */
