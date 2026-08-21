@@ -30,6 +30,8 @@ function wpbSettings(
     metroAliases: ["palm beach county", "west palm beach metropolitan area"],
     notificationEmail: "test@example.com",
     jobBoards: [],
+    emailReportPreferences: null,
+    contactTitles: [],
     runRequestedAt: null,
     runClaimedAt: null,
     contactoutSyncRequestedAt: null,
