@@ -18,10 +18,7 @@ import {
   getCrmLeads,
   type CrmLeadFilters,
 } from "@/lib/crm-queries";
-import {
-  buildCallListCsvRow,
-  CALL_LIST_HEADERS,
-} from "@/lib/call-list-csv-row";
+import { callListItemsToCsv } from "@/lib/call-list-csv-row";
 import { businessListDate } from "@/lib/timezone";
 
 export type ScrapeCsvRow = {
@@ -237,11 +234,7 @@ export function exportFilename(
 
 /** Full call list — one row per entry, all workflow + contact fields. */
 export async function buildCallListCsv(): Promise<string> {
-  const items = await getCallListItems();
-  return rowsToCsv(
-    [...CALL_LIST_HEADERS],
-    items.map((item) => buildCallListCsvRow(item)),
-  );
+  return callListItemsToCsv(await getCallListItems());
 }
 
 /** CRM All Leads / Hot export — the whole filtered set, one row per job. */
