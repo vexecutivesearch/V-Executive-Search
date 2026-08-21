@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCallListCsvRow,
   CALL_LIST_HEADERS,
+  callListItemsToCsv,
   type CallListCsvInput,
 } from "@/lib/call-list-csv-row";
 
@@ -223,5 +224,22 @@ describe("workflow columns", () => {
     expect(built.next_follow_up_date).toBe("");
     expect(built.last_contact_date).toBe("");
     expect(built.added_at).toBe("2026-08-01");
+  });
+});
+
+describe("selected-row CSV", () => {
+  it("serializes only the supplied entries with the same headers", () => {
+    const kept: CallListCsvInput = {
+      entry: { ...ENTRY, notes: 'Said "call next week"' },
+      company: { ...COMPANY, name: "Kept Co, Inc" },
+      marketLabel: "Miami, FL",
+    };
+    const csv = callListItemsToCsv([kept]);
+    const [headerLine, ...data] = csv.split("\n");
+    expect(headerLine).toBe(CALL_LIST_HEADERS.join(","));
+    expect(data).toHaveLength(1);
+    expect(csv).toContain("Kept Co, Inc");
+    expect(csv).toContain('Said ""call next week""');
+    expect(csv).not.toContain("Kessler & Vance LLP");
   });
 });

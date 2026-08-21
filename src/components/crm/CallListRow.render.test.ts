@@ -59,11 +59,21 @@ function render(overrides: {
     createElement(CallListRow, {
       item,
       today: "2026-07-31",
+      selected: false,
+      onToggleSelect: () => {},
       onEntryChange: () => {},
       onRemove: () => {},
     }),
   );
 }
+
+describe("CallListRow — row selection", () => {
+  it("renders a checkbox keyed to the call-list entry", () => {
+    const html = render({});
+    expect(html).toContain('type="checkbox"');
+    expect(html).toContain('aria-label="Select Proven Theory LLC v8"');
+  });
+});
 
 describe("CallListRow — Last Activity column", () => {
   it("stamps the same value the queue sorts on", () => {

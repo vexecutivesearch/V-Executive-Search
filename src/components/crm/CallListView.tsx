@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { CallListItem } from "@/lib/crm-queries";
 import type { CallListEntry, CallStatus } from "@/lib/db/schema";
 import {
@@ -9,6 +9,16 @@ import {
   isTerminalStatus,
 } from "@/lib/call-status";
 import { latestActivityMs } from "@/lib/call-list-activity";
+import {
+  callListItemsToCsv,
+  callListSelectedExportFilename,
+} from "@/lib/call-list-csv-row";
+import {
+  pruneSelection,
+  selectAllState,
+  toggleSelectAll,
+  visibleCallListEntryIds,
+} from "@/lib/call-list-selection";
 import { CallListRow } from "./CallListRow";
 
 function businessToday(): string {
@@ -34,6 +44,9 @@ export function CallListView({ items: initialItems }: { items: CallListItem[] })
   const [marketFilter, setMarketFilter] = useState("");
   const [dueOnly, setDueOnly] = useState(false);
   const [showClosed, setShowClosed] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  const selectAllMobileRef = useRef<HTMLInputElement>(null);
 
   const today = businessToday();
 
@@ -47,6 +60,23 @@ export function CallListView({ items: initialItems }: { items: CallListItem[] })
 
   function handleRemove(entryId: string) {
     setItems((prev) => prev.filter((item) => item.entry.id !== entryId));
+    setSelected((prev) => {
+      if (!prev.has(entryId)) return prev;
+      const next = new Set(prev);
+      next.delete(entryId);
+      return next;
+    });
+  }
+
+  function handleToggleSelect(entryId: string, nextSelected: boolean) {
+    setSelected((prev) => {
+      const already = prev.has(entryId);
+      if (nextSelected === already) return prev;
+      const next = new Set(prev);
+      if (nextSelected) next.add(entryId);
+      else next.delete(entryId);
+      return next;
+    });
   }
 
   const assignees = useMemo(
@@ -131,6 +161,75 @@ export function CallListView({ items: initialItems }: { items: CallListItem[] })
     (i) => i.entry.nextFollowUpDate === today,
   ).length;
 
+  const existingIds = useMemo(
+    () => new Set(items.map((item) => item.entry.id)),
+    [items],
+  );
+  useEffect(() => {
+    setSelected((prev) => {
+      const next = pruneSelection(prev, existingIds);
+      return next.size === prev.size ? prev : next;
+    });
+  }, [existingIds]);
+
+  const visibleIds = useMemo(
+    () =>
+      visibleCallListEntryIds({
+        activeIds: active.map((item) => item.entry.id),
+        closedIds: closed.map((item) => item.entry.id),
+        showClosed,
+      }),
+    [active, closed, showClosed],
+  );
+  const headerSelect = selectAllState(visibleIds, selected);
+  useEffect(() => {
+    const indeterminate = headerSelect === "some";
+    if (selectAllRef.current) selectAllRef.current.indeterminate = indeterminate;
+    if (selectAllMobileRef.current) {
+      selectAllMobileRef.current.indeterminate = indeterminate;
+    }
+  }, [headerSelect]);
+
+  const selectedCount = selected.size;
+  const selectedItems = useMemo(
+    () => items.filter((item) => selected.has(item.entry.id)),
+    [items, selected],
+  );
+
+  function handleSelectAll() {
+    setSelected((prev) => toggleSelectAll(visibleIds, prev));
+  }
+
+  function exportSelected() {
+    if (selectedItems.length === 0) return;
+    const csv = callListItemsToCsv(selectedItems);
+    const blob = new Blob([csv], { type: "text/csv; charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = callListSelectedExportFilename();
+    anchor.rel = "noopener";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  const selectAllCheckbox = (
+    headerRef: RefObject<HTMLInputElement | null>,
+    className?: string,
+  ) => (
+    <input
+      ref={headerRef}
+      type="checkbox"
+      checked={headerSelect === "all"}
+      disabled={visibleIds.length === 0}
+      onChange={handleSelectAll}
+      aria-label="Select all visible rows"
+      className={className ?? "rounded border-gray-300"}
+    />
+  );
+
   if (items.length === 0) {
     return (
       <div className="text-center py-16 text-gray-400">
@@ -211,6 +310,25 @@ export function CallListView({ items: initialItems }: { items: CallListItem[] })
             />
             Follow-ups due
           </label>
+
+          <label
+            className={`inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer ${
+              active.length > 0 ? "lg:hidden" : ""
+            }`}
+          >
+            {selectAllCheckbox(selectAllMobileRef)}
+            Select all visible
+          </label>
+
+          <button
+            type="button"
+            disabled={selectedCount === 0}
+            onClick={exportSelected}
+            className="sm:ml-auto inline-flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            ↓ Export selected
+            {selectedCount > 0 ? ` (${selectedCount})` : ""}
+          </button>
         </div>
 
         <p className="text-xs text-gray-500 mt-2">
@@ -232,7 +350,10 @@ export function CallListView({ items: initialItems }: { items: CallListItem[] })
         </div>
       ) : (
         <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden bg-white dark:bg-gray-950 shadow-sm">
-          <div className="hidden lg:grid grid-cols-[3.25rem_minmax(0,1.3fr)_minmax(0,1.1fr)_11.5rem_4rem_6rem_6.5rem_minmax(0,0.7fr)_auto] gap-x-3 px-4 py-2 text-[10px] font-medium uppercase tracking-wide text-gray-500 bg-gray-50 dark:bg-gray-900/80 border-b border-gray-200 dark:border-gray-800">
+          <div className="hidden lg:grid grid-cols-[2rem_3.25rem_minmax(0,1.3fr)_minmax(0,1.1fr)_11.5rem_4rem_6rem_6.5rem_minmax(0,0.7fr)_auto] gap-x-3 px-4 py-2 text-[10px] font-medium uppercase tracking-wide text-gray-500 bg-gray-50 dark:bg-gray-900/80 border-b border-gray-200 dark:border-gray-800">
+            <span className="flex items-center justify-center">
+              {selectAllCheckbox(selectAllRef)}
+            </span>
             <span>Score</span>
             <span>Company</span>
             <span>Contact</span>
@@ -250,6 +371,8 @@ export function CallListView({ items: initialItems }: { items: CallListItem[] })
               key={item.entry.id}
               item={item}
               today={today}
+              selected={selected.has(item.entry.id)}
+              onToggleSelect={handleToggleSelect}
               onEntryChange={handleEntryChange}
               onRemove={handleRemove}
             />
@@ -274,6 +397,8 @@ export function CallListView({ items: initialItems }: { items: CallListItem[] })
                   key={item.entry.id}
                   item={item}
                   today={today}
+                  selected={selected.has(item.entry.id)}
+                  onToggleSelect={handleToggleSelect}
                   onEntryChange={handleEntryChange}
                   onRemove={handleRemove}
                 />

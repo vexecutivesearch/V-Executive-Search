@@ -55,11 +55,15 @@ function formatDate(value: Date | string | null | undefined): string {
 export function CallListRow({
   item,
   today,
+  selected,
+  onToggleSelect,
   onEntryChange,
   onRemove,
 }: {
   item: CallListItem;
   today: string;
+  selected: boolean;
+  onToggleSelect: (entryId: string, selected: boolean) => void;
   onEntryChange: (entry: CallListEntry) => void;
   onRemove: (entryId: string) => void;
 }) {
@@ -264,9 +268,25 @@ export function CallListRow({
   return (
     <div className="border-b border-gray-200 dark:border-gray-800 last:border-b-0">
       <div
-        className="grid grid-cols-[3rem_1fr_auto] lg:grid-cols-[3.25rem_minmax(0,1.3fr)_minmax(0,1.1fr)_11.5rem_4rem_6rem_6.5rem_minmax(0,0.7fr)_auto] gap-x-3 gap-y-1 items-center px-3 py-4 lg:py-2.5 sm:px-4 hover:bg-gray-50 dark:hover:bg-gray-900/60 transition-colors cursor-pointer"
+        className="grid grid-cols-[1.75rem_3rem_1fr_auto] lg:grid-cols-[2rem_3.25rem_minmax(0,1.3fr)_minmax(0,1.1fr)_11.5rem_4rem_6rem_6.5rem_minmax(0,0.7fr)_auto] gap-x-3 gap-y-1 items-center px-3 py-4 lg:py-2.5 sm:px-4 hover:bg-gray-50 dark:hover:bg-gray-900/60 transition-colors cursor-pointer"
         onClick={() => setExpanded((v) => !v)}
       >
+        <div
+          className="flex items-center justify-center"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={(e) => onToggleSelect(entry.id, e.target.checked)}
+            aria-label={
+              primaryContact
+                ? `Select ${primaryContact.name} at ${company.name}`
+                : `Select ${company.name}`
+            }
+            className="rounded border-gray-300"
+          />
+        </div>
         <div
           className={`flex h-9 w-9 lg:h-10 lg:w-10 items-center justify-center rounded-lg text-sm font-semibold tabular-nums ${scoreBgClass(score)} ${scoreTextClass(score)}`}
           title="Opportunity score"
@@ -408,7 +428,7 @@ export function CallListRow({
         </div>
       </div>
 
-      <div className="lg:hidden px-3 pb-2 pl-[3.75rem] flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+      <div className="lg:hidden px-3 pb-2 pl-[6.25rem] flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
         <span onClick={(e) => e.stopPropagation()}>{statusSelect}</span>
         {booked && (
           <span className="font-medium text-emerald-700 dark:text-emerald-400 tabular-nums">

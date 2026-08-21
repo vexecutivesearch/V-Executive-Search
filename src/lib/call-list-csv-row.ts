@@ -25,6 +25,7 @@ import { summarizeJobSignals } from "@/lib/discovery/job-signals";
 import { getVerticalConfig } from "@/lib/discovery/verticals";
 import { parseJobLocation } from "@/lib/location-match";
 import { formatListingSalary, pickDisplayListing } from "@/lib/salary-format";
+import { businessListDate } from "@/lib/timezone";
 
 /** Header order = column order in the download. */
 export const CALL_LIST_HEADERS = [
@@ -161,4 +162,28 @@ export function buildCallListCsvRow({
     final_result: entry.finalResult ?? "",
     added_at: isoDate(entry.addedAt),
   };
+}
+
+function csvCell(value: string | number | null | undefined): string {
+  if (value == null || value === "") return "";
+  const text = String(value);
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+/** Same columns as Export call list CSV — only the supplied entries. */
+export function callListItemsToCsv(items: CallListCsvInput[]): string {
+  const headers = [...CALL_LIST_HEADERS];
+  const lines = [headers.join(",")];
+  for (const item of items) {
+    const row = buildCallListCsvRow(item);
+    lines.push(headers.map((h) => csvCell(row[h])).join(","));
+  }
+  return lines.join("\n");
+}
+
+export function callListSelectedExportFilename(): string {
+  return `vexec-call-list-selected-${businessListDate()}.csv`;
 }
