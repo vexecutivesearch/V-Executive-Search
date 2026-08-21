@@ -983,6 +983,17 @@ which is why checking only the static fragments is sufficient. The keyword list
 is word-anchored, so `updated_at`, `created_at` and `outreach_settings` do not
 trip it.
 
+**This is tested, not asserted.** `scripts/lib/read-only-sql.test.ts` covers the
+client-side half: the query shapes the scripts actually use are allowed,
+identifiers embedding a keyword do not false-trip, every writing statement is
+refused, and so are the two ways a write tries to hide — smuggled after a
+leading `SELECT` (`select 1; drop table companies`) and concealed behind a
+comment. `vitest.config.ts` includes `scripts/**/*.test.ts` so this runs with
+everything else.
+
+Postgres remains the real enforcement. The client check exists because a script
+that gets as far as asking the server to DELETE has already lost the argument.
+
 ---
 
 ## Findings: things that look wrong

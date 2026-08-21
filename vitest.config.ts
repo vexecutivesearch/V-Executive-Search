@@ -4,7 +4,9 @@ import path from "path";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    // scripts/ is included so the verification scripts' read-only guard is
+    // covered: it is the safety property the whole script suite rests on.
+    include: ["src/**/*.test.ts", "scripts/**/*.test.ts"],
   },
   resolve: {
     alias: {
