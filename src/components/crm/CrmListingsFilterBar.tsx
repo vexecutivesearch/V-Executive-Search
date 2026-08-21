@@ -2,14 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import type { CrmFilterOptions } from "@/lib/crm-queries";
+import { LocationScopeSelect } from "./LocationScopeSelect";
 
 /** URL-driven filters for the Job Listings tab (server-side before the cap). */
 export function CrmListingsFilterBar({
   boards,
+  options,
   active,
 }: {
   boards: string[];
-  active: { q: string; board: string; sort: string };
+  options: CrmFilterOptions;
+  active: { q: string; board: string; sort: string; state: string; city: string };
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -42,7 +46,9 @@ export function CrmListingsFilterBar({
   const selectClass =
     "text-sm border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 bg-white dark:bg-gray-900";
 
-  const activeFilterCount = [active.board].filter(Boolean).length;
+  const activeFilterCount = [active.board, active.state, active.city].filter(
+    Boolean,
+  ).length;
 
   return (
     <div className="sticky top-[3.25rem] z-10 -mx-4 px-4 py-3 mb-3 bg-gray-50/95 dark:bg-gray-950/95 backdrop-blur border-y border-gray-200 dark:border-gray-800">
@@ -73,6 +79,12 @@ export function CrmListingsFilterBar({
       <div
         className={`${filtersOpen ? "flex" : "hidden"} sm:flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center mt-2`}
       >
+        <LocationScopeSelect
+          options={options}
+          state={active.state}
+          city={active.city}
+        />
+
         <select
           value={active.board}
           onChange={(e) => apply({ board: e.target.value || null })}

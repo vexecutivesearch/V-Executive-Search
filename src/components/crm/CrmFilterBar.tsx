@@ -1,14 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { CrmFilterOptions } from "@/lib/crm-queries";
-import {
-  cityOptionsForState,
-  normalizeLocationScope,
-  stateLabel,
-} from "@/lib/crm-location-scope";
+import { normalizeLocationScope } from "@/lib/crm-location-scope";
 import { LEAD_SOURCE_LABELS, LEAD_SOURCES } from "@/lib/lead-lanes";
+import { LocationScopeSelect } from "./LocationScopeSelect";
 
 export type CrmActiveFilters = {
   state: string;
@@ -70,6 +67,10 @@ const HIDE_CATEGORY_OPTIONS = [
 /**
  * URL-driven filter bar: every change updates the query string so filtering
  * happens server-side, before the pagination cap — not over a loaded slice.
+ *
+ * Browse location lives in LocationScopeSelect — State, then City, shared with
+ * the Job Listings bar. The summary alongside the list reports that scope but
+ * does not set it, so there is exactly one control per level.
  */
 export function CrmFilterBar({
   options,
@@ -81,8 +82,9 @@ export function CrmFilterBar({
   tab: "all" | "hot" | "discovery";
   active: CrmActiveFilters;
   /**
-   * "discovery" hides the controls the review queue does not filter on, so the
-   * bar never shows a filter that silently does nothing.
+   * "discovery" leaves only search: the review queue is scoped by the market a
+   * company was found in, not by job-listing geography, so browse location and
+   * the job-shaped filters would silently do nothing there.
    */
   variant?: "full" | "discovery";
 }) {
@@ -125,26 +127,22 @@ export function CrmFilterBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
-  const cityOptions = useMemo(
-    () => cityOptionsForState(options.cities, active.state),
-    [options.cities, active.state],
-  );
-
   // Count active filters (search stays visible, so it's excluded from the badge).
-  const activeFilterCount = [
-    active.state,
-    active.city,
-    active.sector,
-    active.lane,
-    active.status,
-    active.callable,
-    active.enriched,
-    active.discovered,
-    active.role,
-    active.size,
-    active.comp,
-    active.icpMin,
-  ].filter(Boolean).length + active.hide.length;
+  const activeFilterCount =
+    [
+      active.state,
+      active.city,
+      active.sector,
+      active.lane,
+      active.status,
+      active.callable,
+      active.enriched,
+      active.discovered,
+      active.role,
+      active.size,
+      active.comp,
+      active.icpMin,
+    ].filter(Boolean).length + active.hide.length;
 
   const hasActiveFilters = activeFilterCount > 0 || Boolean(active.q);
 
@@ -156,8 +154,34 @@ export function CrmFilterBar({
   const controlRowClass = (open: boolean) =>
     `${open ? "flex" : "hidden"} sm:flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center`;
 
+  const barClass =
+    "sticky top-[3.25rem] z-10 -mx-4 px-4 py-3 mb-3 bg-gray-50/95 dark:bg-gray-950/95 backdrop-blur border-y border-gray-200 dark:border-gray-800";
+
+  // The review queue only searches company name, domain and industry, and is
+  // scoped by found-in market rather than browse location — so this is the only
+  // control the shared bar can honestly offer there.
+  if (variant === "discovery") {
+    return (
+      <div className={barClass}>
+        <label className="flex items-center gap-2">
+          <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500 shrink-0">
+            Search queue
+          </span>
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Company, domain, industry…"
+            aria-label="Search the review queue"
+            className="flex-1 min-w-0 text-sm border border-gray-200 dark:border-gray-700 rounded-md px-3 py-1.5 bg-white dark:bg-gray-900"
+          />
+        </label>
+      </div>
+    );
+  }
+
   return (
-    <div className="sticky top-[3.25rem] z-10 -mx-4 px-4 py-3 mb-3 bg-gray-50/95 dark:bg-gray-950/95 backdrop-blur border-y border-gray-200 dark:border-gray-800">
+    <div className={barClass}>
       {/* Always-visible compact bar: search + mobile filters toggle. */}
       <div className="flex items-center gap-2">
         <input
@@ -165,6 +189,7 @@ export function CrmFilterBar({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search company, job, contact…"
+          aria-label="Search leads"
           className="flex-1 min-w-0 text-sm border border-gray-200 dark:border-gray-700 rounded-md px-3 py-1.5 bg-white dark:bg-gray-900"
         />
         <button
@@ -184,52 +209,12 @@ export function CrmFilterBar({
       </div>
 
       <div className={`${controlRowClass(filtersOpen)} mt-2`}>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500">
-            Location
-          </span>
+        <LocationScopeSelect
+          options={options}
+          state={active.state}
+          city={active.city}
+        />
 
-          {/* The rail owns the state on desktop; below lg it is off-screen. */}
-          <select
-            value={active.state}
-            onChange={(e) => apply({ state: e.target.value || null })}
-            className={`${selectClass} lg:hidden`}
-            aria-label="Filter by state"
-          >
-            <option value="">All states</option>
-            {options.states.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-
-          <span className="hidden lg:inline text-sm text-gray-600 dark:text-gray-400">
-            {active.state ? stateLabel(active.state) : "All states"}
-          </span>
-
-          <select
-            value={active.city}
-            onChange={(e) => apply({ city: e.target.value || null })}
-            disabled={!active.state}
-            className={`${selectClass} disabled:opacity-60 disabled:cursor-not-allowed`}
-            aria-label="Filter by city"
-          >
-            <option value="">
-              {active.state
-                ? `All cities in ${stateLabel(active.state)}`
-                : "All cities — pick a state first"}
-            </option>
-            {cityOptions.map((c) => (
-              <option key={`${c.city}|${c.stateAbbr}`} value={c.city}>
-                {c.city}, {c.stateAbbr}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {variant === "full" && (
-        <>
         <select
           value={active.sector}
           onChange={(e) => apply({ sector: e.target.value || null })}
@@ -315,8 +300,6 @@ export function CrmFilterBar({
           <option value="recent">Sort: Recently updated</option>
           <option value="name">Sort: Name</option>
         </select>
-        </>
-        )}
 
         {hasActiveFilters && (
           <button
@@ -337,8 +320,7 @@ export function CrmFilterBar({
         )}
       </div>
 
-      {variant === "full" && (
-      /* ICP annotation filters — reversible view state, never data changes. */
+      {/* ICP annotation filters — reversible view state, never data changes. */}
       <div className={`${controlRowClass(filtersOpen)} mt-2`}>
         <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500">
           ICP
@@ -457,7 +439,6 @@ export function CrmFilterBar({
           </div>
         </details>
       </div>
-      )}
     </div>
   );
 }

@@ -18,6 +18,9 @@ import {
 } from "@/lib/db/schema";
 import { isCoarseSectorRollup } from "@/lib/industry-sectors";
 import { parseJobLocation } from "@/lib/location-match";
+// The queue's filter vocabulary is defined once, next to ReviewScope, so the
+// list and the per-bucket counts cannot drift apart.
+import type { HiringFilter } from "@/lib/crm-location-scope";
 import { getVerticalConfig } from "./verticals";
 import {
   verticalEvidence,
@@ -74,25 +77,22 @@ export type ReviewQueueRow = {
 };
 
 /**
- * Hiring is a signal, never a requirement — but the queue is ordered by lead
- * score, and any hiring bonus pushes companies with open roles to the front.
- * This lets the operator look at the non-hiring companies directly instead of
- * paging past everything that happens to be advertising a job.
+ * The queue's scope predicates, with no review bucket.
+ *
+ * Deliberately no state/city: browse geography reads job-listing locations,
+ * and a company-first Apollo row often has no listings at all, so any state
+ * selection silently emptied the queue. The market a row was FOUND IN
+ * (companies.source_market) is its only geography here.
  */
-export type HiringFilter = "any" | "hiring" | "no_hiring";
-
-export function parseHiringFilter(value: unknown): HiringFilter {
-  return value === "hiring" || value === "no_hiring" ? value : "any";
-}
-
-export type ReviewQueueFilters = {
-  reviewStatus?: CompanyReviewStatus | "all";
+export type ReviewQueueScopeFilters = {
   vertical?: string;
   market?: string;
-  state?: string;
-  city?: string;
   search?: string;
   hiring?: HiringFilter;
+};
+
+export type ReviewQueueFilters = ReviewQueueScopeFilters & {
+  reviewStatus?: CompanyReviewStatus | "all";
   page?: number;
 };
 
@@ -123,48 +123,25 @@ function stateNameFor(abbr: string): string | null {
   return parseJobLocation(abbr)?.stateName ?? null;
 }
 
-function buildConditions(filters: ReviewQueueFilters): SQL[] {
+/**
+ * The single definition of what the Discovery review queue is scoped to.
+ *
+ * Both the list (getReviewQueue) and the per-bucket chip counts
+ * (getReviewBucketCounts) are built from this, so a count can never promise
+ * rows the list then filters away — the bug that had the tab reading
+ * "Discovery review (47)" over an empty list. The bucket predicate is applied
+ * separately because the counts group by it.
+ */
+export function reviewQueueConditions(filters: ReviewQueueScopeFilters): SQL[] {
   // review_status is null for every company that never went through the
   // review queue, which is exactly the pre-discovery pipeline.
   const conditions: SQL[] = [sql`${companies.reviewStatus} IS NOT NULL`];
 
-  const status = filters.reviewStatus ?? "pending";
-  if (status !== "all") {
-    conditions.push(sql`${companies.reviewStatus} = ${status}`);
-  }
   if (filters.vertical) {
     conditions.push(sql`${companies.vertical} = ${filters.vertical}`);
   }
   if (filters.market) {
     conditions.push(sql`${companies.sourceMarket} = ${filters.market}`);
-  }
-  if (filters.state) {
-    const abbr = filters.state.toUpperCase();
-    const name = stateNameFor(abbr);
-    const patterns = [`%${abbr}%`, ...(name ? [`%${escapeLike(name)}%`] : [])];
-    const companyState = sql.join(
-      patterns.map((p) => sql`${companies.state} ILIKE ${p}`),
-      sql` OR `,
-    );
-    // Company HQ state, or a scraped listing in that state.
-    conditions.push(sql`(
-      (${companyState})
-      OR EXISTS (
-        SELECT 1 FROM job_listings AS jl
-        WHERE jl.company_id = ${companies.id}
-          AND jl.location ILIKE ${`%, ${abbr}%`}
-      )
-    )`);
-  }
-  if (filters.city) {
-    const pattern = `%${escapeLike(filters.city.trim())}%`;
-    conditions.push(sql`(
-      ${companies.city} ILIKE ${pattern}
-      OR EXISTS (
-        SELECT 1 FROM job_listings AS jl
-        WHERE jl.company_id = ${companies.id} AND jl.location ILIKE ${pattern}
-      )
-    )`);
   }
   const hiring = filters.hiring ?? "any";
   if (hiring !== "any") {
@@ -184,6 +161,15 @@ function buildConditions(filters: ReviewQueueFilters): SQL[] {
     )`);
   }
 
+  return conditions;
+}
+
+function buildConditions(filters: ReviewQueueFilters): SQL[] {
+  const conditions = reviewQueueConditions(filters);
+  const status = filters.reviewStatus ?? "pending";
+  if (status !== "all") {
+    conditions.push(sql`${companies.reviewStatus} = ${status}`);
+  }
   return conditions;
 }
 
@@ -300,36 +286,6 @@ export async function getReviewQueue(
     page,
     pageCount: Math.max(1, Math.ceil(totalMatched / REVIEW_QUEUE_PAGE_SIZE)),
   };
-}
-
-export type ReviewQueueCounts = Record<CompanyReviewStatus | "total", number>;
-
-export async function getReviewQueueCounts(): Promise<ReviewQueueCounts> {
-  const rows = await db
-    .select({
-      reviewStatus: companies.reviewStatus,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(companies)
-    .where(sql`${companies.reviewStatus} IS NOT NULL`)
-    .groupBy(companies.reviewStatus);
-
-  const counts: ReviewQueueCounts = {
-    pending: 0,
-    approved: 0,
-    rejected: 0,
-    review_later: 0,
-    already_contacted: 0,
-    existing_client: 0,
-    do_not_contact: 0,
-    total: 0,
-  };
-  for (const row of rows) {
-    if (!row.reviewStatus) continue;
-    counts[row.reviewStatus] = row.count;
-    counts.total += row.count;
-  }
-  return counts;
 }
 
 /** Verticals/markets already present in the queue (filter options). */

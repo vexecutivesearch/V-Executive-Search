@@ -87,6 +87,8 @@ describe("a company with zero job activity survives discovery", () => {
       city: "West Palm Beach",
       state: "Florida",
       domainConfidence: "high",
+      annualRevenue: null,
+      publiclyTradedSymbol: null,
       ...overrides,
     };
   }
